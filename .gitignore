@@ -1,0 +1,12 @@
+out/
+target/
+project/target/
+simWorkspace/
+tmp/
+*.vcd
+*.fst
+db/
+qdb/
+output_files/
+dni/
+*.qws
