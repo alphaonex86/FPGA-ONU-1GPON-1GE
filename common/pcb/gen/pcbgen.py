@@ -220,6 +220,8 @@ class Layout:
 
     def track(self, net, pts, width, layer=pcbnew.F_Cu, locked=False):
         for a, b in zip(pts, pts[1:]):
+            if a == b:
+                continue
             t = pcbnew.PCB_TRACK(self.pcb)
             t.SetStart(V(*a)); t.SetEnd(V(*b)); t.SetWidth(mm(width)); t.SetLayer(layer)
             t.SetNet(self.nets[net]); t.SetLocked(locked)
@@ -336,6 +338,7 @@ def plane_vias(lay, clear=0.12):
     Returns (vias added, pads over their plane that found no room)."""
     zones = sorted((z for z in lay.pcb.Zones() if z.GetLayer() in (pcbnew.In1_Cu, pcbnew.In2_Cu)),
                    key=lambda z: -z.GetAssignedPriority())
+    plane_nets = {z.GetNetname() for z in zones}
     def owner(layer, x, y):
         return next((z.GetNetname() for z in zones if z.GetLayer() == layer and z.Outline().Contains(V(x, y))), None)
     def plane_of(net, x, y):  # every point within 0.5 mm belongs to the net's top-priority zone on some inner layer
@@ -376,9 +379,14 @@ def plane_vias(lay, clear=0.12):
         if any(z.Outline().Contains(V(x, y), -1, mm(VIA_D / 2 + clear)) for z in keepouts):
             return False
         return free(x, y, VIA_D / 2, net, side, True) and stub_free(px, py, x, y, net, side)
+    rule_areas = list(lay.pcb.Zones()) + [z for fp in lay.pcb.GetFootprints() for z in fp.Zones()]   # cage keepouts
+    no_tracks = {s: [z for z in rule_areas if z.GetIsRuleArea() and z.GetDoNotAllowTracks() and z.IsOnLayer(l)]
+                 for s, l in (('F', pcbnew.F_Cu), ('B', pcbnew.B_Cu))}
     def stub_free(px, py, x, y, net, side):
         n = max(2, int(math.hypot(x - px, y - py) / 0.05))
-        return all(free(px + (x - px) * k / n, py + (y - py) * k / n, 0.125, net, side, False) for k in range(n + 1))
+        pts = [(px + (x - px) * k / n, py + (y - py) * k / n) for k in range(n + 1)]
+        return all(free(*q, 0.125, net, side, False) and
+                   not any(z.Outline().Contains(V(*q), -1, mm(0.125 + clear)) for z in no_tracks[side]) for q in pts)
     added, missed = 0, []
     via_in_pad = {(fp.GetReference(), p.GetNumber()) for fp in lay.pcb.GetFootprints() for p in fp.Pads() if p.HasHole()}
     pads = [(fp, p) for fp in lay.pcb.GetFootprints() if fp.GetReference() != lay.bga for p in fp.Pads()
@@ -416,6 +424,6 @@ def plane_vias(lay, clear=0.12):
                 lay.track(net, [(px, py), reuse], 0.25, pcbnew.B_Cu if side == 'B' else pcbnew.F_Cu, locked=True)
                 obst.append(('seg', ((px, py), reuse, 0.125), net, side))
                 done = True
-        if not done and plane_of(net, px, py):
-            missed.append(f'{fp.GetReference()}.{p.GetNumber()}')
+        if not done and (plane_of(net, px, py) or net in plane_nets):   # off its plane: left to the router, so say it
+            missed.append(f'{fp.GetReference()}.{p.GetNumber()}' + ('' if plane_of(net, px, py) else ' (off plane)'))
     return added, missed

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 """Place the boards (pcbgen.Layout), fan out the BGA, lay the planes, save."""
-import os, sys
+import math, os, sys
 import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
 from pcbgen import Layout, BGA_C, ball_xy, P, V, plane_vias, PLANE_NETS
@@ -88,9 +88,10 @@ def passives(lay, header_rn_y):
             if parts[r].block.startswith('power:'):  # at the regulator pin (or inductor end) it serves
                 done = set(lay.placed_refs())
                 hosts = [u for u, p in parts.items() if p.block == parts[r].block and u[0] in 'UL' and u != r and u in done]
-                pts = [lay.pad_xy(u, pin) for u in hosts for pin, n in parts[u].conns.items() if n in nets]
+                pts = [(u, lay.pad_xy(u, pin)) for u in hosts for pin, n in parts[u].conns.items() if n in nets]
                 if pts:
-                    lay.place_near(r, *pts[0], bottom=True)
+                    u, xy = pts[0]
+                    lay.place_near(r, *xy, bottom=lay.fps[u].IsFlipped())   # the side of the part it serves
                 else:
                     later.append(r)
                 continue
@@ -182,15 +183,20 @@ def hsmc_layout():
     lay.place(refs(lay, 'SY88236L')[0], bx - 8.5, by)
     ux, uy = bx - 8.5, by   # RX AC-coupling pair straight north of U1 pins 31/30
     put_pair(lay, [(part_on(lay, 'ONU_RD_P', 'C'), ux - 1.6, uy - 4.3), (part_on(lay, 'ONU_RD_N', 'C'), ux - 0.4, uy - 4.3)], 90)
-    lay.place(refs(lay, 'SN65LVDT2DBV')[0], bx - 20.0, by)   # away from U1: its passives need the room
     lay.place(refs(lay, 'TPS61391')[0], bx + 8.5, 48.0)
     lay.place(refs(lay, 'D_Schottky')[0], bx + 8.5, 51.6)
     lay.place(refs(lay, 'AD5593R')[0], 32.0, 70.0)
     lay.place(refs(lay, 'VCXO_LVDS_3225')[0], 14.0, 9.0)    # at XCVR_RX7 (pins 2/4)
     lay.place(refs(lay, 'XO_LVDS_3225')[0], 14.0, 15.0)     # at XCVR_RX6 (pins 6/8)
-    lay.place_near(refs(lay, '74LVC1G17')[0], bx - 24.0, by + 10.0)
-    lay.place_near(refs(lay, '74LVC1G32')[0], bx - 28.0, by + 10.0)
-    lay.place_near(refs(lay, 'D_Schottky')[1], bx - 26.0, by + 13.0)   # burst cutoff discharge diode
+    lay.place(refs(lay, 'TPS563201')[0], 46.0, 40.5)   # 12 V buck for the cages, under the Ethernet cage
+    hsmc_pairs(lay)
+    # Ethernet cage parts on +3V3_SFP: under the cage, on that plane; beside the cage pins they fall across the ONU RX pair
+    for r, p in lay.parts.items():
+        if p.block == 'sfp:ETH' and '+3V3_SFP' in p.conns.values():
+            lay.place_near(r, 60.0, 40.5, within=(52.0, 37.2, 72.0, 43.8))
+    lay.place_near(refs(lay, '74LVC1G123')[0], bx - 24.0, by + 10.0)
+    lay.place_near(refs(lay, '74LVC1G97')[0], bx - 28.0, by + 10.0)
+    lay.place_near(refs(lay, '74LVC1G32')[0], bx - 32.0, by + 10.0)
     for k, y in enumerate((41.5, 74.5)):
         lay.place(refs(lay, 'MountingHole')[k], HSMC_W - 4.5, y)
     return lay
@@ -200,9 +206,149 @@ def hsmc_planes(lay):
     full = [(e, e), (w - e, e), (w - e, h - e), (e, h - e)]
     lay.zone('GND', pcbnew.In1_Cu, full)
     lay.zone('+3V3', pcbnew.In2_Cu, full)
+    # cages (~2.2 A): east of where the OLT / Ethernet RX pairs leave B.Cu and clear of ONU RX (B.Cu), so no pair crosses
+    # the plane split
+    lay.zone('+3V3_SFP', pcbnew.In2_Cu, [(27.0, e), (w - e, e), (w - e, 47.0), (48.5, 47.0), (27.0, 25.5)], priority=1)
 
 SERDES_W = 0.35   # ~50 ohm on JLC 7628 prepreg (0.21 mm), P/N at 0.8 mm pitch: loosely coupled 100 ohm diff
 NECK_W = 0.1      # between balls
+
+PAIR_PITCH = 0.8
+
+def left_offset(pts, d):
+    """The 45/90 degree polyline moved d to its left (y down), corners mitred."""
+    def left(a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        n = math.hypot(dx, dy)
+        return dy / n, -dx / n
+    out = []
+    for i, (x, y) in enumerate(pts):
+        ns = ([left(pts[i - 1], pts[i])] if i else []) + ([left(pts[i], pts[i + 1])] if i < len(pts) - 1 else [])
+        (ax, ay), (bx, by) = ns[0], ns[-1]
+        k = d / (1 + ax * bx + ay * by) if len(ns) == 2 else d / 2
+        out.append((round(x + k * (ax + bx), 4), round(y + k * (ay + by), 4)))
+    return out
+
+def keep_free(lay, side, pts, margin=0.5):
+    """A route's corridor kept free of parts, in <= 1 mm pieces so a diagonal does not block its bounding box."""
+    for a, b in zip(pts, pts[1:]):
+        n = max(1, math.ceil(math.hypot(b[0] - a[0], b[1] - a[1])))
+        for k in range(n):
+            p, q = ((a[0] + (b[0] - a[0]) * t / n, a[1] + (b[1] - a[1]) * t / n) for t in (k, k + 1))
+            lay.keepout[side].append((min(p[0], q[0]) - margin, min(p[1], q[1]) - margin,
+                                      max(p[0], q[0]) + margin, max(p[1], q[1]) + margin))
+
+def route_pair(lay, layer, center, ends):
+    """Locked pair along `center`, SERDES_W at PAIR_PITCH; ends: (net, head, tail) for the left line, then the right one,
+    head and tail being the thin (pad pitch) pieces to the pads or vias."""
+    side = 'F' if layer == pcbnew.F_Cu else 'B'
+    for (net, head, tail), d in zip(ends, (PAIR_PITCH / 2, -PAIR_PITCH / 2)):
+        line = left_offset(center, d)
+        for pts, w in ((head + line[:1], 2 * NECK_W), (line, SERDES_W), (line[-1:] + tail, 2 * NECK_W)):
+            if len(pts) > 1:
+                lay.track(net, pts, w, layer, locked=True)
+                keep_free(lay, side, pts)
+
+def hsmc_pairs(lay):
+    """GTS lanes by hand: TX on F.Cu over the In1 GND plane, RX on B.Cu over the In2 3.3 V plane, so the TX and RX of a
+    lane, side by side on the connector rows, never cross. The left line of each pair is the north connector pin; P/N are
+    swapped in the netlist (HSMC_SWAP) where the destination order needs it. Corridors are kept free of passives."""
+    j = refs(lay, 'HSMC_CARD')[0]
+    olt, eth = refs(lay, 'SFP_HOST')
+    u = refs(lay, 'SY88236L')[0]
+    pad = lambda ref, n: lay.pad_xy(ref, n)
+    net = lambda ref, n: next(p.GetNetname() for p in lay.fps[ref].Pads() if p.GetNumber() == n)
+    def via(n, xy, layer_to_pad, pad_xy):
+        lay.via(n, *xy, locked=True)
+        lay.track(n, [xy, pad_xy], 2 * NECK_W, layer_to_pad, locked=True)
+        keep_free(lay, 'F', [xy, pad_xy] if layer_to_pad == pcbnew.F_Cu else [xy, xy])
+    def tx(pin, rest, tails):   # odd row: north pin to a via west of it (left line), south pin to a via east of it
+        (xa, ya), (xb, yb) = pad(j, str(pin)), pad(j, str(pin + 2))
+        west, east = (xa - 1.5, ya), (xb + 1.6, yb)
+        center = [(east[0], ya + 0.1)] + rest
+        nl, nr = net(j, str(pin)), net(j, str(pin + 2))
+        via(nl, west, pcbnew.B_Cu, (xa, ya)); via(nr, east, pcbnew.B_Cu, (xb, yb))
+        route_pair(lay, pcbnew.F_Cu, center, ((nl, [west, (west[0] + 0.3, ya - 0.3)], tails[0]), (nr, [], tails[1])))
+        return nl, nr
+    def rx(pin, rest, tails, up=None):   # even row: straight out east on B.Cu, spread from the 0.5 mm pin pitch;
+        (xa, ya), (xb, yb) = pad(j, str(pin)), pad(j, str(pin + 2))   # up: center point where it goes on F.Cu
+        x0 = xa + 1.6
+        center = [(x0, ya + 0.25)] + rest
+        nl, nr = net(j, str(pin)), net(j, str(pin + 2))
+        k = center.index(up) + 1 if up else len(center)
+        route_pair(lay, pcbnew.B_Cu, center[:k], ((nl, [(xa, ya), (x0 - 0.15, ya)], [] if up else tails[0]),
+                                                (nr, [(xb, yb), (x0 - 0.15, yb)], [] if up else tails[1])))
+        if up:
+            for n, xy in zip((nl, nr), (left_offset(center[k - 2:k], d)[-1] for d in (PAIR_PITCH / 2, -PAIR_PITCH / 2))):
+                lay.via(n, *xy, locked=True); keep_free(lay, 'F', [xy, xy])
+            route_pair(lay, pcbnew.F_Cu, center[k - 1:], ((nl, [], tails[0]), (nr, [], tails[1])))
+        return nl, nr
+    def to_sfp(cage, nets, nums):   # left line on the north pad of the cage pair
+        assert [net(cage, n) for n in nums] == list(nets), (cage, nets)
+    # OLT and Ethernet TX straight onto the cage pads (TD+ north, 0.8 mm pitch)
+    for pin, cage, x_turn in ((17, olt, 28.0), (21, eth, 20.0)):
+        y0 = pad(j, str(pin))[1] + 0.1
+        t, b = pad(cage, '18'), pad(cage, '19')
+        ye = (t[1] + b[1]) / 2
+        to_sfp(cage, tx(pin, [(x_turn, y0), (x_turn + abs(ye - y0), ye), (t[0], ye)], ([], [])), ('18', '19'))
+    # OLT and Ethernet RX: B.Cu out of the connector, up to F.Cu (past the TX pairs, west of the +3V3_SFP plane)
+    # onto RD- (north) / RD+
+    for pin, cage, x_turn, x_up in ((18, olt, 22.0, 25.0), (22, eth, 29.6, 25.5)):
+        y0 = pad(j, str(pin))[1] + 0.25
+        t, b = pad(cage, '12'), pad(cage, '13')
+        ye = (t[1] + b[1]) / 2
+        bend = [(x_turn, y0), (x_turn + abs(ye - y0), ye), (t[0], ye)]
+        up = (x_up, y0 + (1 if ye > y0 else -1) * max(0.0, x_up - x_turn))   # on the straight run or on the bend
+        bend.insert(0 if x_up < x_turn else 1, up)
+        nl, nr = rx(pin, bend, ([], []), up)
+        to_sfp(cage, (nl, nr), ('12', '13'))
+    # ONU TX through its AC caps (left: DIN+ pin 6, north) to the SY88236L west pins
+    p6, p7 = pad(u, '6'), pad(u, '7')
+    yc = (p6[1] + p7[1]) / 2
+    nl, nr = net(j, '25'), net(j, '27')
+    cn, cp = part_on(lay, nl, 'C'), part_on(lay, nr, 'C')
+    put_pair(lay, [(cn, p6[0] - 3.0, yc - 0.5), (cp, p6[0] - 3.0, yc + 0.5)], 0)
+    a = [pad_of_net(lay, c, n) for c, n in ((cn, nl), (cp, nr))]
+    y0 = pad(j, '25')[1] + 0.1
+    tx(25, [(a[0][0] - 1.5 - (yc - y0), y0), (a[0][0] - 1.5, yc), (a[0][0] - 0.5, yc)],
+       ([(a[0][0] - 0.4, yc - 0.5), a[0]], [(a[1][0] - 0.4, yc + 0.5), a[1]]))
+    for c, pin in ((cn, p6), (cp, p7)):
+        n = net(u, '6' if pin is p6 else '7')
+        q = pad_of_net(lay, c, n)
+        pts = [q, (pin[0] - 0.5 - abs(pin[1] - q[1]), q[1]), (pin[0] - 0.5, pin[1]), pin]
+        lay.track(n, pts, 2 * NECK_W, locked=True); keep_free(lay, 'F', pts)
+    # burst enable straight to the LVDS receiver, approached from the north (A = BEN+ on the east pin)
+    sn = refs(lay, 'SN65LVDT2DBV')[0]
+    for rot in (0, 90, 180, 270):
+        lay.place(sn, 40.0, 60.0, rot)
+        pa, pb = pad(sn, '3'), pad(sn, '4')
+        if pa[1] < 60.0 and pb[1] < 60.0 and pa[0] > pb[0]:
+            break
+        lay.pcb.Remove(lay.fps[sn]); lay.rects['F'].pop()
+    else:
+        raise RuntimeError('SN65LVDT2 orientation')
+    xm, y0 = (pa[0] + pb[0]) / 2, pad(j, '29')[1] + 0.1
+    ye = pa[1] - 1.7
+    nl, nr = tx(29, [(xm - (ye - y0), y0), (xm, ye), (xm, ye + 0.55)],
+                ([(pa[0], ye + 0.55 + pa[0] - xm - 0.4), pa], [(pb[0], ye + 0.55 + xm - 0.4 - pb[0]), pb]))
+    assert (nl, nr) == (net(sn, '3'), net(sn, '4'))
+    # LA input (2.5 Gb/s downstream): the TIA AC-coupling caps right north of pins 28 / 27, short straight necks
+    for pin, dx in (('28', 0.0), ('27', 0.7)):
+        n, (x, y) = net(u, pin), pad(u, pin)
+        c = part_on(lay, n, 'C')
+        put_pair(lay, [(c, x + dx, y - 5.0)], 270)
+        q = pad_of_net(lay, c, n)
+        pts = [(x, y), (x, q[1] + 0.5 + dx), (x + dx, q[1] + 0.5), q]
+        lay.track(n, pts, 2 * NECK_W, locked=True); keep_free(lay, 'F', pts)
+    # ONU RX: B.Cu to vias north of its AC caps (straight north of SY88236L pins 31/30)
+    cl, cr = (pad_of_net(lay, part_on(lay, net(j, n), 'C'), net(j, n)) for n in ('26', '28'))
+    assert cl[0] > cr[0]   # travelling south, the left line is the east one
+    xm, y0, ye = (cl[0] + cr[0]) / 2, pad(j, '26')[1] + 0.25, cl[1] - 2.6
+    nl, nr = rx(26, [(xm - (ye - y0), y0), (xm, ye), (xm, ye + 0.7)],
+                ([(cl[0], ye + 0.7 + cl[0] - xm - 0.4), (cl[0], cl[1] - 1.1)],
+                 [(cr[0], ye + 0.7 + xm - 0.4 - cr[0]), (cr[0], cr[1] - 1.1)]))
+    for n, c in ((nl, cl), (nr, cr)):
+        via(n, (c[0], c[1] - 1.1), pcbnew.F_Cu, c)
 
 def put_pair(lay, refs_xy, rot):
     """Place 0402 parts of a pair exactly: [(ref, x, y)]."""

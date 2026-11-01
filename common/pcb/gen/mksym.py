@@ -84,8 +84,8 @@ syms.append(box_symbol('BOSA_GPON', [([('T1', 'LD_A', 'passive'), ('T2', 'LD_K',
                        'U', 'BOSA GPON', 'bridge:BOSA_GPON', 'GPON ONU BOSA (1310 nm DFB TX, 1490 nm APD-TIA RX) from the X100DG; pad order to measure'))
 def hsmc_symbol():
     fn = hsmc_pinout()
-    first = {f: min(p for p in fn if fn[p] == f) for f in ('3.3V', 'GND')}   # one typed power pin each, the rest passive (ERC)
-    pin = lambda p: (str(p), fn[p], {first['3.3V']: 'power_out', first['GND']: 'power_in'}.get(p, 'passive'))
+    first = {f: min(p for p in fn if fn[p] == f) for f in ('3.3V', '12V', 'GND')}   # one typed power pin each, the rest passive (ERC)
+    pin = lambda p: (str(p), fn[p], {first['3.3V']: 'power_out', first['12V']: 'power_out', first['GND']: 'power_in'}.get(p, 'passive'))
     half = lambda a, b: ([pin(p) for p in range(a, b, 2)], [pin(p) for p in range(a + 1, b, 2)])   # odd row | even row
     return box_symbol('HSMC_CARD', [half(1, 41), half(41, 101), half(101, 161), ([pin(p) for p in range(161, 173)], [])],
                       'J', 'ASP-122952-01', 'bridge:HSMC_ASP-122952-01',

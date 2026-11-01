@@ -185,6 +185,10 @@
     "netclass_patterns": [
       {
         "netclass": "Power",
+        "pattern": "+12V"
+      },
+      {
+        "netclass": "Power",
         "pattern": "+3V3"
       },
       {
@@ -218,6 +222,10 @@
       {
         "netclass": "Power",
         "pattern": "+3V3_RX"
+      },
+      {
+        "netclass": "Power",
+        "pattern": "+3V3_SFP"
       },
       {
         "netclass": "Power",
