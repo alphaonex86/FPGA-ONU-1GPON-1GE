@@ -4,7 +4,7 @@ and pcb/lib/bridge.pretty (BOSA footprint). Without the CSV the ECP5 symbol alre
 
     python3 mksym.py [<ECP5UM-25 pinout .csv from latticesemi.com>] ../lib/bridge.kicad_sym
 """
-import csv, os, re, sys
+import csv, math, os, re, sys
 from sexp import Sym as S, dump, lib_symbol
 from kisch import box_symbol
 
@@ -75,7 +75,7 @@ syms.append(box_symbol('TPS61391', [([('10', 'VIN', 'power_in'), ('13', 'EN', 'i
 syms.append(box_symbol('SN65LVDT2DBV', [([('3', 'A', 'input'), ('4', 'B', 'input')],
                                           [('5', 'R', 'output'), ('1', 'VCC', 'power_in'), ('2', 'GND', 'power_in')])],
                        'U', 'SN65LVDT2DBVR', 'Package_TO_SOT_SMD:SOT-23-5', 'TI LVDS receiver, 110 ohm termination, LVTTL out'))
-# BOSA of the X100DG: TX TO-56 (laser + monitor diode), RX TO-46 (APD + TIA); pads T1-T4 / R1-R5, order to measure
+# BOSA of the X100DG: TX TO-56 (laser + monitor diode), RX TO-46 (APD + TIA); pads T1-T4 / R1-R5 (R5 centre lead, GND assumed), order unknown
 syms.append(box_symbol('BOSA_GPON', [([('T1', 'LD_A', 'passive'), ('T2', 'LD_K', 'passive'), ('T3', 'MPD_A', 'passive'), ('T4', 'MPD_K', 'passive')],
                                        [('R1', 'VAPD', 'passive'), ('R2', 'VCC', 'power_in'), ('R3', 'OUT+', 'output'), ('R4', 'OUT-', 'output'),
                                         ('R5', 'GND', 'power_in')])],
@@ -85,27 +85,34 @@ lib = [S('kicad_symbol_lib'), [S('version'), 20251024], [S('generator'), 'kicad_
 open(out, 'w').write(dump(lib) + '\n')
 print('symbols', [s[1] for s in syms])
 
-# BOSA footprint: body flat on top, fiber out at +x past the board edge (x = BOSA_LEN), TX TO-56 leads bent down
-# behind it (x < 0), RX TO-46 on the -y side with its leads bent down in a row. Placeholder geometry: measure the X100DG part.
-BOSA_LEN, BOSA_R, RX_X, RX_OUT, PITCH, DRILL, PAD = 14.0, 3.5, 6.0, 7.0, 2.54, 0.9, 1.6
-TX_PADS = [(f'T{k + 1}', -2.5, (k - 1.5) * PITCH) for k in range(4)]
-RX_PADS = [(f'R{k + 1}', RX_X + (k - 2) * PITCH, -RX_OUT - 2.0) for k in range(5)]
+# BOSA footprint (pcb/lib/x100dg-bosa-land.jpg): both TO cans stand on the board under the body, leads straight down;
+# TX TO-56 4 leads in a + at the back (x = 0), RX TO-46 4 leads in an X + 1 centre lead (x = RX_X), fiber out at +x past
+# the board edge. Pin circles from public TO-56/TO-46 headers, RX_X scaled from the photo; lead order still unknown.
+BOSA_LEN, BOSA_R, BOSA_BACK, RX_X, TX_PCD, RX_PCD, DRILL, PAD = 15.0, 3.5, 3.2, 8.5, 2.0, 2.54, 0.7, 1.05
+polar = lambda cx, d, deg: (round(cx + d / 2 * math.cos(math.radians(deg)), 3) + 0.0, round(d / 2 * math.sin(math.radians(deg)), 3) + 0.0)
+TX_PADS = [(f'T{k + 1}', *polar(0, TX_PCD, 90 * k + 180)) for k in range(4)]
+RX_PADS = [(f'R{k + 1}', *polar(RX_X, RX_PCD, 90 * k + 135)) for k in range(4)] + [('R5', RX_X, 0.0)]
 
 def bosa_footprint():
     font = [S('effects'), [S('font'), [S('size'), 1, 1], [S('thickness'), 0.15]]]
     rect = lambda x0, y0, x1, y1, layer, w: [S('fp_rect'), [S('start'), x0, y0], [S('end'), x1, y1],
                                              [S('stroke'), [S('width'), w], [S('type'), S('solid')]], [S('fill'), S('no')], [S('layer'), layer]]
-    body = [rect(0, -BOSA_R, BOSA_LEN, BOSA_R, 'F.Fab', 0.1), rect(RX_X - 2.35, -RX_OUT, RX_X + 2.35, -BOSA_R, 'F.Fab', 0.1),
-            rect(0.3, -BOSA_R - 0.15, BOSA_LEN - 0.3, BOSA_R + 0.15, 'F.SilkS', 0.12)]
-    yard = rect(-5.4, -RX_OUT - 4.3, BOSA_LEN + 0.25, BOSA_R + 1.4, 'F.CrtYd', 0.05)   # pads + their silk labels
+    body = [rect(-BOSA_BACK, -BOSA_R, BOSA_LEN, BOSA_R, 'F.Fab', 0.1),
+            rect(-BOSA_BACK - 0.15, -BOSA_R - 0.15, BOSA_LEN - 0.3, BOSA_R + 0.15, 'F.SilkS', 0.12)]
+    yard = rect(-BOSA_BACK - 0.4, -BOSA_R - 0.4, BOSA_LEN + 0.25, BOSA_R + 0.4, 'F.CrtYd', 0.05)
     pads = [[S('pad'), n, S('thru_hole'), S('circle'), [S('at'), round(x, 3), round(y, 3)], [S('size'), PAD, PAD],
              [S('drill'), DRILL], [S('layers'), '*.Cu', '*.Mask']] for n, x, y in TX_PADS + RX_PADS]
-    label_at = lambda n, x, y: (x - 2.0, y) if n[0] == 'T' else (x, y - 1.8)
+    def label_at(n, x, y):
+        if n == 'R5':
+            return x, 2.6
+        cx, dist = (0.0, 2.4) if n[0] == 'T' else (RX_X, 2.7)
+        k = dist / math.hypot(x - cx, y)
+        return cx + (x - cx) * k, y * k
     labels = [[S('fp_text'), S('user'), n, [S('at'), *(round(v, 3) for v in label_at(n, x, y))], [S('layer'), 'F.SilkS'],
                [S('effects'), [S('font'), [S('size'), 0.8, 0.8], [S('thickness'), 0.12]]]] for n, x, y in TX_PADS + RX_PADS]
     fp = [S('footprint'), 'BOSA_GPON', [S('version'), 20260206], [S('generator'), 'mksym.py'], [S('layer'), 'F.Cu'],
-          [S('descr'), 'GPON ONU BOSA lying on the board, fiber over the edge; TX TO-56 4 leads, RX TO-46 5 leads, '
-                       'placeholder pitch/position until the X100DG part is measured'],
+          [S('descr'), 'GPON ONU BOSA of the X100DG, both TO cans down under the body, fiber over the edge; '
+                       'TX TO-56 4 leads, RX TO-46 5 leads; spacing estimated from a photo, lead order unknown'],
           [S('property'), 'Reference', 'REF**', [S('at'), 7, 0], [S('layer'), 'F.Fab'], font],
           [S('property'), 'Value', 'BOSA_GPON', [S('at'), 7, 1.8], [S('layer'), 'F.Fab'], font],
           [S('attr'), S('through_hole')]] + body + [yard] + pads + labels + \

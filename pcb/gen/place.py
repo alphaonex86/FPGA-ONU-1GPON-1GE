@@ -138,10 +138,10 @@ def onu_layout():
     lay = Layout(bd, 64, 66)
     common(lay, lay.h)
     lay.place(refs(lay, 'VCXO_LVDS_3225')[0], 42.0, 37.5)
-    lay.place(refs(lay, 'BOSA_GPON')[0], 49.0, 49.5)          # fiber out over the east edge
-    lay.place(refs(lay, 'SY88236L')[0], 39.5, 49.5)           # MOD/BIAS/MD side facing the TX leads
+    lay.place(refs(lay, 'BOSA_GPON')[0], 48.0, 49.5)          # fiber out over the east edge
+    lay.place(refs(lay, 'SY88236L')[0], 39.5, 49.5)           # MOD/BIAS/MD side facing the TX can
     lay.place(refs(lay, 'SN65LVDT2DBV')[0], 36.0, 56.0)       # at BEN+ (south-west corner)
-    lay.place(refs(lay, 'TPS61391')[0], 60.5, 33.0)           # north-east of the RX leads, bottom free (thermal vias)
+    lay.place(refs(lay, 'TPS61391')[0], 60.5, 33.0)           # north-east of the RX can, bottom free (thermal vias)
     lay.place(refs(lay, 'D_Schottky')[0], 60.5, 36.6)
     lay.place(refs(lay, 'AD5593R')[0], 30.0, 58.0)
     return lay

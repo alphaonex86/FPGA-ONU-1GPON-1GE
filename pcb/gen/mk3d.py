@@ -161,28 +161,16 @@ def along_x(y, z, r, x0, x1):
     """Cylinder on the x axis: a z cylinder with its axes turned (x, y, z) -> (z, x, y), handedness kept."""
     return [[(c, a, b) for a, b, c in f] for f in prism(circle(y, z, r), x0, x1)]
 
-def along_y(x, z, r, y0, y1):
-    return [[(b, c, a) for a, b, c in f] for f in prism(circle(z, x, r), y0, y1)]
-
-def strip(x0, y0, x1, y1, w, z0, z1):
-    """Flat lead from (x0, y0) to (x1, y1)."""
-    dx, dy = x1 - x0, y1 - y0
-    k = w / 2 / math.hypot(dx, dy)
-    n = (-dy * k, dx * k)
-    return prism([(x0 - n[0], y0 - n[1]), (x1 - n[0], y1 - n[1]), (x1 + n[0], y1 + n[1]), (x0 + n[0], y0 + n[1])], z0, z1)
-
 def bosa(s):
-    """~ GPON BOSA lying on the board (pcb/gen/mksym.py footprint): TX TO-56 at the back, RX TO-46 on the side."""
-    zc, lead = 3.5, 0.45
-    s.solid(along_x(0, zc, 2.8, 0.0, 3.0), STEEL)                  # TX can
-    s.solid(along_x(0, zc, 3.4, 3.0, 12.0), STEEL)                 # housing
-    s.solid(along_x(0, zc, 2.0, 12.0, 14.0), STEEL)                # receptacle
-    s.solid(along_x(0, zc, 1.6, 14.0, 22.0), BLACK)                # fiber boot, over the board edge
-    s.solid(along_y(6.0, zc, 2.35, 3.0, 7.0), STEEL)               # RX can
+    """~ GPON BOSA of the X100DG (pcb/gen/mksym.py footprint): TX and RX TO cans standing under the body, fiber along +x."""
+    zc, lead = 4.8, 0.45
+    s.solid(prism(circle(0.0, 0.0, 2.8, 24), 0.3, 3.0), STEEL)    # TX TO-56 can
+    s.solid(prism(circle(8.5, 0.0, 2.7, 24), 0.3, 3.0), STEEL)    # RX TO-46 can
+    s.solid(box(-3.2, -3.3, 3.0, 12.0, 3.3, 6.6), STEEL)          # housing
+    s.solid(along_x(0, zc, 2.0, 12.0, 15.0), STEEL)                # receptacle
+    s.solid(along_x(0, zc, 1.6, 15.0, 23.0), BLACK)                # fiber boot, over the board edge
     for num, x, y, *_ in pads('bridge', 'BOSA_GPON'):
-        s.solid(prism(circle(x, y, lead / 2, 8), -1.6, zc), GOLD)
-        to = (0.0, y * 0.5) if num[0] == 'T' else (6.0 + (x - 6.0) * 0.4, 7.0)
-        s.solid(strip(x, y, *to, lead, zc - lead / 2, zc + lead / 2), GOLD)
+        s.solid(prism(circle(x, y, lead / 2, 8), -1.6, 0.3), GOLD)
 
 MODELS = {'Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm': cabga381,
           'Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm': sit9121,
