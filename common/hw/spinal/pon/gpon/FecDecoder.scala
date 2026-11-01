@@ -52,7 +52,8 @@ case class FecDecoder[T <: Data](tagType: HardType[T], shortLength: Int = frameB
   val step = Reg(UInt(5 bits)) init (0) // 0-15 locator, 16-23 evaluator
   val phase = Reg(UInt(2 bits)) init (0)
   val busy = RegInit(False)
-  val short, decoding = Reg(Bool())
+  val short = Reg(Bool())
+  val decoding = RegInit(False)
   val finished = RegInit(False)
   finished := False
   for (i <- 0 to t) products(i) := Gf.mul(lambda(i), window(i))
@@ -97,7 +98,8 @@ case class FecDecoder[T <: Data](tagType: HardType[T], shortLength: Int = frameB
   val located = Vec(Reg(Bits(8 bits)), t + 1)
   val evaluator = Vec(Reg(Bits(8 bits)), t)
   val degree = Reg(UInt(4 bits))
-  val locatedShort, locatedDecoding = Reg(Bool())
+  val locatedShort = Reg(Bool())
+  val locatedDecoding = RegInit(False)
   when(finished) {
     for (i <- 0 to t) located(i) := decoding ? lambda(i) | (if (i == 0) B(1, 8 bits) else zero)
     for (i <- 0 until t) evaluator(i) := decoding ? omega(i) | zero

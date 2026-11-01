@@ -8,6 +8,7 @@ import GponCodes._
 /** Set by the CPU; times in upstream bytes (155.52 per us). */
 case class OltConfig() extends Bundle {
   val enable = Bool()
+  val dsFec = Bool()               // downstream FEC, from the next frame on (the framer's)
   val upstreamOverhead = Bits(80 bits) // data of the broadcast Upstream_Overhead PLOAM (pre-assigned delay included)
   val teqd = UInt(24 bits)         // ranged bursts arrive teqd after their frame start: >= rtdMin + reach
   val rtdMin = UInt(24 bits)       // round trip of the nearest ONU, its response time included

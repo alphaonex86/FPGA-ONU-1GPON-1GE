@@ -80,6 +80,7 @@ case class OltMac(maxOnus: Int = 32, maxTconts: Int = 64) extends Component {
   // upstream -> downstream: a Flow is taken once, in the first downstream clock after the upstream edge
   val phaseSeen = RegNext(us.phase) init (False)
   val firstHalf = phaseSeen =/= RegNext(phaseSeen).init(False)
+  framer.io.fec := us.regs.io.config.dsFec // quasi-static, from the synchronous upstream domain
   framer.io.bwmapWrite.valid := us.bwmapWrite.valid && firstHalf
   framer.io.bwmapWrite.payload := us.bwmapWrite.payload
   framer.io.bwmapCommit.valid := us.bwmapCommit.valid && firstHalf

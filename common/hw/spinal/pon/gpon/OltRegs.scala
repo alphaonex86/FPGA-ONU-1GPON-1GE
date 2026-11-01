@@ -30,6 +30,7 @@ case class OltRegs(maxTconts: Int = 64) extends Component {
 
   val CTRL = busif.newReg("Control")
   io.config.enable := CTRL.field(Bool(), AccessType.RW, 0, "activation on: SN requests every SN_PERIOD frames")(SymbolName("enable"))
+  io.config.dsFec := CTRL.field(Bool(), AccessType.RW, 0, "downstream FEC (stock OLTs: on)")(SymbolName("dsFec"))
   val UO_0 = busif.newReg("Upstream_Overhead PLOAM data bytes 1-4 (byte 1 in bits 31-24)")
   val UO_1 = busif.newReg("Upstream_Overhead bytes 5-8")
   val UO_2 = busif.newReg("Upstream_Overhead bytes 9-10 (bits 15-0)")

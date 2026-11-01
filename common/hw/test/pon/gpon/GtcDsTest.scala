@@ -8,7 +8,7 @@ import scala.collection.mutable
 import GponCodes._
 
 /** Framer -> k-bit delay -> deframer, with a bit-error injection point. Test only. */
-case class GtcDsLoopback(bitDelay: Int) extends Component {
+case class GtcDsLoopback(bitDelay: Int, fec: Boolean = false) extends Component {
   val framer = GtcDsFramer()
   val deframer = GtcDsDeframer()
   val io = new Bundle {
@@ -22,9 +22,11 @@ case class GtcDsLoopback(bitDelay: Int) extends Component {
   framer.io.bwmapWrite << io.bwmapWrite
   framer.io.bwmapCommit << io.bwmapCommit
   framer.io.gem << io.gem
+  framer.io.fec := Bool(fec)
   val previous = RegNext(framer.io.line) init (0)
   deframer.io.line := (previous ## framer.io.line)(15 - bitDelay downto 8 - bitDelay) ^ io.errorMask
   framer.io.frameStart.simPublic()
+  framer.io.line.simPublic()
   framer.io.gemError.simPublic()
   deframer.io.simPublic()
 }
@@ -124,6 +126,7 @@ object GtcDsTest extends App {
   // framer against annex A.5: frame 1 carries the example (superframe 0x00051276)
   SimConfig.compile(GtcDsFramer(superframeReset = 0x00051275)).doSim { dut =>
     val cd = dut.clockDomain
+    dut.io.fec #= false
     val gem = new GemDriver(dut.io.gem, cd)
     val ploam = new PloamDriver(dut.io.ploam, cd)
     dut.io.bwmapWrite.valid #= false
@@ -159,8 +162,9 @@ object GtcDsTest extends App {
     check(gemErrors == 0, "framer reports no GEM error")
   }
 
-  // loopback on two bit alignments: sync, PLOAM, BWmap, GEM (fragmentation, PLI cap), BIP and HEC errors
-  for (bitDelay <- Seq(0, 3)) SimConfig.compile(GtcDsLoopback(bitDelay)).doSim { dut =>
+  // loopback on two bit alignments, and with FEC: sync, PLOAM, BWmap, GEM (fragmentation, PLI cap), BIP and HEC errors
+  for ((bitDelay, fec) <- Seq((0, false), (3, false), (3, true))) SimConfig.compile(GtcDsLoopback(bitDelay, fec)).doSim { dut =>
+    val name = s"loopback k=$bitDelay${if (fec) " FEC" else ""}"
     val cd = dut.clockDomain
     val f = dut.framer
     val d = dut.deframer
@@ -179,8 +183,11 @@ object GtcDsTest extends App {
     var badCrc = 0
     var frameStarts = 0
     var gemErrors = 0
+    val f0 = if (fec) 4 else 3 // FEC: on at the deframer after two frames with the Ident bit
+    val lineFrame = mutable.ArrayBuffer[Int]() // a frame as sent
     cd.onSamplings {
       if (f.io.frameStart.toBoolean) frameStarts += 1
+      if (frameStarts == f0 + 2) lineFrame += f.io.line.toInt
       if (f.io.gemError.toBoolean) gemErrors += 1
       if (d.io.ploam.valid.toBoolean) {
         if (!d.io.ploam.crcOk.toBoolean) badCrc += 1 else gotPloams += d.io.ploam.value.toBigInt
@@ -198,32 +205,43 @@ object GtcDsTest extends App {
     }
     cd.forkStimulus(10)
     cd.waitSamplingWhere(d.io.synced.toBoolean)
-    check(frameStarts <= 3, s"loopback k=$bitDelay: deframer in sync after ${frameStarts} frames")
-    cd.waitSamplingWhere(frameStarts == 3)
-    writeBwmap(dut.io.bwmapWrite, dut.io.bwmapCommit, vectorAllocs, cd) // for frame 4
+    check(frameStarts <= 3, s"$name: deframer in sync after ${frameStarts} frames")
+    cd.waitSamplingWhere(frameStarts == f0)
+    writeBwmap(dut.io.bwmapWrite, dut.io.bwmapCommit, vectorAllocs, cd) // for the next frame
     ploam.queue ++= sentPloams
     gem.queue ++= sentPackets
-    cd.waitSamplingWhere(frameStarts == 11)
-    check(gotPloams.filter(_ != noMessage) == sentPloams, s"loopback k=$bitDelay: PLOAM messages in order")
-    check(gotAllocs == vectorAllocs, s"loopback k=$bitDelay: BWmap entries of the committed frame only")
-    check(gotPackets == sentPackets, s"loopback k=$bitDelay: ${sentPackets.length} GEM packets, fragmented across frames")
-    check(badCrc == 0 && gemErrors == 0 && d.io.bipErrors.toLong == 0 && d.io.plendErrors.toLong == 0 &&
-      d.io.hecErrors.toLong == 0 && d.io.gemCuts.toLong == 0, s"loopback k=$bitDelay: no CRC, GEM, BIP, PLend, HEC or cut error")
+    cd.waitSampling(1000) // the frame before is out of the deframer: errors from here on (FEC: it turned on there)
+    val (bip0, plend0, hec0, crc0) = (d.io.bipErrors.toLong, d.io.plendErrors.toLong, d.io.hecErrors.toLong, badCrc)
+    def bipErrors = d.io.bipErrors.toLong - bip0
+    def hecErrors = d.io.hecErrors.toLong - hec0
+    cd.waitSamplingWhere(frameStarts == f0 + 8)
+    check(gotPloams.filter(_ != noMessage) == sentPloams, s"$name: PLOAM messages in order")
+    check(gotAllocs == vectorAllocs, s"$name: BWmap entries of the committed frame only")
+    check(gotPackets == sentPackets, s"$name: ${sentPackets.length} GEM packets, fragmented across frames")
+    check(badCrc == crc0 && gemErrors == 0 && bipErrors == 0 && d.io.plendErrors.toLong == plend0 &&
+      hecErrors == 0 && d.io.gemCuts.toLong == 0, s"$name: no CRC, GEM, BIP, PLend, HEC or cut error")
     // one flipped bit in an idle GEM header: one BIP bit error, one HEC error, delineation recovers
     cd.waitSamplingWhere(f.io.frameStart.toBoolean)
     cd.waitSampling(1000)
     dut.io.errorMask #= 0x10
     cd.waitSampling()
     dut.io.errorMask #= 0
-    cd.waitSamplingWhere(frameStarts == 13)
+    cd.waitSamplingWhere(frameStarts == f0 + 10)
     cd.waitSampling(500) // the BIP covering the error: byte 21 of the next frame, after the FEC decoder
-    check(d.io.bipErrors.toLong == 1 && d.io.hecErrors.toLong == 1 && d.io.synced.toBoolean,
-      s"loopback k=$bitDelay: injected bit error counted once by BIP and HEC, still in sync " +
-        s"(bip ${d.io.bipErrors.toLong}, hec ${d.io.hecErrors.toLong}, synced ${d.io.synced.toBoolean})")
+    if (fec) check(bipErrors == 0 && hecErrors == 0 && d.io.fecCorrectedBytes.toLong == 1 &&
+      d.io.fecUncorrectable.toLong == 0 && d.io.synced.toBoolean, s"$name: injected bit error corrected (FEC ${d.io.fecCorrectedBytes.toLong})")
+    else check(bipErrors == 1 && hecErrors == 1 && d.io.synced.toBoolean,
+      s"$name: injected bit error counted once by BIP and HEC, still in sync (bip $bipErrors, hec $hecErrors, synced ${d.io.synced.toBoolean})")
+    if (fec) {
+      val clear = Model.descramble(lineFrame.toSeq)
+      check(clear.length == frameBytes && clear(4) >> 7 == 1 &&
+        clear.grouped(255).forall(cw => Model.rsParity(cw.dropRight(16)) == cw.takeRight(16)),
+        s"$name: frame sent with the Ident FEC bit, every codeword's parity right")
+    }
     gem.queue ++= sentPackets.take(4)
     gotPackets.clear()
-    cd.waitSamplingWhere(frameStarts == 15)
-    check(gotPackets == sentPackets.take(4), s"loopback k=$bitDelay: GEM traffic after the error")
+    cd.waitSamplingWhere(frameStarts == f0 + 12)
+    check(gotPackets == sentPackets.take(4), s"$name: GEM traffic after the error")
   }
   println("PASS GtcDsTest")
 }

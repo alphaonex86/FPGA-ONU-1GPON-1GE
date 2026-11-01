@@ -181,7 +181,7 @@ object OnuMacTest extends App {
     olt.writes ++= Seq(r.UO_0.addr -> word(uo.slice(0, 4)), r.UO_1.addr -> word(uo.slice(4, 8)), r.UO_2.addr -> word(uo.slice(8, 10)),
       r.TEQD.addr -> BigInt(act.teqd), r.RTD_MIN.addr -> BigInt(act.rtdMin), r.RANGING.addr -> BigInt(act.reach | (act.requestStart << 16)),
       r.WINDOW.addr -> BigInt(act.quietBefore | (snPeriod << 8)), r.GRANT.addr -> BigInt(act.grantBytes | (act.gapBytes << 16)),
-      r.IRQ_ENABLE.addr -> BigInt(3), r.CTRL.addr -> BigInt(1))
+      r.IRQ_ENABLE.addr -> BigInt(3), r.CTRL.addr -> BigInt(3)) // activation, DS FEC on (stock OLTs' default)
 
     // ONU CPU
     val q = dut.onu.upstream.regs
@@ -267,6 +267,11 @@ object OnuMacTest extends App {
     oltGem.queue ++= Seq(0x456 -> List.fill(20)(0x5A), 0x123 -> omciDown)
     waitFrames(3)
     check(dsGem.map(_._2).toList == omciDown && dsGem.forall(_._1 == 0x123), "downstream: only the OMCI Port-ID to the ONU CPU")
+
+    var fec = Seq[BigInt]()
+    for (reg <- Seq(q.FEC(0), q.FEC(3)) /* codewords, uncorrectable */) onu.reads += ((reg.addr, x => fec :+= x))
+    us.waitSamplingWhere(fec.length == 2)
+    check(fec(0) > 20 * 153 && fec(1) == 0, s"DS FEC since activation: ${fec(0)} codewords decoded, ${fec(1)} uncorrectable")
 
     // fibre cut: O6; back with the downstream 11 bits later (5.5 upstream bits), directed POPUP: same EqD
     dsCut = true

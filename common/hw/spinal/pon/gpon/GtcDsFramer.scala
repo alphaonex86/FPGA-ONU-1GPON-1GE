@@ -35,7 +35,8 @@ case class BwmapWrite(maxAllocs: Int) extends Bundle {
   val alloc = Allocation()
 }
 
-/** OLT downstream GTC framer (G.984.3 clause 8.1), no FEC, one line byte per clock (311.04 MHz).
+/** OLT downstream GTC framer (G.984.3 clause 8.1), one line byte per clock (311.04 MHz). FEC (`fec`, from the next
+  * frame on): RS(255,239) parity in the last 16 bytes of each codeword, the Ident FEC bit set (clause 13.2).
   * BWmap: write the entries of the next frame, then commit their count before its first byte.
   * A GEM packet must deliver one byte per clock once started; a gap or a wrong length raises gemError. */
 case class GtcDsFramer(maxAllocs: Int = 64, superframeReset: BigInt = 0) extends Component {
@@ -44,22 +45,43 @@ case class GtcDsFramer(maxAllocs: Int = 64, superframeReset: BigInt = 0) extends
     val bwmapWrite = slave Flow (BwmapWrite(maxAllocs))
     val bwmapCommit = slave Flow (UInt(log2Up(maxAllocs + 1) bits))
     val gem = slave Stream (Fragment(GemTxByte()))
+    val fec = in Bool ()
     val line = out Bits (8 bits)
     val frameStart = out Bool () // line carries the first PSync byte
     val gemError = out Bool ()
   }
 
+  // line slots: FEC parity in the last 16 of each codeword; the fields advance on the others, at `pos`
+  val fec = Reg(Bool()) init (False)
+  val linePos = Reg(UInt(16 bits)) init (0)
+  val codewordPos = Reg(UInt(8 bits)) init (0)
+  val parity = Reg(Bool()) init (False)
+  val lineLast = linePos === frameBytes - 1
+  linePos := lineLast ? U(0, 16 bits) | linePos + 1
+  codewordPos := (lineLast || codewordPos === 254) ? U(0, 8 bits) | codewordPos + 1
+  parity := !lineLast && fec && (codewordPos >= fecDataBytes - 1 && codewordPos =/= 254 || linePos >= fecLastData - 1)
+  val advance = !parity
+
   val pos = Reg(UInt(16 bits)) init (0)
-  val lastByte = RegNext(pos === frameBytes - 2) init (False) // pos === frameBytes - 1, registered (timing)
-  pos := lastByte ? U(0, 16 bits) | pos + 1
+  val atLast = Reg(Bool()) init (False) // pos is the frame's last data byte, registered (timing)
+  val lastByte = advance && atLast
+  when(advance) {
+    pos := lastByte ? U(0, 16 bits) | pos + 1
+    atLast := !lastByte && pos === (fec ? U(frameBytes - 16 * 153 - 2, 16 bits) | U(frameBytes - 2, 16 bits))
+  }
+  val fecNext = Reg(Bool()) init (False) // sampled with the last data byte: the next frame's room
+  when(lastByte)(fecNext := io.fec)
+  when(lineLast)(fec := lastByte ? io.fec | fecNext)
   // GEM payload room after a header started here: frameBytes - pos - 5, kept in registers (timing)
   val room = Reg(UInt(16 bits)) init (frameBytes - 5)
   val hasRoom = Reg(Bool()) init (True)
   val fragmentRoom = Reg(UInt(12 bits)) init (4095) // min(room, 4095)
-  val roomNext = lastByte ? U(frameBytes - 5, 16 bits) | room - 1
-  room := roomNext
-  hasRoom := lastByte || (hasRoom && room =/= 1)
-  fragmentRoom := (roomNext < 4095) ? roomNext.resize(12) | U(4095, 12 bits)
+  val roomNext = lastByte ? (io.fec ? U(frameBytes - 16 * 153 - 5, 16 bits) | U(frameBytes - 5, 16 bits)) | room - 1
+  when(advance) {
+    room := roomNext
+    hasRoom := lastByte || (hasRoom && room =/= 1)
+    fragmentRoom := (roomNext < 4095) ? roomNext.resize(12) | U(4095, 12 bits)
+  }
   val superframe = Reg(UInt(30 bits)) init (U(superframeReset, 30 bits))
   when(lastByte)(superframe := superframe + 1)
 
@@ -70,7 +92,7 @@ case class GtcDsFramer(maxAllocs: Int = 64, superframeReset: BigInt = 0) extends
   val committed = Reg(Bool()) init (False)
   val committedCount = Reg(cloneOf(allocCount))
   bwmap.write(((!front) ## io.bwmapWrite.index).asUInt, io.bwmapWrite.alloc.line, io.bwmapWrite.valid)
-  when(pos === 0) {
+  when(advance && pos === 0) {
     front := front ^ committed
     allocCount := committed ? committedCount | allocCount.getZero
     committed := False
@@ -81,7 +103,7 @@ case class GtcDsFramer(maxAllocs: Int = 64, superframeReset: BigInt = 0) extends
   }
   val pcbdLast = RegNext(U(29, 16 bits) + (allocCount << 3)) // last PCBd byte, valid from pos 2
   val inPayload = Reg(Bool()) init (False)
-  inPayload := !lastByte && (inPayload || pos === pcbdLast)
+  when(advance)(inPayload := !lastByte && (inPayload || pos === pcbdLast))
   val bwOffset = pos - 30
   val bwEntry = bwmap.readSync((front ## ((bwOffset + 1) >> 3).resize(log2Up(maxAllocs))).asUInt)
   val bwByte = bwOffset(2 downto 0)
@@ -103,15 +125,17 @@ case class GtcDsFramer(maxAllocs: Int = 64, superframeReset: BigInt = 0) extends
   io.gemError := False
 
   val field = Bits(8 bits) // stage 1: field byte; CRC and BIP slots are filled in stage 2
+  field := 0
   val crcStart, crcEmit = False
 
   def byteOf(word: Bits, index: UInt): Bits = // byte `index` of `word`, MSB first
     (word >> ((U(word.getWidth / 8 - 1, index.getWidth bits) - index) << 3))(7 downto 0)
 
-  when(pos < 4) {
+  when(!advance) {
+  } elsewhen (pos < 4) {
     field := byteOf(B(psync, 32 bits), pos.resize(2))
   } elsewhen (pos < 8) {
-    field := byteOf(B"00" ## superframe, (pos - 4).resize(2))
+    field := byteOf(fec ## B"0" ## superframe, (pos - 4).resize(2))
   } elsewhen (pos < 21) {
     crcStart := pos === 8
     crcEmit := pos === 20
@@ -173,16 +197,27 @@ case class GtcDsFramer(maxAllocs: Int = 64, superframeReset: BigInt = 0) extends
   val crcStartSlot = RegNext(crcStart) init (False)
   val crcSlot = RegNext(crcEmit) init (False)
   val bipSlot = RegNext(pos === 21) init (False)
-  val scramblerReset = RegNext(pos === 4) init (False)
-  val unscrambled = RegNext(pos < 4) init (True)
-  val frameStart = RegNext(pos === 0) init (False)
+  val scramblerReset = RegNext(linePos === 4) init (False)
+  val unscrambled = RegNext(linePos < 4) init (True)
+  val frameStart = RegNext(linePos === 0) init (False)
+  val paritySlot = RegNext(parity) init (False)
+  val codewordStart = RegNext(codewordPos === 0) init (False)
 
   val crc = Reg(Bits(8 bits))
   val crcIn = crcStartSlot ? B(0, 8 bits) | crc
   val bip = Reg(Bits(8 bits)) init (0)
-  val clear = crcSlot ? crcIn | (bipSlot ? bip | fieldByte)
-  crc := crc8Step(crcIn, clear)
-  bip := bipSlot ? B(0, 8 bits) | bip ^ clear
+  val data = crcSlot ? crcIn | (bipSlot ? bip | fieldByte)
+  when(!paritySlot) {
+    crc := crc8Step(crcIn, data)
+    bip := bipSlot ? B(0, 8 bits) | bip ^ data
+  }
+  // RS(255,239) encoder (G.984.3 A.3): parity registers p0-p15, p15 sent first
+  val rs = Vec(Reg(Bits(8 bits)) init (0), 16)
+  val rsState = codewordStart ? Vec(rs.map(_ => B(0, 8 bits))) | rs
+  val feedback = data ^ rsState(15)
+  for (i <- 0 until 16) rs(i) := paritySlot ? (if (i == 0) B(0, 8 bits) else rs(i - 1)) |
+    ((if (i == 0) B(0, 8 bits) else rsState(i - 1)) ^ Gf.mulConst(feedback, Model.rsGenerator(i)))
+  val clear = paritySlot ? rs(15) | data
 
   val scrambler = Reg(Bits(7 bits))
   val (keystream, scramblerNext) = scramblerByte(scramblerReset ? B"7'x7F" | scrambler)

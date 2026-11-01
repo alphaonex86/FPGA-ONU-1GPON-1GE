@@ -121,9 +121,10 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
 
   val BIP_ERRORS = busif.newReg("Downstream BIP errors (bits), for REI")
   BIP_ERRORS.field(UInt(32 bits), AccessType.RO, 0, "count")(SymbolName("count")) := io.bipErrors
-  for ((name, i) <- Seq("CODEWORDS", "CORRECTED_BYTES", "CORRECTED_CODEWORDS", "UNCORRECTABLE").zipWithIndex) {
+  val FEC = for ((name, i) <- Seq("CODEWORDS", "CORRECTED_BYTES", "CORRECTED_CODEWORDS", "UNCORRECTABLE").zipWithIndex) yield {
     val reg = busif.newReg("Downstream FEC count (OMCI FEC PM)")(SymbolName(s"FEC_$name"))
     reg.field(UInt(32 bits), AccessType.RO, 0, "count")(SymbolName("count")) := io.fec(i)
+    reg
   }
 
   busif.accept(DocCHeader("onu_regs", "ONU")) // onu_regs.h next to the Verilog
