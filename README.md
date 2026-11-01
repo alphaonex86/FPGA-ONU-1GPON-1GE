@@ -69,7 +69,9 @@ last one, the content sized to the data bytes, checked by a Scala OLT model; our
 OLT does not ask for it (like Maple's default).
 Ethernet port in simulation: comma alignment and 8b/10b on the raw 10-bit lane,
 taxi's 1000BASE-X/SGMII PCS (autonegotiation) and 1G MAC (`common/hw/ext/taxi`,
-submodule: `git submodule update --init`), two ports back to back.
+submodule: `git submodule update --init`), two ports back to back; on the board
+its own lane, SFP cage pins and HPS frame queues (`eth_board_regs.h`), checked
+from the CPU registers to the looped-back lane.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane
@@ -82,7 +84,7 @@ detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
 optics pins with the laser held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed: 11.1K ALMs, setup slack +0.129 ns
+HSMC card pins placed: 13.0K ALMs, setup slack +0.235 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 
 ## License

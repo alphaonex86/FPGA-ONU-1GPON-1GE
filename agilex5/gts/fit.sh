@@ -18,7 +18,8 @@ case $top in
     hsmc_lanes) verilog=$src/hsmc_lanes.sv ;;
     PonBoard)
         (cd "$repo" && "${SBT:-sbt}" -batch "runMain pon.PonBoardVerilog") > "$dir/sbt.log" 2>&1 || die "sbt, see $dir/sbt.log"
-        verilog=$repo/out/rtl/PonBoard.v ;;
+        verilog=$repo/out/rtl/PonBoard.v
+        sources=$(cat "$repo/out/rtl/PonBoard.sources") ;; # black box RTL (taxi)
     *) die "unknown top $top" ;;
 esac
 # DE25-Standard user manual, HSMC GTS table (P pins; N follows)
@@ -27,7 +28,9 @@ pins="pon_refclk:AT120 eth_refclk:AP120 ben_tx_p:AU129 onu_tx_p:AR129 eth_tx_p:A
 # HSMC card IO (common/pcb/gen/boards.py HSMC_IO -> hsmcpins.de25_name -> manual HSMC_D table), 3.3 V by JP5
 io_pins="sfp_txDisable:F34 sfp_txFault:H37 sfp_los:Y34 sfp_modAbs:Y15 sfp_scl:AL32 sfp_sda:AK21 sfp_rs0:AL29
          sfp_rs1:AJ1 onuPins_laserDisable:AG36 onuPins_rxSd:Y24 onuPins_scl:AB24 onuPins_sda:T8 vcxoPwm:AG21
-         onuPins_burstCut:T18 onuPins_benIo:AJ2"
+         onuPins_burstCut:T18 onuPins_benIo:AJ2
+         ethSfp_txDisable:AK25 ethSfp_txFault:Y8 ethSfp_los:AG13 ethSfp_modAbs:AB4 ethSfp_scl:AH4 ethSfp_sda:AD2
+         ethSfp_rs0:T15 ethSfp_rs1:Y4"
 clock_pins="clock_50:D8" # board oscillator, 3.3 V; HVIO: to the helper PLL over a global clock
 cd "$dir"
 {
@@ -35,6 +38,7 @@ cd "$dir"
     echo 'set_global_assignment -name DEVICE A5ED013BB32AE4SCS'
     echo "set_global_assignment -name TOP_LEVEL_ENTITY $top"
     echo "set_global_assignment -name SYSTEMVERILOG_FILE $verilog"
+    for f in ${sources:-}; do echo "set_global_assignment -name SYSTEMVERILOG_FILE $f"; done
     for ip in srcss olt onu ben_tx eth pon_clocks helper_pll; do echo "set_global_assignment -name IP_FILE ip/$ip.ip"; done # divider after its source
     echo 'set_global_assignment -name SDC_FILE fit.sdc' # after the IP constraints: their clocks exist
     ports=$(awk "/^module $top \\(/,/\\);/" "$verilog" | sed -n -E 's/^\s*(input|output|inout)\s+wire\s+(\[[^]]+\]\s+)?([A-Za-z0-9_]+).*/\3:\2/p')
@@ -67,6 +71,11 @@ cd "$dir"
     echo 'if {[get_collection_size [get_ports -nowarn clk]] > 0} {'
     echo '  create_clock -name clk -period 10 [get_ports clk]' # HPS management clock, 100 MHz
     echo '  set_clock_groups -asynchronous -group clk -group [remove_from_collection [all_clocks] [get_clocks clk]]'
+    echo '}'
+    echo 'set eth_tx [get_clocks -nowarn {*eth*tx_clkout*}]' # Ethernet lane: tx and rx clocks unrelated (taxi, queues CDC)
+    echo 'set eth_rx [get_clocks -nowarn {*eth*rx_clkout*}]'
+    echo 'if {[get_collection_size $eth_tx] > 0 && [get_collection_size $eth_rx] > 0} {'
+    echo '  set_clock_groups -asynchronous -group $eth_tx -group $eth_rx'
     echo '}'
     echo 'set_false_path -to [get_keepers -nowarn {*buffercc*|buffers_0* *bufferCC*|buffers_0*}]' # Spinal synchronizers
     echo 'derive_clock_uncertainty'

@@ -10,7 +10,7 @@ import spinal.lib.bus.regif._
 import spinal.lib.io.TriState
 import BoardFields._
 
-/** OLT SFP cage pins. RS0/RS1 (pins 7, 9) stay hi-Z until software knows the module. */
+/** SFP cage pins. RS0/RS1 (pins 7, 9) stay hi-Z until software knows the module. */
 case class SfpPins() extends Bundle with IMasterSlave {
   val txDisable = Bool()
   val modAbs, los, txFault = Bool()
@@ -37,24 +37,7 @@ case class OltBoardRegs() extends Component {
   BoardFields.lane(busif, "OLT", io.lane)
   io.alive := synced(io.lane.txReady) && !io.lane.txReset
 
-  val SFP_CTRL = busif.newReg("OLT SFP cage")
-  io.sfp.txDisable := SFP_CTRL.field(Bool(), AccessType.RW, 1, "TX_DIS, also forced while not alive")(SymbolName("txDisable")) || !io.alive
-  def rsPin(pin: TriState[Bool], name: String): Unit = {
-    val mode = SFP_CTRL.field(UInt(2 bits), AccessType.RW, 0, s"$name: 0 hi-Z, 1 low, 2 high, 3 burst reset")(SymbolName(name))
-    pin.writeEnable := mode =/= 0
-    pin.write := (mode === 3) ? io.burstReset | mode(1)
-  }
-  rsPin(io.sfp.rs0, "rs0")
-  rsPin(io.sfp.rs1, "rs1")
-  openDrain(SFP_CTRL, io.sfp.scl, "sclLow")
-  openDrain(SFP_CTRL, io.sfp.sda, "sdaLow")
-
-  val STATUS = busif.newReg("OLT SFP cage pins, alive: the PON clocks run and the MAC registers answer")
-  val pins = Seq("modAbs" -> synced(io.sfp.modAbs), "los" -> synced(io.sfp.los), "txFault" -> synced(io.sfp.txFault),
-    "alive" -> io.alive)
-  for ((name, pin) <- pins :+ ("scl" -> synced(io.sfp.scl.read)) :+ ("sda" -> synced(io.sfp.sda.read)))
-    STATUS.field(Bool(), AccessType.RO, 0, name)(SymbolName(name)) := pin
-  io.irq := events(busif, pins)
+  io.irq := events(busif, sfpCage(busif, "OLT", io.sfp, io.alive, io.burstReset, "the PON clocks run and the MAC registers answer"))
   val REFCLK = busif.newReg("GTS reference clocks")
   REFCLK.field(Bits(8 bits), AccessType.RO, 0, "fail: per reference clock")(SymbolName("fail")) := BufferCC(io.refclkFail, B(0, 8 bits))
 

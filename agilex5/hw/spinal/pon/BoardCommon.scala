@@ -36,6 +36,26 @@ object BoardFields {
       status.field(Bool(), AccessType.RO, 0, name)(SymbolName(name)) := synced(pin)
   }
 
+  /** SFP_CTRL and STATUS of an SFP cage (TX_DIS forced while not alive); the status pins, for events. */
+  def sfpCage(busif: BusIf, cage: String, sfp: SfpPins, alive: Bool, burstReset: Bool, aliveDoc: String): Seq[(String, Bool)] = {
+    val SFP_CTRL = busif.newReg(s"$cage SFP cage")
+    sfp.txDisable := SFP_CTRL.field(Bool(), AccessType.RW, 1, "TX_DIS, also forced while not alive")(SymbolName("txDisable")) || !alive
+    def rsPin(pin: TriState[Bool], name: String): Unit = {
+      val mode = SFP_CTRL.field(UInt(2 bits), AccessType.RW, 0, s"$name: 0 hi-Z, 1 low, 2 high, 3 burst reset")(SymbolName(name))
+      pin.writeEnable := mode =/= 0
+      pin.write := (mode === 3) ? burstReset | mode(1)
+    }
+    rsPin(sfp.rs0, "rs0")
+    rsPin(sfp.rs1, "rs1")
+    openDrain(SFP_CTRL, sfp.scl, "sclLow")
+    openDrain(SFP_CTRL, sfp.sda, "sdaLow")
+    val STATUS = busif.newReg(s"$cage SFP cage pins, alive: $aliveDoc")
+    val pins = Seq("modAbs" -> synced(sfp.modAbs), "los" -> synced(sfp.los), "txFault" -> synced(sfp.txFault), "alive" -> alive)
+    for ((name, pin) <- pins :+ ("scl" -> synced(sfp.scl.read)) :+ ("sda" -> synced(sfp.sda.read)))
+      STATUS.field(Bool(), AccessType.RO, 0, name)(SymbolName(name)) := pin
+    pins
+  }
+
   def openDrain(reg: RegInst, pin: TriState[Bool], name: String): Unit = {
     pin.writeEnable := reg.field(Bool(), AccessType.RW, 0, s"$name: pull the open-drain line low")(SymbolName(name))
     pin.write := False
