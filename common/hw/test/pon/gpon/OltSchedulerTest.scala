@@ -41,6 +41,7 @@ case class OltUsLoop(maxOnus: Int, maxTconts: Int = 8) extends Component {
   io.event << scheduler.io.event
   scheduler.io.release << io.release
   scheduler.io.tcontWrite << io.tcontWrite
+  scheduler.io.clearErrors := False
   io.scheduleError := scheduler.io.scheduleError
   io.tableError := scheduler.io.tableError
   receiver.io.grant << scheduler.io.grant
@@ -65,6 +66,9 @@ class OltActivation(maxFrames: Int) {
   val grantBytes = 63 // PLOAMu (13) + ten idle GEM frames
   val gapBytes = 20
   val preUnits = 5
+  val requestStart = 20
+  val quietBefore = 2 // ranged bursts of frames F-2, F-1 land inside the request window of frame F
+  val snPeriod = 2
   val upstreamOverhead = Seq(32, 0, 0, 0xAA, 0xAB, 0x59, 0x83, 0x20 /* e: pre-assigned delay */ , 0, preUnits)
   val line = new UsLine((maxFrames + 4) * usFrameBytes)
 
@@ -82,10 +86,10 @@ class OltActivation(maxFrames: Int) {
     config.teqd #= teqd
     config.rtdMin #= rtdMin
     config.reach #= reach
-    config.requestStart #= 20
-    config.quietBefore #= 2 // ranged bursts of frames F-2, F-1 land inside the request window of frame F
+    config.requestStart #= requestStart
+    config.quietBefore #= quietBefore
     config.quietAfter #= 0
-    config.snPeriod #= 2
+    config.snPeriod #= snPeriod
     config.grantBytes #= grantBytes
     config.gapBytes #= gapBytes
     config.tconts #= 0
@@ -104,14 +108,17 @@ class OltActivation(maxFrames: Int) {
   var frames = 0
 
   /** Upstream clock domain observations. */
+  def onEvent(kind: String, onuId: Int, sn: BigInt, eqd: Long): Unit = {
+    events += ((kind, onuId, sn, eqd))
+    if (kind == "RANGING_FAILED") cpuQueue += disable(sn)
+  }
+  def onBurst(burst: Flow[UsBurst]): Unit = if (burst.valid.toBoolean)
+    bursts += ((burst.found.toBoolean, burst.allocId.toInt, burst.onuId.toInt, burst.delayBits.toLong))
   def sample(event: Flow[OltEvent], cpuUsPloam: Flow[Bits], burst: Flow[UsBurst]): Unit = {
-    if (event.valid.toBoolean) {
-      events += ((event.kind.toEnum.getName(), event.onuId.toInt, event.sn.toBigInt, event.eqd.toLong))
-      if (events.last._1 == "RANGING_FAILED") cpuQueue += disable(events.last._3)
-    }
+    if (event.valid.toBoolean)
+      onEvent(event.kind.toEnum.getName(), event.onuId.toInt, event.sn.toBigInt, event.eqd.toLong)
     if (cpuUsPloam.valid.toBoolean) cpuUs += cpuUsPloam.payload.toBigInt
-    if (burst.valid.toBoolean)
-      bursts += ((burst.found.toBoolean, burst.allocId.toInt, burst.onuId.toInt, burst.delayBits.toLong))
+    onBurst(burst)
   }
 
   /** A downstream frame starting at upstream time `t` as the ONUs see it. */

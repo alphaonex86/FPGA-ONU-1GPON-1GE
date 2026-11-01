@@ -96,6 +96,7 @@ case class OltScheduler(maxOnus: Int = 32, maxTconts: Int = 64) extends Componen
     val release = slave Flow (UInt(8 bits)) // the CPU frees an ONU-ID (deactivated ONU)
     val scheduleError = out Bool ()          // sticky: grants did not fit a frame, or a build overran it
     val tableError = out Bool ()             // sticky: T-CONT table not sorted by ONU-ID, entries skipped
+    val clearErrors = in Bool ()
   }
   def maxAllocs = maxOnus + maxTconts
   val idBits = log2Up(maxOnus)
@@ -150,6 +151,7 @@ case class OltScheduler(maxOnus: Int = 32, maxTconts: Int = 64) extends Componen
   io.scheduleError := scheduleError
   val tableError = RegInit(False)
   io.tableError := tableError
+  when(io.clearErrors) { scheduleError := False; tableError := False }
 
   // T-CONT table and demand (bytes); a CPU write or a DBRu report takes the demand port, the builder waits
   val tcontTable = Mem(Tcont(), maxTconts)

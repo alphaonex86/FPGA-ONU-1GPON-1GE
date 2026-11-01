@@ -3,6 +3,7 @@ package pon.gpon
 
 import spinal.core._
 import spinal.lib._
+import spinal.lib.bus.amba3.apb._
 
 /** GPON OLT MAC: downstream framer in the default clock domain (311.04 MHz, one line byte per clock), activation
   * scheduler and upstream burst receiver in the upstream domain (usClk: 155.52 MHz, the downstream clock divided by
@@ -19,18 +20,10 @@ case class OltMac(maxOnus: Int = 32, maxTconts: Int = 64) extends Component {
     // upstream domain
     val usLine = in Bits (8 bits) // raw upstream bytes, any bit alignment
     val time = out UInt (24 bits) // upstream byte time of usLine
-    val config = in(OltConfig())
-    val cpuPloam = slave Stream (Bits(96 bits))
-    val cpuUsPloam = master Flow (Bits(96 bits))
-    val event = master Flow (OltEvent())
-    val release = slave Flow (UInt(8 bits))
-    val tcontWrite = slave Flow (TcontWrite(maxTconts))
-    val scheduleError = out Bool ()
-    val tableError = out Bool ()
+    val apb = slave(Apb3(Apb3Config(addressWidth = 8, dataWidth = 32))) // OltRegs
+    val irq = out Bool ()
     val dbru = master Flow (UsDbru())
     val usGem = master Flow (Fragment(UsGemByte()))
-    val hecErrors = out UInt (32 bits)
-    val gemCuts = out UInt (32 bits)
   }
   val usDomain = ClockDomain(io.usClk, io.usReset, config = ClockDomain.current.config)
   usDomain.setSynchronousWith(ClockDomain.current)
@@ -49,15 +42,19 @@ case class OltMac(maxOnus: Int = 32, maxTconts: Int = 64) extends Component {
 
     val scheduler = OltScheduler(maxOnus, maxTconts)
     val receiver = GtcUsDeframer()
-    scheduler.io.config := io.config
+    val regs = OltRegs(maxTconts)
+    regs.io.apb <> io.apb
+    io.irq := regs.io.irq
+    scheduler.io.config := regs.io.config
     scheduler.io.time := time
-    scheduler.io.cpuPloam << io.cpuPloam
-    io.cpuUsPloam << scheduler.io.cpuUsPloam
-    io.event << scheduler.io.event
-    scheduler.io.release << io.release
-    scheduler.io.tcontWrite << io.tcontWrite
-    io.scheduleError := scheduler.io.scheduleError
-    io.tableError := scheduler.io.tableError
+    scheduler.io.cpuPloam << regs.io.cpuPloam
+    regs.io.cpuUsPloam << scheduler.io.cpuUsPloam
+    regs.io.event << scheduler.io.event
+    scheduler.io.release << regs.io.release
+    scheduler.io.tcontWrite << regs.io.tcontWrite
+    regs.io.scheduleError := scheduler.io.scheduleError
+    regs.io.tableError := scheduler.io.tableError
+    scheduler.io.clearErrors := regs.io.clearErrors
     receiver.io.grant << scheduler.io.grant
     receiver.io.line := io.usLine
     receiver.io.time := time
@@ -70,8 +67,8 @@ case class OltMac(maxOnus: Int = 32, maxTconts: Int = 64) extends Component {
     val bwmapCommit = scheduler.io.bwmapCommit.stage()
     io.dbru << receiver.io.dbru
     io.usGem << receiver.io.gem
-    io.hecErrors := receiver.io.hecErrors
-    io.gemCuts := receiver.io.gemCuts
+    regs.io.hecErrors := receiver.io.hecErrors
+    regs.io.gemCuts := receiver.io.gemCuts
   }
 
   // upstream -> downstream: a Flow is taken once, in the first downstream clock after the upstream edge
