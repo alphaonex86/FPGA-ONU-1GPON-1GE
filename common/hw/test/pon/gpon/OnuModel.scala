@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CERN-OHL-S-2.0
 package pon.gpon
 
+import scala.collection.mutable
 import GponCodes._
 import GtcDsTest.{bigToBytes, bytesToBig}
 
@@ -15,7 +16,9 @@ class UsLine(totalBytes: Int) {
 case class Alloc(allocId: Int, flags: Int, start: Int, stop: Int)
 
 /** ONU activation (G.984.3 states O2-O5, O7): answers SN and ranging requests, then sends its PLOAMu on each grant.
-  * `rtdBits` is its whole round trip, response time included. Test only. */
+  * Once active, `queues` (T-CONT Alloc-ID -> bytes waiting) are served on their grants with mode 0 DBRu reports
+  * (taken before the grant is served); contiguous allocations form one burst. `rtdBits` is its whole round trip,
+  * response time included. Test only. */
 class OnuModel(line: UsLine, val name: String, val sn: BigInt, val rtdBits: Int, seed: Int, mute: Boolean = false,
                gasp: Boolean = false) {
   var state = 2 // O2 standby: downstream in sync
@@ -26,20 +29,25 @@ class OnuModel(line: UsLine, val name: String, val sn: BigInt, val rtdBits: Int,
   var gaspPending = gasp
   var deactivated = 0
   val rnd = new scala.util.Random(seed)
+  val queues = mutable.Map[Int, Int]()
+  val sent = mutable.Map[Int, Long]().withDefaultValue(0L)
 
   /** One downstream frame starting at upstream byte time `t`: its BWmap and PLOAM; `now` is the line time. */
   def frame(t: Int, bwmap: Seq[Alloc], ploam: Option[Seq[Int]], now: Int): Unit = {
+    val snMsg = (r: Int) => Seq(onuId, 0x01) ++ bigToBytes(sn, 8) ++ Seq(r >> 4, ((r & 0xF) << 4) | 0x04)
     for (a <- bwmap) {
-      val snMsg = (r: Int) => Seq(onuId, 0x01) ++ bigToBytes(sn, 8) ++ Seq(r >> 4, ((r & 0xF) << 4) | 0x04)
       if (state == 3 && a.allocId == 254) {
         val r = rnd.nextInt(234)
-        burst(t, a, preBits + r * 256, snMsg(r), now)
-      } else if (state == 4 && a.allocId == onuId && !mute) burst(t, a, preBits, snMsg(0), now)
-      else if (state == 5 && a.allocId == onuId) {
-        val msg = Seq(onuId, if (gaspPending) 0x03 else 0x04) ++ Seq.fill(10)(0)
-        gaspPending = false
-        burst(t, a, eqd.toInt, msg, now)
+        burst(t, Seq(a), preBits + r * 256, _ => withCrc(snMsg(r)), now)
+      } else if (state == 4 && a.allocId == onuId && !mute) burst(t, Seq(a), preBits, _ => withCrc(snMsg(0)), now)
+    }
+    if (state == 5) {
+      val mine = bwmap.filter(a => a.allocId == onuId || queues.contains(a.allocId))
+      val runs = mine.foldLeft(List[List[Alloc]]()) {
+        case (run :: done, a) if a.start == run.head.stop + 1 => (a :: run) :: done
+        case (done, a) => List(a) :: done
       }
+      for (run <- runs.reverse) burst(t, run.reverse, eqd.toInt, serve, now)
     }
     for (m <- ploam) (m(1), m(0)) match {
       case (0x01, 0xFF) if state == 2 =>
@@ -53,16 +61,51 @@ class OnuModel(line: UsLine, val name: String, val sn: BigInt, val rtdBits: Int,
     }
   }
 
-  /** PLOu, PLOAMu, then idle GEM frames to the end of the allocation, `delay` bits after its nominal place. */
-  def burst(t: Int, a: Alloc, delay: Int, ploam: Seq[Int], now: Int): Unit = {
-    val content = ploam :+ Model.crc8(ploam)
-    val fill = (a.stop - a.start + 1 - content.length) / 5
-    val clear = Seq(bip, onuId, 0) ++ content ++ Seq.fill(fill)(bigToBytes(gemMask, 5)).flatten
-    val bipFirst = (t + a.start - 3) * 8 + rtdBits + delay
+  def withCrc(field: Seq[Int]): Seq[Int] = field :+ Model.crc8(field)
+
+  /** An active ONU's allocation: PLOAMu, DBRu, then its queue's bytes as payload (idle GEM frames here). */
+  def serve(a: Alloc): Seq[Int] = {
+    val ploamU = if ((a.flags & 0x400) == 0) Nil else {
+      val msg = Seq(onuId, if (gaspPending) 0x03 else 0x04) ++ Seq.fill(10)(0)
+      gaspPending = false
+      withCrc(msg)
+    }
+    val queue = queues.getOrElse(a.allocId, 0)
+    val dbru = if ((a.flags & 0x180) == 0x080) withCrc(Seq(OnuModel.dbruCode((queue + 47) / 48))) else Nil
+    val room = a.stop - a.start + 1 - ploamU.length - dbru.length
+    if (queues.contains(a.allocId)) {
+      val n = queue min room
+      queues(a.allocId) = queue - n
+      sent(a.allocId) += n
+    }
+    ploamU ++ dbru ++ Seq.fill(room / 5)(bigToBytes(gemMask, 5)).flatten ++ Seq.fill(room % 5)(0)
+  }
+
+  /** PLOu then the allocations' contents, `delay` bits after the nominal place of the first. */
+  def burst(t: Int, allocs: Seq[Alloc], delay: Int, content: Alloc => Seq[Int], now: Int): Unit = {
+    val clear = Seq(bip, onuId, 0) ++ allocs.flatMap(content)
+    val bipFirst = (t + allocs.head.start - 3) * 8 + rtdBits + delay
     if (bipFirst - 11 * 8 <= now * 8) throw new Exception(s"FAIL: $name: burst placed in the past")
     line.put(bipFirst - 11 * 8, Seq.fill(8)(0xAA))
     line.put(bipFirst - 3 * 8, bigToBytes(usDelimiter, 3))
     line.put(bipFirst, clear.zip(Model.keystream(clear.length)).map { case (c, k) => c ^ k })
     bip = clear.drop(1).reduce(_ ^ _)
+  }
+}
+
+object OnuModel {
+  /** Reporting blocks to a mode 0 DBRu code (G.984.3 Table 8-1, ONU side). */
+  def dbruCode(blocks: Int): Int =
+    if (blocks < 128) blocks
+    else if (blocks > 8191) 0xFE
+    else {
+      val n = 32 - Integer.numberOfLeadingZeros(blocks) - 7 // leading ones of the code
+      ((0xFF << (8 - n)) & 0xFF) | ((blocks >> (2 * n - 1)) & ((1 << (7 - n)) - 1))
+    }
+
+  /** Code to blocks as the OLT reads it (Table 8-1, OLT side). */
+  def dbruBlocks(code: Int): Int = {
+    val n = (7 to 0 by -1).takeWhile(k => (code >> k & 1) == 1).length
+    if (n == 0) code else ((1 << (6 + n)) | ((code & ((1 << (7 - n)) - 1)) << (2 * n - 1)) | ((1 << (2 * n - 1)) - 1))
   }
 }

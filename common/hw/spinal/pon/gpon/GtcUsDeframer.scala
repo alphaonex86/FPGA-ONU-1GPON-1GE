@@ -9,6 +9,7 @@ case class UsGrant() extends Bundle {
   val alloc = Allocation()
   val time = UInt(24 bits)   // OLT byte time of alloc.start
   val window = UInt(16 bits) // delimiter search, +- bytes around its expected place (wide when ranging)
+  val tag = UInt(8 bits)     // scheduler bookkeeping (T-CONT entry), returned with its DBRu
   def bytes: UInt = alloc.stop - alloc.start + 1
 }
 
@@ -24,6 +25,7 @@ case class UsBurst() extends Bundle {
 
 case class UsDbru() extends Bundle {
   val allocId = UInt(12 bits)
+  val tag = UInt(8 bits)
   val report = Bits(16 bits) // mode 0: 8-bit report in the low byte
   val crcOk = Bool()
 }
@@ -127,6 +129,7 @@ case class GtcUsDeframer() extends Component {
   val dbru = Flow(UsDbru())
   dbru.valid := False
   dbru.allocId := cur.alloc.allocId
+  dbru.tag := cur.tag
   dbru.report := dbruMode1 ? field(15 downto 0) | (B(0, 8 bits) ## field(7 downto 0))
   dbru.crcOk := crcOk
   io.dbru << dbru.stage()

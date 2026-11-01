@@ -32,6 +32,8 @@ case class OltMacLoop(maxOnus: Int) extends Component {
   mac.io.gem.payload.assignDontCare()
   mac.io.release.valid := False
   mac.io.release.payload := 0
+  mac.io.tcontWrite.valid := False
+  mac.io.tcontWrite.payload.assignDontCare()
   mac.io.usLine := io.usLine
   io.time := mac.io.time
   mac.io.config := io.config

@@ -9,8 +9,8 @@ import GponCodes._
 import GtcDsTest.{check, bigToBytes, bytesToBig}
 
 /** Scheduler -> (BWmap, PLOAM to the ONU models; their bursts on the line) -> upstream receiver -> scheduler. Test only. */
-case class OltUsLoop(maxOnus: Int) extends Component {
-  val scheduler = OltScheduler(maxOnus)
+case class OltUsLoop(maxOnus: Int, maxTconts: Int = 8) extends Component {
+  val scheduler = OltScheduler(maxOnus, maxTconts)
   val receiver = GtcUsDeframer()
   val io = new Bundle {
     val config = in(OltConfig())
@@ -24,8 +24,11 @@ case class OltUsLoop(maxOnus: Int) extends Component {
     val cpuUsPloam = master(cloneOf(scheduler.io.cpuUsPloam))
     val event = master(cloneOf(scheduler.io.event))
     val release = slave(cloneOf(scheduler.io.release))
+    val tcontWrite = slave(cloneOf(scheduler.io.tcontWrite))
     val scheduleError = out Bool ()
+    val tableError = out Bool ()
     val burst = master(cloneOf(receiver.io.burst))
+    val dbru = master(cloneOf(receiver.io.dbru))
   }
   scheduler.io.config := io.config
   scheduler.io.time := io.time
@@ -37,7 +40,9 @@ case class OltUsLoop(maxOnus: Int) extends Component {
   io.cpuUsPloam << scheduler.io.cpuUsPloam
   io.event << scheduler.io.event
   scheduler.io.release << io.release
+  scheduler.io.tcontWrite << io.tcontWrite
   io.scheduleError := scheduler.io.scheduleError
+  io.tableError := scheduler.io.tableError
   receiver.io.grant << scheduler.io.grant
   receiver.io.line := io.line
   receiver.io.time := io.time
@@ -45,7 +50,9 @@ case class OltUsLoop(maxOnus: Int) extends Component {
   receiver.io.delimiterErrors := 1
   scheduler.io.burst := receiver.io.burst
   scheduler.io.usPloam := receiver.io.ploam
+  scheduler.io.dbru := receiver.io.dbru
   io.burst := receiver.io.burst
+  io.dbru := receiver.io.dbru
 }
 
 /** Activation of four ONUs at different distances (one never answers ranging), then static grants; the CPU sends an
@@ -81,6 +88,8 @@ class OltActivation(maxFrames: Int) {
     config.snPeriod #= 2
     config.grantBytes #= grantBytes
     config.gapBytes #= gapBytes
+    config.tconts #= 0
+    config.blockBytes #= 48
   }
 
   val cpuPloam = BigInt("FF0A", 16) << 80
@@ -158,6 +167,7 @@ object OltSchedulerTest extends App {
     io.frameStart #= false
     io.ploam.ready #= false
     io.release.valid #= false
+    io.tcontWrite.valid #= false
     io.time #= 0
     io.line #= 0
 

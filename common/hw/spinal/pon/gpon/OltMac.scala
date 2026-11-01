@@ -8,7 +8,7 @@ import spinal.lib._
   * scheduler and upstream burst receiver in the upstream domain (usClk: 155.52 MHz, the downstream clock divided by
   * two, same source and phase). The 2:1 crossings need no FIFO: an upstream register holds for two downstream
   * clocks, a downstream pulse held two clocks is seen by exactly one upstream edge. */
-case class OltMac(maxOnus: Int = 32) extends Component {
+case class OltMac(maxOnus: Int = 32, maxTconts: Int = 64) extends Component {
   val io = new Bundle {
     val usClk = in Bool ()
     val usReset = in Bool ()
@@ -24,7 +24,9 @@ case class OltMac(maxOnus: Int = 32) extends Component {
     val cpuUsPloam = master Flow (Bits(96 bits))
     val event = master Flow (OltEvent())
     val release = slave Flow (UInt(8 bits))
+    val tcontWrite = slave Flow (TcontWrite(maxTconts))
     val scheduleError = out Bool ()
+    val tableError = out Bool ()
     val dbru = master Flow (UsDbru())
     val usGem = master Flow (Fragment(UsGemByte()))
     val hecErrors = out UInt (32 bits)
@@ -33,7 +35,7 @@ case class OltMac(maxOnus: Int = 32) extends Component {
   val usDomain = ClockDomain(io.usClk, io.usReset, config = ClockDomain.current.config)
   usDomain.setSynchronousWith(ClockDomain.current)
 
-  val framer = GtcDsFramer(maxOnus)
+  val framer = GtcDsFramer(maxOnus + maxTconts)
   io.dsLine := framer.io.line
   framer.io.gem << io.gem
   io.gemError := framer.io.gemError
@@ -45,7 +47,7 @@ case class OltMac(maxOnus: Int = 32) extends Component {
     val phase = Reg(Bool()) init (False) // toggles each upstream clock: tells the downstream domain its first half
     phase := !phase
 
-    val scheduler = OltScheduler(maxOnus)
+    val scheduler = OltScheduler(maxOnus, maxTconts)
     val receiver = GtcUsDeframer()
     scheduler.io.config := io.config
     scheduler.io.time := time
@@ -53,7 +55,9 @@ case class OltMac(maxOnus: Int = 32) extends Component {
     io.cpuUsPloam << scheduler.io.cpuUsPloam
     io.event << scheduler.io.event
     scheduler.io.release << io.release
+    scheduler.io.tcontWrite << io.tcontWrite
     io.scheduleError := scheduler.io.scheduleError
+    io.tableError := scheduler.io.tableError
     receiver.io.grant << scheduler.io.grant
     receiver.io.line := io.usLine
     receiver.io.time := time
@@ -61,6 +65,9 @@ case class OltMac(maxOnus: Int = 32) extends Component {
     receiver.io.delimiterErrors := 1
     scheduler.io.burst := receiver.io.burst
     scheduler.io.usPloam := receiver.io.ploam
+    scheduler.io.dbru := receiver.io.dbru
+    val bwmapWrite = scheduler.io.bwmapWrite.stage() // registered before the crossing
+    val bwmapCommit = scheduler.io.bwmapCommit.stage()
     io.dbru << receiver.io.dbru
     io.usGem << receiver.io.gem
     io.hecErrors := receiver.io.hecErrors
@@ -70,10 +77,10 @@ case class OltMac(maxOnus: Int = 32) extends Component {
   // upstream -> downstream: a Flow is taken once, in the first downstream clock after the upstream edge
   val phaseSeen = RegNext(us.phase) init (False)
   val firstHalf = phaseSeen =/= RegNext(phaseSeen).init(False)
-  framer.io.bwmapWrite.valid := us.scheduler.io.bwmapWrite.valid && firstHalf
-  framer.io.bwmapWrite.payload := us.scheduler.io.bwmapWrite.payload
-  framer.io.bwmapCommit.valid := us.scheduler.io.bwmapCommit.valid && firstHalf
-  framer.io.bwmapCommit.payload := us.scheduler.io.bwmapCommit.payload
+  framer.io.bwmapWrite.valid := us.bwmapWrite.valid && firstHalf
+  framer.io.bwmapWrite.payload := us.bwmapWrite.payload
+  framer.io.bwmapCommit.valid := us.bwmapCommit.valid && firstHalf
+  framer.io.bwmapCommit.payload := us.bwmapCommit.payload
   framer.io.ploam.valid := us.scheduler.io.ploam.valid
   framer.io.ploam.payload := us.scheduler.io.ploam.payload
   // downstream -> upstream: one-clock pulses held for two clocks
