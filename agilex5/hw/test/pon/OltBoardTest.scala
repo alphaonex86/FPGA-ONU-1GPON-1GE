@@ -32,45 +32,9 @@ object OltBoardTest extends App {
            io.sfp.scl.read, io.sfp.sda.read)) b #= false
     io.rxWord #= 0
     io.refclkFail #= 0
-    val axi = io.axi
-    axi.aw.valid #= false
-    axi.w.valid #= false
-    axi.ar.valid #= false
-    axi.b.ready #= true
-    axi.r.ready #= true
+    val hps = new HpsAxi(io.axi, mgmt)
+    import hps._
     mgmt.waitSampling(20)
-
-    def write(address: Int, data: Long): Int = {
-      axi.aw.addr #= address
-      axi.aw.id #= 1
-      axi.aw.len #= 0
-      axi.aw.size #= 2
-      axi.aw.valid #= true
-      axi.w.data #= data
-      axi.w.strb #= 0xF
-      axi.w.last #= true
-      axi.w.valid #= true
-      var (awDone, wDone) = (false, false)
-      while (!(awDone && wDone)) {
-        mgmt.waitSampling()
-        if (axi.aw.valid.toBoolean && axi.aw.ready.toBoolean) { awDone = true; axi.aw.valid #= false }
-        if (axi.w.valid.toBoolean && axi.w.ready.toBoolean) { wDone = true; axi.w.valid #= false }
-      }
-      mgmt.waitSamplingWhere(1000)(axi.b.valid.toBoolean)
-      axi.b.resp.toInt
-    }
-    def read(address: Int): (Long, Int) = {
-      axi.ar.addr #= address
-      axi.ar.id #= 2
-      axi.ar.len #= 0
-      axi.ar.size #= 2
-      axi.ar.valid #= true
-      mgmt.waitSamplingWhere(1000)(axi.ar.ready.toBoolean)
-      axi.ar.valid #= false
-      mgmt.waitSamplingWhere(1000)(axi.r.valid.toBoolean)
-      (axi.r.data.toLong, axi.r.resp.toInt)
-    }
-    val SLVERR = 2
 
     check(read(UO_0)._2 == SLVERR, "MAC register while the lane is down: error answer, no hang")
     check(read(GEMQ_STATUS)._2 == SLVERR && read(0x300)._2 == SLVERR, "GEM queues while down, unmapped 0x300: errors")

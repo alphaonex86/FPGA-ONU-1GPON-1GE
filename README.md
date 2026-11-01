@@ -55,13 +55,16 @@ simulated fibre (ranging, DBA, fibre cut and POPUP, Disable_Serial_Number),
 meets timing on the DE25-Standard FPGA.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
-OLT board top (`agilex5/hw/spinal/pon/OltBoard.scala`): OLT MAC on its GTS lane
+Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane
 (2x oversampled upstream), HPS lightweight bridge to the MAC and board registers
-(GTS reset/status, SFP cage pins, module I2C; `board_regs.h`) and GEM CPU
+(GTS reset/status, SFP cage pins, module I2C; `olt_board_regs.h`, `onu_board_regs.h`) and GEM CPU
 queues for OMCI (whole packets downstream, upstream fragments with descriptors;
-`gem_queues.h`), checked in
-simulation and fit with timing met on the DE25-Standard FPGA
-(`agilex5/gts/fit.sh out/olt_board OltBoard`).
+`gem_queues.h`). ONU side: ONU MAC on the BOSA data and burst enable lanes, its
+clock kept on the recovered downstream clock by a VCXO loop (phase detector +
+PI + sigma-delta), optics pins with the laser held off until both lanes are up.
+Both sides checked in simulation, fit together on the DE25-Standard with the
+HSMC card pins placed: 7.4K ALMs, setup slack +0.006 ns
+(`agilex5/gts/fit.sh out/pon_board PonBoard`).
 
 ## License
 

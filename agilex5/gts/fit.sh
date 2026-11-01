@@ -1,8 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 # Fit a top on the DE25-Standard GTS pins with the variants of gen_ip.sh (DIR/ip), then print the worst setup and hold
-# slack over the timing corners (fails if negative). TOP: hsmc_lanes (lane check, default) or OltBoard (Spinal, needs
-# sbt or SBT=path). Every other port but clk is virtual: HSMC IO and HPS bridge pins are not placed yet.
+# slack over the timing corners (fails if negative). TOP: hsmc_lanes (lane check, default) or PonBoard (Spinal, needs
+# sbt or SBT=path). Every other port but clk is virtual: the HPS side (bridges, interrupts) is not placed yet.
 # Usage: fit.sh DIR [TOP]
 set -euo pipefail
 QUARTUS=${QUARTUS:-$HOME/altera_pro/26.1.1/quartus/bin}
@@ -16,14 +16,18 @@ dir=$(cd "$1" && pwd)
 [ "$dir/ip/eth.ip" -nt "$src/gen_ip.sh" ] || "$src/gen_ip.sh" "$dir/ip" # variants older than their script: regenerated
 case $top in
     hsmc_lanes) verilog=$src/hsmc_lanes.sv ;;
-    OltBoard)
-        (cd "$repo" && "${SBT:-sbt}" -batch "runMain pon.OltBoardVerilog") > "$dir/sbt.log" 2>&1 || die "sbt, see $dir/sbt.log"
-        verilog=$repo/out/rtl/OltBoard.v ;;
+    PonBoard)
+        (cd "$repo" && "${SBT:-sbt}" -batch "runMain pon.PonBoardVerilog") > "$dir/sbt.log" 2>&1 || die "sbt, see $dir/sbt.log"
+        verilog=$repo/out/rtl/PonBoard.v ;;
     *) die "unknown top $top" ;;
 esac
 # DE25-Standard user manual, HSMC GTS table (P pins; N follows)
 pins="pon_refclk:AT120 eth_refclk:AP120 ben_tx_p:AU129 onu_tx_p:AR129 eth_tx_p:AN129 olt_tx_p:AL129
       onu_rx_p:AP135 eth_rx_p:AM135 olt_rx_p:AK135"
+# HSMC card IO (common/pcb/gen/boards.py HSMC_IO -> hsmcpins.de25_name -> manual HSMC_D table), 3.3 V by JP5
+io_pins="sfp_txDisable:F34 sfp_txFault:H37 sfp_los:Y34 sfp_modAbs:Y15 sfp_scl:AL32 sfp_sda:AK21 sfp_rs0:AL29
+         sfp_rs1:AJ1 onuPins_laserDisable:AG36 onuPins_rxSd:Y24 onuPins_scl:AB24 onuPins_sda:T8 vcxoPwm:AG21
+         onuPins_burstCut:T18 onuPins_benIo:AJ2"
 cd "$dir"
 {
     echo 'set_global_assignment -name FAMILY "Agilex 5"'
@@ -32,12 +36,16 @@ cd "$dir"
     echo "set_global_assignment -name SYSTEMVERILOG_FILE $verilog"
     for ip in srcss olt onu ben_tx eth pon_clocks; do echo "set_global_assignment -name IP_FILE ip/$ip.ip"; done # divider after its source
     echo 'set_global_assignment -name SDC_FILE fit.sdc' # after the IP constraints: their clocks exist
-    ports=$(awk "/^module $top \\(/,/\\);/" "$verilog" | sed -n -E 's/^\s*(input|output)\s+wire\s+(\[[^]]+\]\s+)?([A-Za-z0-9_]+).*/\3:\2/p')
+    ports=$(awk "/^module $top \\(/,/\\);/" "$verilog" | sed -n -E 's/^\s*(input|output|inout)\s+wire\s+(\[[^]]+\]\s+)?([A-Za-z0-9_]+).*/\3:\2/p')
     [ -n "$ports" ] || die "no ports of $top in $verilog"
     for port in $ports; do
         name=${port%%:*}
         pin=$(echo $pins | tr ' ' '\n' | sed -n "s/^$name://p")
+        io=$(echo $io_pins | tr ' ' '\n' | sed -n "s/^$name://p")
         if [ -n "$pin" ]; then echo "set_location_assignment PIN_$pin -to $name"
+        elif [ -n "$io" ]; then
+            echo "set_location_assignment PIN_$io -to $name"
+            echo "set_instance_assignment -name IO_STANDARD \"3.3-V LVCMOS\" -to $name"
         elif [ "$name" != clk ] && ! echo $pins | grep -qw "${name%_n}_p"; then
             echo "set_instance_assignment -name VIRTUAL_PIN ON -to ${name}$([ -n "${port#*:}" ] && echo '[*]')"
         fi

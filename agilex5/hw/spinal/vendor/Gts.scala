@@ -23,6 +23,15 @@ case class GtsDuplex(variant: String, lockToRef: Boolean = false) extends BlackB
   noIoPrefix()
 }
 
+/** TX-only GTS variant from agilex5/gts/gen_ip.sh (ben_tx). */
+case class GtsTx(variant: String) extends BlackBox {
+  setDefinitionName(variant)
+  val i_tx_pll_refclk_p, i_pma_cu_clk, i_tx_reset, i_tx_coreclkin, i_src_rs_grant = in Bool ()
+  val o_tx_reset_ack, o_tx_ready, o_tx_clkout, o_src_rs_req, o_tx_serial_data, o_tx_serial_data_n, o_tx_pll_locked = out Bool ()
+  val i_tx_parallel_data = in Bits (80 bits)
+  noIoPrefix()
+}
+
 /** Shared reference clock and reset sequencer of the GTS lanes (one req/grant pair per lane). */
 case class GtsSrcss(lanes: Int) extends BlackBox {
   setDefinitionName("srcss")
