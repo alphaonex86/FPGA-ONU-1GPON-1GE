@@ -9,13 +9,13 @@ Developed and proven on an FPGA, the final target is an ASIC that holds everythi
 
 - GPON ONU MAC: GTC framing, FEC, AES-128 decryption, PLOAM, OMCI, upstream
   burst mode with DBA. EPON MAC (MPCP, OAM) and the OLT role of both.
-- 1000BASE-T Ethernet port, PHY integrated in the target ASIC (FPGA phase: the
-  DE25-Nano board PHY through the HPS EMAC, the HPS bridging to the fabric).
+- 1000BASE-T Ethernet port, PHY integrated in the target ASIC (FPGA phase: a
+  copper SFP in an SFP+ cage on our HSMC card for the DE25-Standard).
 - SFP cage autodetects the module (EEPROM): 1000BASE-X, EPON OLT or GPON OLT.
 - BOSA on board; all optics control (burst, APC, LOS, DDM) in the FPGA/ASIC
   logic; outside only analog: discrete RF transistors, a small ADC/DAC, the APD
-  bias boost and passives (FPGA phase: an SY88236L BOSA driver and an ECP5
-  SerDes bridge board on the DE25-Nano GPIO headers).
+  bias boost and passives (FPGA phase: an SY88236L BOSA driver on our HSMC
+  card, straight to the DE25-Standard GTS transceivers).
 - 32-bit RISC-V CPU (VexiiRiscv, rv32imac, no SIMD, no FPU), high energy
   efficiency, power management (clock gating, sleep states, DVFS); MMU (Sv32)
   so it runs Linux.
