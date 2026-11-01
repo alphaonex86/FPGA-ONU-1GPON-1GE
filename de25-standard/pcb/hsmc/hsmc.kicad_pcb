@@ -16146,7 +16146,7 @@
 				)
 			)
 		)
-		(property "Value" "SiT9121 155.52 MHz"
+		(property "Value" "SiT9121 156.25 MHz"
 			(at 0 3 0)
 			(layer "F.Fab")
 			(uuid "996f8254-e7ba-400b-9aa1-8f4c5a82cfbc")
@@ -16183,7 +16183,7 @@
 				)
 			)
 		)
-		(property "MPN" "SiT9121AI-1B3-33E155.520000 (LVPECL; check code)"
+		(property "MPN" "SiT9121AI-1B3-33E156.250000 (LVPECL; check code)"
 			(at 0 0 0)
 			(layer "F.SilkS")
 			(hide yes)

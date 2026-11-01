@@ -4954,7 +4954,7 @@
     (dnp no)
     (uuid "619962fd-ff5c-52c2-8f14-12a21174b4e8")
     (property "Reference" "Y1" (at 55.88 153.67 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "SiT9121 155.52 MHz" (at 55.88 166.37 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "SiT9121 156.25 MHz" (at 55.88 166.37 0) (effects (font (size 1.27 1.27))))
     (property
       "Footprint"
       "Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm"
@@ -4963,7 +4963,7 @@
     (property "Datasheet" "" (at 55.88 157.48 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (property
       "MPN"
-      "SiT9121AI-1B3-33E155.520000 (LVPECL; check code)"
+      "SiT9121AI-1B3-33E156.250000 (LVPECL; check code)"
       (at 55.88 157.48 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "ef78531f-71de-5676-b401-e8368bf63a83"))

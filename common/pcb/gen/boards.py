@@ -366,9 +366,9 @@ def hsmc():
     b.block = 'hsmc'
     b.add('J', LIB, 'HSMC_CARD', 'ASP-122952-01', 'bridge:HSMC_ASP-122952-01', conn, MPN='Samtec ASP-122952-01')
     b.decouple('+3V3', 2, 2, 2)
-    b.block = 'clock'   # GTS refclks: fixed XO (OLT, Ethernet, RX CDRs), VCXO tuned by the FPGA (ONU TX + burst enable)
-    b.add('Y', LIB, 'XO_LVDS_3225', 'SiT9121 155.52 MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
-          {'OE': 'XO_OE', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'XO_P', 'OUT-': 'XO_N'}, MPN='SiT9121AI-1B3-33E155.520000 (LVPECL; check code)')
+    b.block = 'clock'   # GTS refclks: XO for Ethernet (1.25 Gb/s needs 156.25), VCXO tuned by the FPGA for every PON lane
+    b.add('Y', LIB, 'XO_LVDS_3225', 'SiT9121 156.25 MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
+          {'OE': 'XO_OE', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'XO_P', 'OUT-': 'XO_N'}, MPN='SiT9121AI-1B3-33E156.250000 (LVPECL; check code)')
     b.add('Y', LIB, 'VCXO_LVDS_3225', 'SiT3821 155.52 MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
           {'VIN': 'VCXO_VC', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'VCXO_P', 'OUT-': 'VCXO_N'},
           MPN='SiT3821AI-1B2-33EB155.520000 (LVPECL, +-50 ppm pull; check code)')
