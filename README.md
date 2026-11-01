@@ -67,6 +67,9 @@ against the model and decoded by our ONU in the closed loop. Upstream FEC in
 the ONU when the OLT asks for it (Use_FEC): parity per codeword with the shorter
 last one, the content sized to the data bytes, checked by a Scala OLT model; our
 OLT does not ask for it (like Maple's default).
+Ethernet port in simulation: comma alignment and 8b/10b on the raw 10-bit lane,
+taxi's 1000BASE-X/SGMII PCS (autonegotiation) and 1G MAC (`common/hw/ext/taxi`,
+submodule: `git submodule update --init`), two ports back to back.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane

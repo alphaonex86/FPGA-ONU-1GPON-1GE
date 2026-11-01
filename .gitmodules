@@ -1,0 +1,3 @@
+[submodule "common/hw/ext/taxi"]
+	path = common/hw/ext/taxi
+	url = https://github.com/fpganinja/taxi.git
