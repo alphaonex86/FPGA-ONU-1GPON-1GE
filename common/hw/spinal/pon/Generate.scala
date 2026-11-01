@@ -11,4 +11,5 @@ object Generate extends App {
   config.generateVerilog(gpon.GtcUsDeframer())
   config.generateVerilog(gpon.OltScheduler())
   config.generateVerilog(gpon.OltMac()) // + olt_regs.h
+  config.generateVerilog(gpon.OnuMac()) // + onu_regs.h
 }

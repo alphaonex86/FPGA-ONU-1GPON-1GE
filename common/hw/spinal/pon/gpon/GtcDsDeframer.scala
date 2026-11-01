@@ -24,6 +24,8 @@ case class GtcDsDeframer() extends Component {
   val io = new Bundle {
     val line = in Bits (8 bits) // raw line bytes, any bit alignment, MSB first
     val synced = out Bool ()
+    val frameStart = out Bool () // frame byte 0 processed, in sync
+    val alignment = out UInt (3 bits) // PSync bit offset in the line bytes: larger is earlier
     val superframe = out UInt (30 bits)
     val fecIndication = out Bool ()
     val ploam = master Flow (Checked(Bits(96 bits)))
@@ -49,6 +51,8 @@ case class GtcDsDeframer() extends Component {
   val pos = Reg(UInt(16 bits))   // frame position of `byte`, meaningful out of HUNT
   val active = sync === FrameSync.SYNC
   io.synced := active
+  io.alignment := alignment
+  io.frameStart := RegNext(active && pos === 0) init (False)
 
   when(sync === FrameSync.HUNT) {
     when(found.orR) {

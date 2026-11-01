@@ -47,6 +47,12 @@ upstream burst receiver, ONU activation (serial number, ONU-ID, ranging, EqD)
 with status-reporting DBA (DBRu), checked against G.984.3 vectors and Scala ONU models; the
 OLT MAC top (311.04 / 155.52 MHz domains, CPU registers over APB with a
 generated C header) meets timing on the DE25-Standard FPGA.
+GPON ONU MAC in simulation: activation (O1-O7, TO1/TO2) with the fixed PLOAM set
+in hardware (Acknowledge, Password, Alloc-ID and OMCI Port-ID), every other
+PLOAM to the CPU, upstream burst framer timed to the bit from the downstream
+frame (35 us response); checked in closed loop against our OLT MAC over a
+simulated fibre (ranging, DBA, fibre cut and POPUP, Disable_Serial_Number),
+meets timing on the DE25-Standard FPGA.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 
