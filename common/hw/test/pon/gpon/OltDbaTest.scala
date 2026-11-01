@@ -16,7 +16,7 @@ object OltDbaTest extends App {
   }
   println("ok   DBRu mode 0 coding round trip (Table 8-1)")
 
-  val maxFrames = 140
+  val maxFrames = 200
   val act = new OltActivation(maxFrames)
   case class Entry(onu: OnuModel, allocId: Int, fixed: Int, max: Int, dbru: Boolean)
 

@@ -196,7 +196,7 @@ object OnuMacTest extends App {
     val onuId = onuP.onuId.toInt
     check(ranged.length == 1 && ranged.head._2 == onuId && onuP.eqd.toLong == ranged.head._3,
       s"ranged: ONU-ID $onuId, ONU EqD ${onuP.eqd.toLong} = OLT's ($ranged)")
-    waitFrames(12)
+    waitFrames(20) // normal bursts only in the last 4
     val eqd1 = onuP.eqd.toLong
     // response: from the frame's PSync at the ONU input to its upstream frame start (EqD and StartTime removed)
     val payloadAfterBen = 96 - 32 + 24 // overhead (guard 32 laser off) + PLOu
@@ -225,7 +225,7 @@ object OnuMacTest extends App {
     // DBA: the CPU grants T-CONT 300 behind the default allocation, with a DBRu
     olt.writes ++= Seq(r.TCONT_A.addr -> BigInt(0 | (300 << 8) | (onuId << 20) | (1 << 28)), r.TCONT_B.addr -> BigInt(100 | (100 << 16)),
       r.DBA.addr -> BigInt(1 | (48 << 8)), r.WINDOW.addr -> BigInt(act.quietBefore | (0xFFFF << 8)))
-    waitFrames(8)
+    waitFrames(12) // an SN window already begun takes up to 4 of them
     val dbru300 = dbrus.filter(_._1 == 300)
     check(dbru300.length >= 4 && dbru300.forall(_._2), s"T-CONT 300 granted in the ONU's burst, ${dbru300.length} DBRu with good CRC")
     check(bursts.filter(x => x._1 > frames - 4).forall(x => x._2 && x._5 == 0), "two-allocation bursts to the bit")

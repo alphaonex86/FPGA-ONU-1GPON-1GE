@@ -54,6 +54,7 @@ object OltScheduler {
   val randomHalf = 3733            // half the 0-48 us random delay of an SN response
   val margin = 8                   // delimiter search margin around a ranged arrival
   val rangingTries = 3
+  val ploamCopies = 3              // each of our PLOAMs, as ZTE and Broadcom OLTs send them: one bit error loses none
   val noTag = 255
 
   /** DBRu mode 0 code (G.984.3 Table 8-1) to reporting blocks; 0xFF (invalid) gives 0. */
@@ -109,17 +110,22 @@ case class OltScheduler(maxOnus: Int = 32, maxTconts: Int = 64) extends Componen
   val snTable = Mem(Bits(64 bits), maxOnus)
   when(io.release.valid && io.release.payload < maxOnus)(onuState(io.release.payload.resize(idBits)) := OnuState.FREE)
 
-  // our PLOAM goes before the CPU's; frames since it left
+  // our PLOAM, ploamCopies times in a row, goes before the CPU's; frames since its last copy left
   val ploamValid = RegInit(False)
   val ploamData = Reg(Bits(96 bits))
+  val copiesLeft = Reg(UInt(2 bits))
   io.ploam.valid := ploamValid || io.cpuPloam.valid
   io.ploam.payload := ploamValid ? ploamData | io.cpuPloam.payload
   io.cpuPloam.ready := io.ploam.ready && !ploamValid
   val sentAge = Reg(UInt(2 bits)) init (3)
   when(io.frameStart && sentAge =/= 3)(sentAge := sentAge + 1)
-  when(io.ploam.ready && ploamValid) { ploamValid := False; sentAge := 0 }
+  when(io.ploam.ready && ploamValid) {
+    copiesLeft := copiesLeft - 1
+    when(copiesLeft === 0) { ploamValid := False; sentAge := 0 }
+  }
   def sendPloam(onuId: Bits, messageId: Int, data: Bits): Unit = {
     ploamValid := True
+    copiesLeft := ploamCopies - 1
     ploamData := onuId ## B(messageId, 8 bits) ## data
   }
 

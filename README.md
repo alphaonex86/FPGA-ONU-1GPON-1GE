@@ -52,7 +52,10 @@ in hardware (Acknowledge, Password, Alloc-ID and OMCI Port-ID), every other
 PLOAM to the CPU, upstream burst framer timed to the bit from the downstream
 frame (35 us response); checked in closed loop against our OLT MAC over a
 simulated fibre (ranging, DBA, fibre cut and POPUP, Disable_Serial_Number),
-meets timing on the DE25-Standard FPGA.
+and against the PLOAM sequences of real OLTs (ZTE as recorded by stock ONUs,
+Broadcom Maple): every copy answered like the stock ONU, EqD drift updates to
+the bit, deactivation churn; meets timing on the DE25-Standard FPGA. Like those
+OLTs, our OLT sends each of its PLOAMs 3 times.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane

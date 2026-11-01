@@ -26,8 +26,9 @@ case class VcxoBench(updateShift: Int) extends Component {
   io.pin := modulator.io.pin
 }
 
-/** VcxoTracker against a VCXO model (frequency up with the filtered duty, +-1 % over the range, 1 ps steps) and a
-  * recovered clock 0.31 % slower: the loop pulls the local clock onto it and holds the phase. */
+/** VcxoTracker against a VCXO model (frequency up with the filtered duty, +-1 % over the range) and a recovered
+  * clock 0.31 % slower: the loop pulls the local clock onto it and holds the phase. The ONU's upstream timing follows
+  * that phase, so its wander must stay under the OLT's drift threshold (DOWi re-ranges, TIWi deactivates). */
 object VcxoTrackerTest extends App {
   val updateShift = 8
   SimConfig.withTimeScale(1 ps).withTimePrecision(1 ps).compile(VcxoBench(updateShift)).doSim { dut =>
@@ -44,10 +45,13 @@ object VcxoTrackerTest extends App {
     var pinHigh = 0L
     local.fallingEdge()
     local.assertReset()
+    var edge = 0.0 // exact time of the next local edge, ps: a continuous frequency, not one quantized to 1 ps
+    val wander = new Array[Double](1 << 17) // local edge time less the recovered clock's, ps
     fork {
       while (true) {
-        val half = math.round(1600 / (1 + 0.02 * (filtered - 0.5)))
-        sleep(half); local.clockToggle(); sleep(half); local.clockToggle()
+        val half = 1600 / (1 + 0.02 * (filtered - 0.5))
+        for (_ <- 0 until 2) { edge += half; sleep(math.round(edge) - simTime()); local.clockToggle() }
+        wander((cycles & ((1 << 17) - 1)).toInt) = edge - 2 * rxHalf * cycles
         cycles += 1
         if (io.pin.toBoolean) pinHigh += 1
         if (cycles % (1 << updateShift) == 0) filtered += 0.3 * (io.duty.toLong / 65536.0 - filtered)
@@ -64,7 +68,10 @@ object VcxoTrackerTest extends App {
     var worst = 0
     for (_ <- 0 until 400) { local.waitSampling(1 << updateShift); worst = worst max io.phase.toInt.abs }
     val ratio = (cycles - c0).toDouble / (rxCycles - r0)
+    val usBit = 2 * rxHalf / 4.0 // one upstream bit: a quarter of the 311.04 MHz clock
+    val peak = (wander.max - wander.min) / usBit
     check(worst <= 3, s"locked: phase error within 3 clocks (worst $worst)")
+    check(peak < 4, f"upstream phase wander $peak%.2f bits peak to peak, under DOWi (G.984.3 Table 10-2: 4 bits)")
     check(math.abs(ratio - 1) < 2e-4, s"frequency follows the recovered clock (ratio $ratio)")
     val mean = (pinHigh - p0).toDouble / (cycles - c0)
     check(math.abs(mean - io.duty.toLong / 65536.0) < 0.01, s"sigma-delta pin mean = duty ($mean, ${io.duty.toLong})")
