@@ -43,7 +43,8 @@ Developed and proven on an FPGA, the final target is an ASIC that holds everythi
 ## Status
 
 GPON OLT MAC in simulation (SpinalHDL): GTC downstream framer and deframer,
-upstream burst receiver, checked against G.984.3 vectors and a Scala ONU model.
+upstream burst receiver, ONU activation (serial number, ONU-ID, ranging, EqD)
+with a static BWmap, checked against G.984.3 vectors and Scala ONU models.
 
 ## License
 

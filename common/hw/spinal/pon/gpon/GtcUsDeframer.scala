@@ -14,6 +14,7 @@ case class UsGrant() extends Bundle {
 
 case class UsBurst() extends Bundle {
   val found = Bool()            // false: no delimiter inside the window, the burst is lost
+  val time = UInt(24 bits)      // grant time of its first allocation: which grant this report answers
   val allocId = UInt(12 bits)   // first allocation of the burst
   val onuId = Bits(8 bits)
   val ind = Bits(8 bits)
@@ -108,6 +109,7 @@ case class GtcUsDeframer() extends Component {
   val burst = Flow(UsBurst())
   burst.valid := False
   burst.found := True
+  burst.time := cur.time
   burst.allocId := cur.alloc.allocId
   burst.onuId := onuId
   burst.ind := clear
@@ -146,6 +148,7 @@ case class GtcUsDeframer() extends Component {
       } elsewhen (!after(huntEnd, now)) { // window closed: burst lost, with its contiguous grants
         burst.valid := True
         burst.found := False
+        burst.time := head.time
         burst.allocId := head.alloc.allocId
         io.grant.ready := True
         cur := head
