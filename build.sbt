@@ -9,6 +9,7 @@ lazy val root = (project in file("."))
     Compile / scalaSource := baseDirectory.value / "common" / "hw" / "spinal",
     Compile / unmanagedSourceDirectories += baseDirectory.value / "agilex5" / "hw" / "spinal",   // vendor wrappers
     Test / scalaSource := baseDirectory.value / "common" / "hw" / "test",
+    Test / unmanagedSourceDirectories += baseDirectory.value / "agilex5" / "hw" / "test",
     libraryDependencies ++= Seq(
       "com.github.spinalhdl" %% "spinalhdl-core" % spinalVersion,
       "com.github.spinalhdl" %% "spinalhdl-lib" % spinalVersion,

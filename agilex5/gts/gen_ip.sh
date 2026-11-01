@@ -9,8 +9,11 @@ PART=${PART:-A5ED013BB32AE4SCS}
 mkdir -p "$1"; cd "$1"
 PON=155.520000   # VCXO pin: every PON lane (CDRs need a PON-family refclk, the VCXO tracks the ISP OLT)
 ETH=156.250000   # XO pin: Ethernet (1.25 Gb/s cannot come from 155.52 MHz, TX or CDR)
+# single width: one word per core clock (311.04 MHz PON, 125 MHz Ethernet), as the MACs take it
 COMMON="clocking_mode=xcvr pmaif_tx_fifo_mode_s=register pmaif_rx_fifo_mode_s=register
-        pldif_tx_clkout_sel=TX_WORD_CLK pldif_rx_clkout_sel=RX_WORD_CLK"
+        pldif_tx_clkout_sel=TX_WORD_CLK pldif_rx_clkout_sel=RX_WORD_CLK pldif_tx_clkout_div=1 pldif_rx_clkout_div=1
+        pldif_tx_double_width_transfer_enable=0 pldif_rx_double_width_transfer_enable=0 rx_adaptation_mode=manual"
+SWAP=rx_invert_pin=ENABLE   # RX pairs P/N swapped on the HSMC card (HSMC_SWAP): inverted back in the PMA
 deploy() {   # COMPONENT NAME PARAM=VALUE...
     local component=$1 name=$2; shift 2
     local args=()
@@ -23,10 +26,14 @@ deploy() {   # COMPONENT NAME PARAM=VALUE...
     echo "$name ok"
 }
 gen() { local name=$1; shift; deploy intel_directphy_gts "$name" $COMMON "$@"; }
-deploy intel_srcss_gts srcss
+deploy intel_srcss_gts srcss NUM_LANES_SHORELINE=4   # one reset request/grant per lane
+# PON core clocks 311.04 / 155.52 MHz from the OLT tx_clkout: the clock network divider keeps them aligned and timed
+# together (the GTS tx_clkout2 is asynchronous to tx_clkout in the IP constraints)
+deploy intelclkctrl pon_clocks CLOCK_DIVIDER=1 CLOCK_DIVIDER_OUTPUTS=2
 # Every PON lane is duplex at 2488.32: the 1244.16 Gb/s direction is 2x oversampled (TX bits doubled, RX every
 # other bit), same waveform on the fiber, no dual simplex group (Quartus refuses TX and RX variants on one channel).
-gen olt duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON enable_port_rx_set_locktoref=1
-gen onu duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON
+# The OLT lane's tx_clkout, through pon_clocks, clocks every PON lane's core.
+gen olt duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON enable_port_rx_set_locktoref=1 $SWAP
+gen onu duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON $SWAP
 gen ben_tx duplex_mode=tx pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON
-gen eth duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH
+gen eth duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH $SWAP
