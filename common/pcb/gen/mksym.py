@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 """Write common/pcb/lib/bridge.kicad_sym: ECP5 from the Lattice pinout CSV (facts only) + small parts,
-and common/pcb/lib/bridge.pretty (BOSA footprint). Without the CSV the ECP5 symbol already in the library is kept.
+and common/pcb/lib/bridge.pretty (BOSA and HSMC card connector footprints). Without the CSV the ECP5 symbol already in the library is kept.
 
     python3 mksym.py [<ECP5UM-25 pinout .csv from latticesemi.com>] ../lib/bridge.kicad_sym
 """
 import csv, math, os, re, sys
 from sexp import Sym as S, dump, lib_symbol
 from kisch import box_symbol
+from hsmcpins import pinout as hsmc_pinout
 from paths import KI_LIB
 
 def ecp5_symbol(csv_path):
@@ -81,6 +82,15 @@ syms.append(box_symbol('BOSA_GPON', [([('T1', 'LD_A', 'passive'), ('T2', 'LD_K',
                                        [('R1', 'VAPD', 'passive'), ('R2', 'VCC', 'power_in'), ('R3', 'OUT+', 'output'), ('R4', 'OUT-', 'output'),
                                         ('R5', 'GND', 'power_in')])],
                        'U', 'BOSA GPON', 'bridge:BOSA_GPON', 'GPON ONU BOSA (1310 nm DFB TX, 1490 nm APD-TIA RX) from the X100DG; pad order to measure'))
+def hsmc_symbol():
+    fn = hsmc_pinout()
+    first = {f: min(p for p in fn if fn[p] == f) for f in ('3.3V', 'GND')}   # one typed power pin each, the rest passive (ERC)
+    pin = lambda p: (str(p), fn[p], {first['3.3V']: 'power_out', first['GND']: 'power_in'}.get(p, 'passive'))
+    half = lambda a, b: ([pin(p) for p in range(a, b, 2)], [pin(p) for p in range(a + 1, b, 2)])   # odd row | even row
+    return box_symbol('HSMC_CARD', [half(1, 41), half(41, 101), half(101, 161), ([pin(p) for p in range(161, 173)], [])],
+                      'J', 'ASP-122952-01', 'bridge:HSMC_ASP-122952-01',
+                      'HSMC card connector (Samtec ASP-122952-01), HSMC spec pin functions; units: banks 1, 2, 3, ground bars')
+syms.append(hsmc_symbol())
 lib = [S('kicad_symbol_lib'), [S('version'), 20251024], [S('generator'), 'kicad_symbol_editor'],
        [S('generator_version'), '10.0']] + syms
 open(out, 'w').write(dump(lib) + '\n')
@@ -94,10 +104,22 @@ polar = lambda cx, d, deg: (round(cx + d / 2 * math.cos(math.radians(deg)), 3) +
 TX_PADS = [(f'T{k + 1}', *polar(0, TX_PCD, 90 * k + 180)) for k in range(4)]
 RX_PADS = [(f'R{k + 1}', *polar(RX_X, RX_PCD, 90 * k + 135)) for k in range(4)] + [('R5', RX_X, 0.0)]
 
+FONT = [S('effects'), [S('font'), [S('size'), 1, 1], [S('thickness'), 0.15]]]
+rect = lambda x0, y0, x1, y1, layer, w: [S('fp_rect'), [S('start'), x0, y0], [S('end'), x1, y1],
+                                         [S('stroke'), [S('width'), w], [S('type'), S('solid')]], [S('fill'), S('no')], [S('layer'), layer]]
+
+def write_footprint(name, descr, attr, items, ref_at):
+    fp = [S('footprint'), name, [S('version'), 20260206], [S('generator'), 'mksym.py'], [S('layer'), 'F.Cu'], [S('descr'), descr],
+          [S('property'), 'Reference', 'REF**', [S('at'), *ref_at], [S('layer'), 'F.Fab'], FONT],
+          [S('property'), 'Value', name, [S('at'), ref_at[0], ref_at[1] + 1.8], [S('layer'), 'F.Fab'], FONT],
+          [S('attr'), S(attr)]] + items + \
+         [[S('model'), f'{KI_LIB}/3d/{name}.step', [S('offset'), [S('xyz'), 0, 0, 0]],
+           [S('scale'), [S('xyz'), 1, 1, 1]], [S('rotate'), [S('xyz'), 0, 0, 0]]]]
+    d = os.path.join(os.path.dirname(out), 'bridge.pretty')
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, name + '.kicad_mod'), 'w').write(dump(fp) + '\n')
+
 def bosa_footprint():
-    font = [S('effects'), [S('font'), [S('size'), 1, 1], [S('thickness'), 0.15]]]
-    rect = lambda x0, y0, x1, y1, layer, w: [S('fp_rect'), [S('start'), x0, y0], [S('end'), x1, y1],
-                                             [S('stroke'), [S('width'), w], [S('type'), S('solid')]], [S('fill'), S('no')], [S('layer'), layer]]
     body = [rect(-BOSA_BACK, -BOSA_R, BOSA_LEN, BOSA_R, 'F.Fab', 0.1),
             rect(-BOSA_BACK - 0.15, -BOSA_R - 0.15, BOSA_LEN - 0.3, BOSA_R + 0.15, 'F.SilkS', 0.12)]
     yard = rect(-BOSA_BACK - 0.4, -BOSA_R - 0.4, BOSA_LEN + 0.25, BOSA_R + 0.4, 'F.CrtYd', 0.05)
@@ -111,16 +133,33 @@ def bosa_footprint():
         return cx + (x - cx) * k, y * k
     labels = [[S('fp_text'), S('user'), n, [S('at'), *(round(v, 3) for v in label_at(n, x, y))], [S('layer'), 'F.SilkS'],
                [S('effects'), [S('font'), [S('size'), 0.8, 0.8], [S('thickness'), 0.12]]]] for n, x, y in TX_PADS + RX_PADS]
-    fp = [S('footprint'), 'BOSA_GPON', [S('version'), 20260206], [S('generator'), 'mksym.py'], [S('layer'), 'F.Cu'],
-          [S('descr'), 'GPON ONU BOSA of the X100DG, both TO cans down under the body, fiber over the edge; '
-                       'TX TO-56 4 leads, RX TO-46 5 leads; spacing estimated from a photo, lead order unknown'],
-          [S('property'), 'Reference', 'REF**', [S('at'), 7, 0], [S('layer'), 'F.Fab'], font],
-          [S('property'), 'Value', 'BOSA_GPON', [S('at'), 7, 1.8], [S('layer'), 'F.Fab'], font],
-          [S('attr'), S('through_hole')]] + body + [yard] + pads + labels + \
-         [[S('model'), KI_LIB + '/3d/BOSA_GPON.step', [S('offset'), [S('xyz'), 0, 0, 0]],
-           [S('scale'), [S('xyz'), 1, 1, 1]], [S('rotate'), [S('xyz'), 0, 0, 0]]]]
-    d = os.path.join(os.path.dirname(out), 'bridge.pretty')
-    os.makedirs(d, exist_ok=True)
-    open(os.path.join(d, 'BOSA_GPON.kicad_mod'), 'w').write(dump(fp) + '\n')
+    write_footprint('BOSA_GPON', 'GPON ONU BOSA of the X100DG, both TO cans down under the body, fiber over the edge; '
+                                 'TX TO-56 4 leads, RX TO-46 5 leads; spacing estimated from a photo, lead order unknown',
+                    'through_hole', body + [yard] + pads + labels, (7, 0))
+
+# HSMC card connector, Samtec ASP-122952-01 (QTH based, bank 1 differential -DP): odd pins on one row, even on the other,
+# ground bars between them, 2 alignment pegs on the odd side (land pattern cross-checked against two open HSMC designs)
+HSMC_ROW, HSMC_PEG = 3.09, (29.24, -2.03)
+HSMC_BARS = [(-28.445, 2.54), (-23.175, 4.7), (-16.825, 4.7), (-11.555, 2.54), (-8.445, 2.54), (-3.175, 4.7)]
+
+def hsmc_x(p):
+    k = (p - 1) // 2
+    return -27.25 + 1.5 * (k // 2) + 0.5 * (k % 2) if p <= 40 else (-7.25 if p <= 100 else 12.75) + 0.5 * ((p - (41 if p <= 100 else 101)) // 2)
+
+def hsmc_footprint():
+    pads = [[S('pad'), str(p), S('smd'), S('rect'), [S('at'), hsmc_x(p), -HSMC_ROW if p % 2 else HSMC_ROW], [S('size'), 0.3, 1.45],
+             [S('layers'), 'F.Cu', 'F.Paste', 'F.Mask']] for p in range(1, 161)]
+    bars = HSMC_BARS + [(-x, w) for x, w in reversed(HSMC_BARS)]
+    pads += [[S('pad'), str(161 + k), S('smd'), S('rect'), [S('at'), x, 0], [S('size'), w, 0.64],
+              [S('layers'), 'F.Cu', 'F.Paste', 'F.Mask']] for k, (x, w) in enumerate(bars)]
+    pads += [[S('pad'), '', S('np_thru_hole'), S('circle'), [S('at'), sx * HSMC_PEG[0], HSMC_PEG[1]], [S('size'), 1.0, 1.0],
+              [S('drill'), 1.0], [S('layers'), '*.Cu', '*.Mask']] for sx in (-1, 1)]
+    body = [rect(-30.0, -2.98, 30.0, 2.98, 'F.Fab', 0.1), *[[S('fp_line'), [S('start'), x, -2.98], [S('end'), x, 2.98], [S('stroke'), [S('width'), 0.12], [S('type'), S('solid')]],
+              [S('layer'), 'F.SilkS']] for x in (-30.0, 30.0)],   # body ends only: the pad rows overlap the body outline
+            [S('fp_circle'), [S('center'), -28.0, -4.3], [S('end'), -27.75, -4.3], [S('stroke'), [S('width'), 0.12], [S('type'), S('solid')]],
+             [S('fill'), S('yes')], [S('layer'), 'F.SilkS']]]   # pin 1
+    write_footprint('HSMC_ASP-122952-01', 'HSMC card connector, Samtec ASP-122952-01, 160 contacts 0.5 mm + 12 ground bars, '
+                    'mounted on the card bottom', 'smd', body + [rect(-30.25, -4.6, 30.25, 4.07, 'F.CrtYd', 0.05)] + pads, (0, 5.5))
 
 bosa_footprint()
+hsmc_footprint()

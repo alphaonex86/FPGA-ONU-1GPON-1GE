@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
-"""Place both boards (pcbgen.Layout), fan out the BGA, lay the planes, save."""
+"""Place the boards (pcbgen.Layout), fan out the BGA, lay the planes, save."""
 import os, sys
 import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
-from pcbgen import Layout, BGA_C, ball_xy, P, plane_vias, PLANE_NETS
+from pcbgen import Layout, BGA_C, ball_xy, P, V, plane_vias, PLANE_NETS
 from paths import board_dir
-from boards import onu, olt
+from boards import onu, olt, hsmc
 
 PASSIVE = ('R', 'C', 'FB', 'L', 'RN', 'TP')
 def is_passive(ref):
@@ -71,12 +71,13 @@ def passives(lay, header_rn_y):
         balls = [lay.ball_of(n) for n in parts[r].conns.values() if n.endswith('_S')]
         xs = [bga_xy(b)[0] for b in balls if b]
         lay.place_near(r, sum(xs) / len(xs), header_rn_y, rot=90)
-    lay.keepout['F'].append((10, 6.5, 54, BGA_C[1] - 9.8))  # bus fan-in corridor, top layer
-    # ECP5 rail decoupling: one cap per ball, cycling, on the bottom ring
     rail_balls = {}
-    for b, n in parts[lay.bga].conns.items():
-        if n.startswith('+'):
-            rail_balls.setdefault(n, []).append(b)
+    if lay.bga:
+        lay.keepout['F'].append((10, 6.5, 54, BGA_C[1] - 9.8))  # bus fan-in corridor, top layer
+        # ECP5 rail decoupling: one cap per ball, cycling, on the bottom ring
+        for b, n in parts[lay.bga].conns.items():
+            if n.startswith('+'):
+                rail_balls.setdefault(n, []).append(b)
     used = {}
     pending = sorted((r for r in parts if r not in placed and is_passive(r) and not r.startswith('RN')),
                      key=lambda r: (r.rstrip('0123456789'), int(r.lstrip('ABCDEFGHIJKLMNOPQRSTUVWXYZ'))))
@@ -102,7 +103,11 @@ def passives(lay, header_rn_y):
                 lay.place_near(r, *bga_xy(balls[k % len(balls)]), bottom=True)
                 continue
             pts = []
-            for n in sorted(nets, key=lambda n: n.startswith('+')):
+            if not lay.bga and len(nets) == 1 and nets[0].startswith('+'):   # decoupling: at the pins of its own block
+                pts = [lay.pad_xy(u, pin) for u, p in parts.items() if p.block == parts[r].block and not is_passive(u)
+                       and u in placed for pin, n in p.conns.items() if n == nets[0]]
+            plane_last = (lambda n: (n in PLANE_NETS, n.startswith('+'))) if not lay.bga else (lambda n: n.startswith('+'))
+            for n in sorted(nets, key=plane_last) if not pts else []:
                 pts = [xy for ref, xy in lay.pads_of(n) if not is_passive(ref)]
                 if pts:
                     break
@@ -114,7 +119,7 @@ def passives(lay, header_rn_y):
             anchor = (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
             near_bga = any(ref == lay.bga for n in nets if not n.startswith('+') for ref, xy in lay.pads_of(n))
             # BGA pull resistors on top: the bottom edge of the BGA belongs to the decaps
-            bottom = (near_bga and not r.startswith('R')) or lay.on_bottom_net(nets)
+            bottom = lay.bga and ((near_bga and not r.startswith('R')) or lay.on_bottom_net(nets))   # no BGA: all on top
             lay.place_near(r, *anchor, bottom=bottom)
         if later == pending:
             raise RuntimeError(f'no anchor for {later}')
@@ -148,6 +153,53 @@ def onu_layout():
     return lay
 
 
+HSMC_W, HSMC_H = 80.0, 78.0
+
+def hsmc_layout():
+    """The card hangs east of the DE25-Standard: connector on the bottom along the west edge (bank 1 north, odd row
+    west, as on the open Zipper HSMC card), SFP+ cages and the BOSA fiber out of the east edge, bottom empty over the host."""
+    lay = Layout(hsmc(), HSMC_W, HSMC_H)
+    lay.bga = None
+    j = refs(lay, 'HSMC_CARD')[0]
+    fp = lay.fps[j]
+    lay.pcb.Add(fp)
+    fp.SetLayerAndFlip(pcbnew.B_Cu)
+    for rot in (0, 90, 180, 270):
+        fp.SetOrientationDegrees(rot)
+        fp.SetPosition(V(5.8, 39.0))
+        p1, p2, p159 = (lay.pad_xy(j, n) for n in ('1', '2', '159'))
+        if p1[1] < p159[1] - 50 and p1[0] < p2[0]:
+            break
+    else:
+        raise RuntimeError('HSMC orientation')
+    lay.rects['B'].append(lay.rect(fp))
+    lay.keepout['B'].append((0, 0, 16, HSMC_H))
+    olt, eth = refs(lay, 'SFP_HOST')
+    lay.place(olt, HSMC_W - 41.6, 10.0, 180)    # front at the east edge (footprint PCB edge mark at x = -41.6)
+    lay.place(eth, HSMC_W - 41.6, 28.6, 180)
+    bx, by = HSMC_W - 16.0, 62.0                  # BOSA: fiber over the east edge
+    lay.place(refs(lay, 'BOSA_GPON')[0], bx, by)
+    lay.place(refs(lay, 'SY88236L')[0], bx - 8.5, by)
+    ux, uy = bx - 8.5, by   # RX AC-coupling pair straight north of U1 pins 31/30
+    put_pair(lay, [(part_on(lay, 'ONU_RD_P', 'C'), ux - 1.6, uy - 4.3), (part_on(lay, 'ONU_RD_N', 'C'), ux - 0.4, uy - 4.3)], 90)
+    lay.place(refs(lay, 'SN65LVDT2DBV')[0], bx - 20.0, by)   # away from U1: its passives need the room
+    lay.place(refs(lay, 'TPS61391')[0], bx + 8.5, 48.0)
+    lay.place(refs(lay, 'D_Schottky')[0], bx + 8.5, 51.6)
+    lay.place(refs(lay, 'AD5593R')[0], 32.0, 70.0)
+    lay.place(refs(lay, 'VCXO_LVDS_3225')[0], 14.0, 9.0)    # at XCVR_RX7 (pins 2/4)
+    lay.place(refs(lay, 'XO_LVDS_3225')[0], 14.0, 15.0)     # at XCVR_RX6 (pins 6/8)
+    lay.place_near(refs(lay, '74LVC1G17')[0], bx - 24.0, by + 10.0)
+    lay.place_near(refs(lay, '74LVC1G32')[0], bx - 28.0, by + 10.0)
+    lay.place_near(refs(lay, 'D_Schottky')[1], bx - 26.0, by + 13.0)   # burst cutoff discharge diode
+    for k, y in enumerate((41.5, 74.5)):
+        lay.place(refs(lay, 'MountingHole')[k], HSMC_W - 4.5, y)
+    return lay
+
+def hsmc_planes(lay):
+    w, h, e = lay.w, lay.h, 0.3
+    full = [(e, e), (w - e, e), (w - e, h - e), (e, h - e)]
+    lay.zone('GND', pcbnew.In1_Cu, full)
+    lay.zone('+3V3', pcbnew.In2_Cu, full)
 
 SERDES_W = 0.35   # ~50 ohm on JLC 7628 prepreg (0.21 mm), P/N at 0.8 mm pitch: loosely coupled 100 ohm diff
 NECK_W = 0.1      # between balls
@@ -266,14 +318,23 @@ def planes(lay):
 
 if __name__ == '__main__':
     force = '--force' in sys.argv
-    names = [a for a in sys.argv[1:] if not a.startswith('-')] or ['olt', 'onu']
-    for make in (olt_layout, onu_layout):
+    names = [a for a in sys.argv[1:] if not a.startswith('-')] or ['olt', 'onu', 'hsmc']
+    for make in (olt_layout, onu_layout, hsmc_layout):
         if make.__name__.split('_')[0] not in names:
             continue
         lay = make()
         target = os.path.join(board_dir(lay.bd.name), lay.bd.name + '.kicad_pcb')
         if os.path.exists(target) and not force:  # a routed board is the source from then on
             sys.exit(f'{target} exists: routing would be lost; --force to regenerate')
+        if not lay.bga:
+            passives(lay, None)
+            hsmc_planes(lay)
+            added, missed = plane_vias(lay)
+            print('plane vias', added, 'NO ROOM for', missed if missed else 'none')
+            lay.outline()
+            print(lay.bd.name, 'placed', len(lay.placed_refs()), 'of', len(lay.parts))
+            print(lay.save())
+            continue
         hand = serdes(lay, lay.bd.name == 'olt')   # its exact-placed pair parts first, the passives fill around
         passives(lay, 13.0)
         lay.fanout(hand | {'Y11', 'Y12'} | {b for b in lay.bus_balls() if b[0] == 'A'}, PLANE_NETS)

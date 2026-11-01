@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 # Route the generated boards: freerouting, then KRT on what is left, then finish.py (outer pours, DRC).
-# Usage: common/pcb/gen/route.sh [olt] [onu]     (routers: the FPGAcommon/hw wrappers, HW=<dir> to override)
+# Usage: common/pcb/gen/route.sh [olt] [onu] [hsmc]    (routers: the FPGAcommon/hw wrappers, HW=<dir> to override)
 set -eu
 GEN=$(cd "$(dirname "$0")" && pwd)
 HW=${HW:-$GEN/../../../../FPGAcommon/hw}

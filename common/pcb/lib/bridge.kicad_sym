@@ -3682,4 +3682,1255 @@
         (at 11.43 -10.16 180)
         (length 2.54)
         (name "GND" (effects (font (size 1.27 1.27))))
-        (number "R5" (effects (font (size 1.27 1.27))))))))
+        (number "R5" (effects (font (size 1.27 1.27)))))))
+  (symbol
+    "HSMC_CARD"
+    (pin_names (offset 1.016))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "J" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "ASP-122952-01" (at 0 -52.07 0) (effects (font (size 1.27 1.27))))
+    (property
+      "Footprint"
+      "bridge:HSMC_ASP-122952-01"
+      (at 0 0 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property
+      "Description"
+      "HSMC card connector (Samtec ASP-122952-01), HSMC spec pin functions; units: banks 1, 2, 3, ground bars"
+      (at 0 0 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (symbol
+      "HSMC_CARD_1_1"
+      (rectangle
+        (start -13.97 2.54)
+        (end 13.97 -50.8)
+        (stroke (width 0.254) (type default))
+        (fill (type background)))
+      (pin
+        passive
+        line
+        (at -16.51 0 0)
+        (length 2.54)
+        (name "XCVR_TXp7" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -2.54 0)
+        (length 2.54)
+        (name "XCVR_TXn7" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -5.08 0)
+        (length 2.54)
+        (name "XCVR_TXp6" (effects (font (size 1.27 1.27))))
+        (number "5" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -7.62 0)
+        (length 2.54)
+        (name "XCVR_TXn6" (effects (font (size 1.27 1.27))))
+        (number "7" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -10.16 0)
+        (length 2.54)
+        (name "XCVR_TXp5" (effects (font (size 1.27 1.27))))
+        (number "9" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -12.7 0)
+        (length 2.54)
+        (name "XCVR_TXn5" (effects (font (size 1.27 1.27))))
+        (number "11" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -15.24 0)
+        (length 2.54)
+        (name "XCVR_TXp4" (effects (font (size 1.27 1.27))))
+        (number "13" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -17.78 0)
+        (length 2.54)
+        (name "XCVR_TXn4" (effects (font (size 1.27 1.27))))
+        (number "15" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -20.32 0)
+        (length 2.54)
+        (name "XCVR_TXp3" (effects (font (size 1.27 1.27))))
+        (number "17" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -22.86 0)
+        (length 2.54)
+        (name "XCVR_TXn3" (effects (font (size 1.27 1.27))))
+        (number "19" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -25.4 0)
+        (length 2.54)
+        (name "XCVR_TXp2" (effects (font (size 1.27 1.27))))
+        (number "21" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -27.94 0)
+        (length 2.54)
+        (name "XCVR_TXn2" (effects (font (size 1.27 1.27))))
+        (number "23" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -30.48 0)
+        (length 2.54)
+        (name "XCVR_TXp1" (effects (font (size 1.27 1.27))))
+        (number "25" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -33.02 0)
+        (length 2.54)
+        (name "XCVR_TXn1" (effects (font (size 1.27 1.27))))
+        (number "27" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -35.56 0)
+        (length 2.54)
+        (name "XCVR_TXp0" (effects (font (size 1.27 1.27))))
+        (number "29" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -38.1 0)
+        (length 2.54)
+        (name "XCVR_TXn0" (effects (font (size 1.27 1.27))))
+        (number "31" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -40.64 0)
+        (length 2.54)
+        (name "SDA" (effects (font (size 1.27 1.27))))
+        (number "33" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -43.18 0)
+        (length 2.54)
+        (name "JTAG_TCK" (effects (font (size 1.27 1.27))))
+        (number "35" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -45.72 0)
+        (length 2.54)
+        (name "JTAG_TDO" (effects (font (size 1.27 1.27))))
+        (number "37" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -48.26 0)
+        (length 2.54)
+        (name "CLKOUT0" (effects (font (size 1.27 1.27))))
+        (number "39" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 0 180)
+        (length 2.54)
+        (name "XCVR_RXp7" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -2.54 180)
+        (length 2.54)
+        (name "XCVR_RXn7" (effects (font (size 1.27 1.27))))
+        (number "4" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -5.08 180)
+        (length 2.54)
+        (name "XCVR_RXp6" (effects (font (size 1.27 1.27))))
+        (number "6" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -7.62 180)
+        (length 2.54)
+        (name "XCVR_RXn6" (effects (font (size 1.27 1.27))))
+        (number "8" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -10.16 180)
+        (length 2.54)
+        (name "XCVR_RXp5" (effects (font (size 1.27 1.27))))
+        (number "10" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -12.7 180)
+        (length 2.54)
+        (name "XCVR_RXn5" (effects (font (size 1.27 1.27))))
+        (number "12" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -15.24 180)
+        (length 2.54)
+        (name "XCVR_RXp4" (effects (font (size 1.27 1.27))))
+        (number "14" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -17.78 180)
+        (length 2.54)
+        (name "XCVR_RXn4" (effects (font (size 1.27 1.27))))
+        (number "16" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -20.32 180)
+        (length 2.54)
+        (name "XCVR_RXp3" (effects (font (size 1.27 1.27))))
+        (number "18" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -22.86 180)
+        (length 2.54)
+        (name "XCVR_RXn3" (effects (font (size 1.27 1.27))))
+        (number "20" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -25.4 180)
+        (length 2.54)
+        (name "XCVR_RXp2" (effects (font (size 1.27 1.27))))
+        (number "22" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -27.94 180)
+        (length 2.54)
+        (name "XCVR_RXn2" (effects (font (size 1.27 1.27))))
+        (number "24" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -30.48 180)
+        (length 2.54)
+        (name "XCVR_RXp1" (effects (font (size 1.27 1.27))))
+        (number "26" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -33.02 180)
+        (length 2.54)
+        (name "XCVR_RXn1" (effects (font (size 1.27 1.27))))
+        (number "28" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -35.56 180)
+        (length 2.54)
+        (name "XCVR_RXp0" (effects (font (size 1.27 1.27))))
+        (number "30" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -38.1 180)
+        (length 2.54)
+        (name "XCVR_RXn0" (effects (font (size 1.27 1.27))))
+        (number "32" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -40.64 180)
+        (length 2.54)
+        (name "SCL" (effects (font (size 1.27 1.27))))
+        (number "34" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -43.18 180)
+        (length 2.54)
+        (name "JTAG_TMS" (effects (font (size 1.27 1.27))))
+        (number "36" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -45.72 180)
+        (length 2.54)
+        (name "JTAG_TDI" (effects (font (size 1.27 1.27))))
+        (number "38" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -48.26 180)
+        (length 2.54)
+        (name "CLKIN0" (effects (font (size 1.27 1.27))))
+        (number "40" (effects (font (size 1.27 1.27))))))
+    (symbol
+      "HSMC_CARD_2_1"
+      (rectangle
+        (start -13.97 2.54)
+        (end 13.97 -76.2)
+        (stroke (width 0.254) (type default))
+        (fill (type background)))
+      (pin
+        passive
+        line
+        (at -16.51 0 0)
+        (length 2.54)
+        (name "D0" (effects (font (size 1.27 1.27))))
+        (number "41" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -2.54 0)
+        (length 2.54)
+        (name "D2" (effects (font (size 1.27 1.27))))
+        (number "43" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_out
+        line
+        (at -16.51 -5.08 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "45" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -7.62 0)
+        (length 2.54)
+        (name "LVDS_TXp0" (effects (font (size 1.27 1.27))))
+        (number "47" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -10.16 0)
+        (length 2.54)
+        (name "LVDS_TXn0" (effects (font (size 1.27 1.27))))
+        (number "49" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -12.7 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "51" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -15.24 0)
+        (length 2.54)
+        (name "LVDS_TXp1" (effects (font (size 1.27 1.27))))
+        (number "53" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -17.78 0)
+        (length 2.54)
+        (name "LVDS_TXn1" (effects (font (size 1.27 1.27))))
+        (number "55" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -20.32 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "57" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -22.86 0)
+        (length 2.54)
+        (name "LVDS_TXp2" (effects (font (size 1.27 1.27))))
+        (number "59" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -25.4 0)
+        (length 2.54)
+        (name "LVDS_TXn2" (effects (font (size 1.27 1.27))))
+        (number "61" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -27.94 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "63" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -30.48 0)
+        (length 2.54)
+        (name "LVDS_TXp3" (effects (font (size 1.27 1.27))))
+        (number "65" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -33.02 0)
+        (length 2.54)
+        (name "LVDS_TXn3" (effects (font (size 1.27 1.27))))
+        (number "67" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -35.56 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "69" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -38.1 0)
+        (length 2.54)
+        (name "LVDS_TXp4" (effects (font (size 1.27 1.27))))
+        (number "71" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -40.64 0)
+        (length 2.54)
+        (name "LVDS_TXn4" (effects (font (size 1.27 1.27))))
+        (number "73" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -43.18 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "75" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -45.72 0)
+        (length 2.54)
+        (name "LVDS_TXp5" (effects (font (size 1.27 1.27))))
+        (number "77" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -48.26 0)
+        (length 2.54)
+        (name "LVDS_TXn5" (effects (font (size 1.27 1.27))))
+        (number "79" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -50.8 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "81" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -53.34 0)
+        (length 2.54)
+        (name "LVDS_TXp6" (effects (font (size 1.27 1.27))))
+        (number "83" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -55.88 0)
+        (length 2.54)
+        (name "LVDS_TXn6" (effects (font (size 1.27 1.27))))
+        (number "85" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -58.42 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "87" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -60.96 0)
+        (length 2.54)
+        (name "LVDS_TXp7" (effects (font (size 1.27 1.27))))
+        (number "89" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -63.5 0)
+        (length 2.54)
+        (name "LVDS_TXn7" (effects (font (size 1.27 1.27))))
+        (number "91" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -66.04 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "93" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -68.58 0)
+        (length 2.54)
+        (name "CLKOUT1p" (effects (font (size 1.27 1.27))))
+        (number "95" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -71.12 0)
+        (length 2.54)
+        (name "CLKOUT1n" (effects (font (size 1.27 1.27))))
+        (number "97" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -16.51 -73.66 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "99" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 0 180)
+        (length 2.54)
+        (name "D1" (effects (font (size 1.27 1.27))))
+        (number "42" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -2.54 180)
+        (length 2.54)
+        (name "D3" (effects (font (size 1.27 1.27))))
+        (number "44" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -5.08 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "46" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -7.62 180)
+        (length 2.54)
+        (name "LVDS_RXp0" (effects (font (size 1.27 1.27))))
+        (number "48" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -10.16 180)
+        (length 2.54)
+        (name "LVDS_RXn0" (effects (font (size 1.27 1.27))))
+        (number "50" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -12.7 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "52" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -15.24 180)
+        (length 2.54)
+        (name "LVDS_RXp1" (effects (font (size 1.27 1.27))))
+        (number "54" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -17.78 180)
+        (length 2.54)
+        (name "LVDS_RXn1" (effects (font (size 1.27 1.27))))
+        (number "56" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -20.32 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "58" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -22.86 180)
+        (length 2.54)
+        (name "LVDS_RXp2" (effects (font (size 1.27 1.27))))
+        (number "60" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -25.4 180)
+        (length 2.54)
+        (name "LVDS_RXn2" (effects (font (size 1.27 1.27))))
+        (number "62" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -27.94 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "64" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -30.48 180)
+        (length 2.54)
+        (name "LVDS_RXp3" (effects (font (size 1.27 1.27))))
+        (number "66" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -33.02 180)
+        (length 2.54)
+        (name "LVDS_RXn3" (effects (font (size 1.27 1.27))))
+        (number "68" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -35.56 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "70" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -38.1 180)
+        (length 2.54)
+        (name "LVDS_RXp4" (effects (font (size 1.27 1.27))))
+        (number "72" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -40.64 180)
+        (length 2.54)
+        (name "LVDS_RXn4" (effects (font (size 1.27 1.27))))
+        (number "74" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -43.18 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "76" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -45.72 180)
+        (length 2.54)
+        (name "LVDS_RXp5" (effects (font (size 1.27 1.27))))
+        (number "78" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -48.26 180)
+        (length 2.54)
+        (name "LVDS_RXn5" (effects (font (size 1.27 1.27))))
+        (number "80" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -50.8 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "82" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -53.34 180)
+        (length 2.54)
+        (name "LVDS_RXp6" (effects (font (size 1.27 1.27))))
+        (number "84" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -55.88 180)
+        (length 2.54)
+        (name "LVDS_RXn6" (effects (font (size 1.27 1.27))))
+        (number "86" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -58.42 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "88" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -60.96 180)
+        (length 2.54)
+        (name "LVDS_RXp7" (effects (font (size 1.27 1.27))))
+        (number "90" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -63.5 180)
+        (length 2.54)
+        (name "LVDS_RXn7" (effects (font (size 1.27 1.27))))
+        (number "92" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -66.04 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "94" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -68.58 180)
+        (length 2.54)
+        (name "CLKIN1p" (effects (font (size 1.27 1.27))))
+        (number "96" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -71.12 180)
+        (length 2.54)
+        (name "CLKIN1n" (effects (font (size 1.27 1.27))))
+        (number "98" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 16.51 -73.66 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "100" (effects (font (size 1.27 1.27))))))
+    (symbol
+      "HSMC_CARD_3_1"
+      (rectangle
+        (start -15.24 2.54)
+        (end 15.24 -76.2)
+        (stroke (width 0.254) (type default))
+        (fill (type background)))
+      (pin
+        passive
+        line
+        (at -17.78 0 0)
+        (length 2.54)
+        (name "LVDS_TXp8" (effects (font (size 1.27 1.27))))
+        (number "101" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -2.54 0)
+        (length 2.54)
+        (name "LVDS_TXn8" (effects (font (size 1.27 1.27))))
+        (number "103" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -5.08 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "105" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -7.62 0)
+        (length 2.54)
+        (name "LVDS_TXp9" (effects (font (size 1.27 1.27))))
+        (number "107" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -10.16 0)
+        (length 2.54)
+        (name "LVDS_TXn9" (effects (font (size 1.27 1.27))))
+        (number "109" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -12.7 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "111" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -15.24 0)
+        (length 2.54)
+        (name "LVDS_TXp10" (effects (font (size 1.27 1.27))))
+        (number "113" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -17.78 0)
+        (length 2.54)
+        (name "LVDS_TXn10" (effects (font (size 1.27 1.27))))
+        (number "115" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -20.32 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "117" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -22.86 0)
+        (length 2.54)
+        (name "LVDS_TXp11" (effects (font (size 1.27 1.27))))
+        (number "119" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -25.4 0)
+        (length 2.54)
+        (name "LVDS_TXn11" (effects (font (size 1.27 1.27))))
+        (number "121" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -27.94 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "123" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -30.48 0)
+        (length 2.54)
+        (name "LVDS_TXp12" (effects (font (size 1.27 1.27))))
+        (number "125" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -33.02 0)
+        (length 2.54)
+        (name "LVDS_TXn12" (effects (font (size 1.27 1.27))))
+        (number "127" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -35.56 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "129" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -38.1 0)
+        (length 2.54)
+        (name "LVDS_TXp13" (effects (font (size 1.27 1.27))))
+        (number "131" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -40.64 0)
+        (length 2.54)
+        (name "LVDS_TXn13" (effects (font (size 1.27 1.27))))
+        (number "133" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -43.18 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "135" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -45.72 0)
+        (length 2.54)
+        (name "LVDS_TXp14" (effects (font (size 1.27 1.27))))
+        (number "137" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -48.26 0)
+        (length 2.54)
+        (name "LVDS_TXn14" (effects (font (size 1.27 1.27))))
+        (number "139" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -50.8 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "141" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -53.34 0)
+        (length 2.54)
+        (name "LVDS_TXp15" (effects (font (size 1.27 1.27))))
+        (number "143" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -55.88 0)
+        (length 2.54)
+        (name "LVDS_TXn15" (effects (font (size 1.27 1.27))))
+        (number "145" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -58.42 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "147" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -60.96 0)
+        (length 2.54)
+        (name "LVDS_TXp16" (effects (font (size 1.27 1.27))))
+        (number "149" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -63.5 0)
+        (length 2.54)
+        (name "LVDS_TXn16" (effects (font (size 1.27 1.27))))
+        (number "151" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -66.04 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "153" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -68.58 0)
+        (length 2.54)
+        (name "CLKOUT2p" (effects (font (size 1.27 1.27))))
+        (number "155" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -71.12 0)
+        (length 2.54)
+        (name "CLKOUT2n" (effects (font (size 1.27 1.27))))
+        (number "157" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -17.78 -73.66 0)
+        (length 2.54)
+        (name "3.3V" (effects (font (size 1.27 1.27))))
+        (number "159" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 0 180)
+        (length 2.54)
+        (name "LVDS_RXp8" (effects (font (size 1.27 1.27))))
+        (number "102" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -2.54 180)
+        (length 2.54)
+        (name "LVDS_RXn8" (effects (font (size 1.27 1.27))))
+        (number "104" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -5.08 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "106" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -7.62 180)
+        (length 2.54)
+        (name "LVDS_RXp9" (effects (font (size 1.27 1.27))))
+        (number "108" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -10.16 180)
+        (length 2.54)
+        (name "LVDS_RXn9" (effects (font (size 1.27 1.27))))
+        (number "110" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -12.7 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "112" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -15.24 180)
+        (length 2.54)
+        (name "LVDS_RXp10" (effects (font (size 1.27 1.27))))
+        (number "114" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -17.78 180)
+        (length 2.54)
+        (name "LVDS_RXn10" (effects (font (size 1.27 1.27))))
+        (number "116" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -20.32 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "118" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -22.86 180)
+        (length 2.54)
+        (name "LVDS_RXp11" (effects (font (size 1.27 1.27))))
+        (number "120" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -25.4 180)
+        (length 2.54)
+        (name "LVDS_RXn11" (effects (font (size 1.27 1.27))))
+        (number "122" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -27.94 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "124" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -30.48 180)
+        (length 2.54)
+        (name "LVDS_RXp12" (effects (font (size 1.27 1.27))))
+        (number "126" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -33.02 180)
+        (length 2.54)
+        (name "LVDS_RXn12" (effects (font (size 1.27 1.27))))
+        (number "128" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -35.56 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "130" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -38.1 180)
+        (length 2.54)
+        (name "LVDS_RXp13" (effects (font (size 1.27 1.27))))
+        (number "132" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -40.64 180)
+        (length 2.54)
+        (name "LVDS_RXn13" (effects (font (size 1.27 1.27))))
+        (number "134" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -43.18 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "136" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -45.72 180)
+        (length 2.54)
+        (name "LVDS_RXp14" (effects (font (size 1.27 1.27))))
+        (number "138" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -48.26 180)
+        (length 2.54)
+        (name "LVDS_RXn14" (effects (font (size 1.27 1.27))))
+        (number "140" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -50.8 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "142" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -53.34 180)
+        (length 2.54)
+        (name "LVDS_RXp15" (effects (font (size 1.27 1.27))))
+        (number "144" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -55.88 180)
+        (length 2.54)
+        (name "LVDS_RXn15" (effects (font (size 1.27 1.27))))
+        (number "146" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -58.42 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "148" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -60.96 180)
+        (length 2.54)
+        (name "LVDS_RXp16" (effects (font (size 1.27 1.27))))
+        (number "150" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -63.5 180)
+        (length 2.54)
+        (name "LVDS_RXn16" (effects (font (size 1.27 1.27))))
+        (number "152" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -66.04 180)
+        (length 2.54)
+        (name "12V" (effects (font (size 1.27 1.27))))
+        (number "154" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -68.58 180)
+        (length 2.54)
+        (name "CLKIN2p" (effects (font (size 1.27 1.27))))
+        (number "156" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -71.12 180)
+        (length 2.54)
+        (name "CLKIN2n" (effects (font (size 1.27 1.27))))
+        (number "158" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 17.78 -73.66 180)
+        (length 2.54)
+        (name "PSNTn" (effects (font (size 1.27 1.27))))
+        (number "160" (effects (font (size 1.27 1.27))))))
+    (symbol
+      "HSMC_CARD_4_1"
+      (rectangle
+        (start -5.08 2.54)
+        (end 5.08 -30.48)
+        (stroke (width 0.254) (type default))
+        (fill (type background)))
+      (pin
+        power_in
+        line
+        (at -7.62 0 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "161" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -2.54 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "162" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -5.08 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "163" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -7.62 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "164" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -10.16 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "165" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -12.7 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "166" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -15.24 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "167" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -17.78 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "168" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -20.32 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "169" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -22.86 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "170" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -25.4 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "171" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -7.62 -27.94 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "172" (effects (font (size 1.27 1.27))))))))

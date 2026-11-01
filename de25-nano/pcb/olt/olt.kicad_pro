@@ -276,6 +276,34 @@
         "pattern": "RIN_*"
       },
       {
+        "netclass": "SerDes",
+        "pattern": "ONU_TX_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "ONU_RX_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "OLT_TD_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "OLT_RD_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "ETH_TD_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "ETH_RD_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "GTS_*"
+      },
+      {
         "netclass": "HV",
         "pattern": "HV_*"
       }

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
-"""Netlists of the two DE25-Nano SerDes bridge boards (ONU on GPIO_0, OLT on GPIO_1)."""
+"""Netlists: the two DE25-Nano SerDes bridge boards (ONU on GPIO_0, OLT on GPIO_1) and the DE25-Standard HSMC card."""
 import os, re
 from kisch import Board
+from hsmcpins import pinout as hsmc_pinout
 from sexp import lib_symbol, pins
 
 LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'lib', 'bridge.kicad_sym')
@@ -47,6 +48,8 @@ def assign_balls(signals, clock):
     return out
 
 class Bridge(Board):
+    serdes_w = 0.2   # router width of the SerDes netclass
+
     def r(self, value, a, b, fp=R0402, **fields):
         return self.add('R', 'Device', 'R', value, fp, {'1': a, '2': b}, **fields)
 
@@ -158,13 +161,14 @@ class Bridge(Board):
 def lanes(idx, names):
     return {n: hdr(i) for n, i in zip(names, idx)}
 
-def optics(b):
+def optics(b, tx='TX0', rx='RX0', ben='BEN'):
     """SY88236L burst laser driver + limiting amp, BOSA, TPS61391 APD bias, AD5593R trim/monitor (I2C 0x10).
-    Set-point resistors are starting values (SY88236L curves): Imod ~23 mA, Ibias max ~40 mA, trimmed by the DACs."""
+    tx/rx/ben: SerDes lane nets (<name>_P/_N). Set-point resistors are starting values (SY88236L curves):
+    Imod ~23 mA, Ibias max ~40 mA, trimmed by the DACs."""
     b.block = 'optics'
-    for a, z in (('TX0_P', 'ONU_TD_P'), ('TX0_N', 'ONU_TD_N'), ('ONU_RD_P', 'RX0_P'), ('ONU_RD_N', 'RX0_N')):
+    for a, z in ((f'{tx}_P', 'ONU_TD_P'), (f'{tx}_N', 'ONU_TD_N'), ('ONU_RD_P', f'{rx}_P'), ('ONU_RD_N', f'{rx}_N')):
         b.c('100n', a, z)
-    b.r('0', 'BEN_P', 'ONU_BEN_P'); b.r('0', 'BEN_N', 'ONU_BEN_N')  # DC: bursts last up to 125 us
+    b.r('0', f'{ben}_P', 'ONU_BEN_P'); b.r('0', f'{ben}_N', 'ONU_BEN_N')  # DC: bursts last up to 125 us
     b.fb('+3V3', '+3V3_OPT'); b.decouple('+3V3_OPT', 4, 2)
     b.add('U', LIB, 'SY88236L', 'SY88236LMG', 'Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.1x3.1mm_ThermalVias',
           {'1': 'GND', '2': 'LOSLVL', '3': 'RX_SD', '4': 'RX_SD', '6': 'ONU_TD_N', '7': 'ONU_TD_P', '9': 'LD_BEN', '10': 'LD_BEN_N',
@@ -172,8 +176,8 @@ def optics(b):
            '18': 'LD_MODN', '19': 'LD_MODP', '21': 'LD_BIAS', '22': 'LD_MD', '26': 'RSSI', '27': 'RIN_P', '28': 'RIN_N',
            '30': 'ONU_RD_N', '31': 'ONU_RD_P', '17': '+3V3_OPT', '20': '+3V3_OPT', '32': '+3V3_OPT',
            '5': 'GND', '8': 'GND', '16': 'GND', '24': 'GND', '29': 'GND', '33': 'GND'},
-          MPN='SY88236LMG')   # DIN P/N swapped for a straight route: ECP5 TXINVPOL = Invert
-    b.r('4.7k', 'LASER_DIS', '+3V3')  # TXDIS high = laser off while the ECP5 is unconfigured
+          MPN='SY88236LMG')   # DIN P/N swapped for a straight route: SerDes TX polarity inverted
+    b.r('4.7k', 'LASER_DIS', '+3V3')  # TXDIS high = laser off while the FPGA is unconfigured
     b.r('4.7k', 'RX_SD', '+3V3')      # SD mode (LOS/SD_SEL low), open collector, JAM squelches on it
     b.r('5.1k', 'LOSLVL', '+3V3_OPT')
     b.add('U', LIB, 'SN65LVDT2DBV', 'SN65LVDT2DBVR', 'Package_TO_SOT_SMD:SOT-23-5',
@@ -307,4 +311,81 @@ def olt():
         b.r('4.7k', net, '+3V3')
     b.cable('ONU_PROGRAMN')
     b.holes()
+    return b
+
+def sfp_cage(b, name, td, rd):
+    """SFP/SFP+ cage, own I2C bus; RS0/RS1 (OLT modules: Rx_Reset / RSSI trigger, 330 ohm for old pin-9-grounded modules)
+    through series R so the FPGA keeps them hi-Z until the module is identified."""
+    b.block = f'sfp:{name}'
+    t, r = f'+3V3_{name}T', f'+3V3_{name}R'
+    b.add('J', LIB, 'SFP_HOST', f'SFP+ {name}', 'Connector:Connector_SFP_and_Cage',
+          {'VeeT': 'GND', 'VeeR': 'GND', 'CAGE': 'GND', 'TX_FAULT': f'{name}_TX_FAULT', 'TX_DISABLE': f'{name}_TX_DIS',
+           'SDA': f'{name}_SDA', 'SCL': f'{name}_SCL', 'MOD_ABS': f'{name}_MOD_ABS', 'RS0': f'{name}_P7', 'RX_LOS': f'{name}_LOS',
+           'RS1': f'{name}_P9', 'RD+': f'{rd}_P', 'RD-': f'{rd}_N', 'VccR': r, 'VccT': t, 'TD+': f'{td}_P', 'TD-': f'{td}_N'},
+          MPN='SFP+ cage (SFF-8432) + 20-pin host connector (SFF-8083)')
+    b.r('33', f'{name}_RS0', f'{name}_P7'); b.r('330', f'{name}_RS1', f'{name}_P9')
+    for rail in (t, r):  # SFP MSA host filter
+        b.add('L', 'Device', 'L', '1u', L0805, {'1': '+3V3', '2': rail}, MPN='1 uH >= 1 A, low DCR')
+        b.decouple(rail, 1, 1)
+    b.decouple('+3V3', 0, 0, 1)
+    for n in ('TX_FAULT', 'TX_DIS', 'LOS', 'MOD_ABS', 'SCL', 'SDA'):
+        b.r('4.7k', f'{name}_{n}', '+3V3')
+
+# HSMC GTS lanes (DE25-Standard: 4, lanes 0-3) and the even-row single-ended pins (bank 2 north, bank 3 south)
+HSMC_LANES = {3: ('OLT_TD', 'OLT_RD'), 2: ('ETH_TD', 'ETH_RD'), 1: ('ONU_TX', 'ONU_RX'), 0: ('BEN', None)}
+HSMC_IO = {'OLT': [42, 44, 48, 50, 54, 56, 60, 62], 'ETH': [66, 68, 72, 74, 78, 80, 84, 86],
+           'ONU': [102, 104, 108, 110, 114, 116, 120]}
+
+def hsmc():
+    """DE25-Standard HSMC card: OLT SFP+ cage, Ethernet SFP+ cage (copper 1000BASE-T SFP over SGMII, 10G later),
+    GPON ONU optics (BOSA of the X100DG). Power: HSMC 3.3 V only (1.5 A max)."""
+    b = Bridge('hsmc', 'HSMC card for DE25-Standard: OLT SFP+, Ethernet SFP+, GPON ONU BOSA')
+    b.serdes_w = 0.3   # all lanes left to the router: ~55 ohm on the JLC outer layers
+    fn = hsmc_pinout()
+    pin_of = {f: p for p, f in fn.items()}
+    conn = {str(p): '+3V3' for p, f in fn.items() if f == '3.3V'}
+    conn.update({str(p): 'GND' for p, f in fn.items() if f in ('GND', 'PSNTn')})   # PSNTn low: card present
+    for lane, (tx, rx) in HSMC_LANES.items():
+        conn.update({str(pin_of[f'XCVR_TXp{lane}']): f'{tx}_P', str(pin_of[f'XCVR_TXn{lane}']): f'{tx}_N'})
+        if rx:
+            conn.update({str(pin_of[f'XCVR_RXp{lane}']): f'{rx}_P', str(pin_of[f'XCVR_RXn{lane}']): f'{rx}_N'})
+    conn.update({'6': 'GTS_REFCLK_P', '8': 'GTS_REFCLK_N', '2': 'GTS_RXREF_P', '4': 'GTS_RXREF_N'})   # XCVR_RX6 / RX7
+    io = {'OLT': [f'OLT_{n}' for n in ('TX_DIS', 'TX_FAULT', 'LOS', 'MOD_ABS', 'SCL', 'SDA', 'RS0', 'RS1')],
+          'ETH': [f'ETH_{n}' for n in ('TX_DIS', 'TX_FAULT', 'LOS', 'MOD_ABS', 'SCL', 'SDA', 'RS0', 'RS1')],
+          'ONU': ['LASER_DIS_FPGA', 'RX_SD', 'ONU_SCL', 'ONU_SDA', 'VCXO_PWM', 'BURST_CUT', 'BEN_IO']}
+    for group, nets in io.items():
+        conn.update({str(p): n for p, n in zip(HSMC_IO[group], nets)})
+    b.block = 'hsmc'
+    b.add('J', LIB, 'HSMC_CARD', 'ASP-122952-01', 'bridge:HSMC_ASP-122952-01', conn, MPN='Samtec ASP-122952-01')
+    b.decouple('+3V3', 2, 2, 2)
+    b.block = 'clock'   # GTS refclks: fixed XO (OLT, Ethernet, RX CDRs), VCXO tuned by the FPGA (ONU TX + burst enable)
+    b.add('Y', LIB, 'XO_LVDS_3225', 'SiT9121 155.52 MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
+          {'OE': 'XO_OE', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'XO_P', 'OUT-': 'XO_N'}, MPN='SiT9121AI-2B3-33E155.520000 (LVDS; check code)')
+    b.add('Y', LIB, 'VCXO_LVDS_3225', 'SiT3821 155.52 MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
+          {'VIN': 'VCXO_VC', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'VCXO_P', 'OUT-': 'VCXO_N'},
+          MPN='SiT3821AI-2B2-33EB155.520000 (LVDS, +-50 ppm pull; check code)')
+    for a, z in (('XO_P', 'GTS_REFCLK_P'), ('XO_N', 'GTS_REFCLK_N'), ('VCXO_P', 'GTS_RXREF_P'), ('VCXO_N', 'GTS_RXREF_N')):
+        b.c('100n', a, z)
+    b.r('10k', 'XO_OE', '+3V3_XO')
+    b.fb('+3V3', '+3V3_XO'); b.decouple('+3V3_XO', 2, 1)
+    b.r('10k', 'VCXO_PWM', 'VCXO_RC'); b.c('1u', 'VCXO_RC')
+    b.r('10k', 'VCXO_RC', 'VCXO_VC'); b.c('1u', 'VCXO_VC')
+    sfp_cage(b, 'OLT', 'OLT_TD', 'OLT_RD')
+    sfp_cage(b, 'ETH', 'ETH_TD', 'ETH_RD')
+    optics(b, 'ONU_TX', 'ONU_RX', 'BEN')
+    b.r('4.7k', 'ONU_SCL', '+3V3'); b.r('4.7k', 'ONU_SDA', '+3V3')
+    b.r('0', 'BEN_IO', 'LD_BEN', dnp=True)   # fallback if the GTS TX cannot drive BEN DC-coupled: fit it, remove the LVDS receiver
+    b.block = 'cutoff'   # laser off after ~0.14-0.35 ms of continuous burst enable, without the FPGA (GPON burst <= 125 us)
+    b.r('27k', 'LD_BEN', 'CUT_RC'); b.c('10n', 'CUT_RC')
+    b.add('D', 'Device', 'D_Schottky', 'BAT54WS', 'Diode_SMD:D_SOD-323', {'A': 'CUT_RC', 'K': 'LD_BEN'}, MPN='BAT54WS')
+    b.add('U', '74xGxx', '74LVC1G17', 'SN74LVC1G17DBVR', 'Package_TO_SOT_SMD:SOT-23-5',
+          {'2': 'CUT_RC', '4': 'BURST_CUT', 'VCC': '+3V3', 'GND': 'GND'}, MPN='SN74LVC1G17DBVR')
+    b.decouple('+3V3', 1)
+    b.add('U', '74xGxx', '74LVC1G32', 'SN74LVC1G32DBVR', 'Package_TO_SOT_SMD:SOT-23-5',
+          {'1': 'LASER_DIS_FPGA', '2': 'BURST_CUT', '4': 'LASER_DIS', 'VCC': '+3V3', 'GND': 'GND'}, MPN='SN74LVC1G32DBVR')
+    b.decouple('+3V3', 1)
+    b.r('4.7k', 'LASER_DIS_FPGA', '+3V3')   # FPGA unconfigured: laser off
+    b.block = 'mech'
+    for _ in range(2):
+        b.add('H', 'Mechanical', 'MountingHole', 'M3', 'MountingHole:MountingHole_3.2mm_M3', {})
     return b

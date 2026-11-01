@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
-"""Initial PCB of both bridge boards: placement, outline, rules, BGA fanout, planes."""
+"""Initial PCB of every board: placement, outline, rules, BGA fanout, planes."""
 import json, math, os, re, sys
 import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
-from boards import onu, olt, ECP5_BALLS, ball_xy
+from boards import ECP5_BALLS, ball_xy
 from kisch import uid
 from paths import LIB, KI_LIB, board_dir
 
@@ -90,6 +90,7 @@ class Layout:
             for k, v in part.fields.items():
                 fp.SetField(k, v)
             finish_footprint(fp)
+            fp.SetDNP(part.dnp)
             units = {pin[0] for pin in part.pins}
             for pad in fp.Pads():
                 num = pad.GetNumber()
@@ -307,18 +308,19 @@ def write_project(path, bd):
         'track_widths': [0.1, 0.15, 0.2, 0.3, 0.5], 'via_dimensions': [{'diameter': VIA_D, 'drill': VIA_HOLE}]}}
     power = [n for n in bd.nets() if n.startswith(POWER_PREFIX)]
     # BGA rails without a plane thread the via field: 0.35 mm channels fit 0.15 mm at 0.1 clearance
-    ecp5 = next(p for p in bd.parts if p.value.startswith('LFE5'))
-    rails = sorted({n for n in ecp5.conns.values() if n.startswith('+')} - set(PLANE_NETS))
+    ecp5 = next((p for p in bd.parts if p.value.startswith('LFE5')), None)
+    rails = sorted({n for n in ecp5.conns.values() if n.startswith('+')} - set(PLANE_NETS)) if ecp5 else []
     sub = [n for n in SUB_RAILS if n in power]
     power = [n for n in power if n not in rails and n not in sub]
     pro['net_settings'] = {'meta': {'version': 4}, 'net_colors': None, 'netclass_assignments': None,
                            'classes': [cls('Default', 0.1, 0.1), cls('Power', 0.3, 0.1), cls('Rail', 0.15, 0.1), cls('Sub', 0.2, 0.1),
-                                       cls('SerDes', 0.2, 0.1), cls('HV', 0.2, HV_CLEAR)],
+                                       cls('SerDes', bd.serdes_w, 0.1), cls('HV', 0.2, HV_CLEAR)],
                            'netclass_patterns': [{'netclass': 'Power', 'pattern': n} for n in sorted(power)] +
                                                 [{'netclass': 'Rail', 'pattern': n} for n in rails] +
                                                 [{'netclass': 'Sub', 'pattern': n} for n in sub] +
                                                 [{'netclass': 'SerDes', 'pattern': p} for p in
-                                                 ('TX0_*', 'RX0_*', 'BEN_*', 'ONU_TD_*', 'ONU_RD_*', 'ONU_BEN_*', 'LD_*', 'TIA_*', 'RIN_*')] +
+                                                 ('TX0_*', 'RX0_*', 'BEN_*', 'ONU_TD_*', 'ONU_RD_*', 'ONU_BEN_*', 'LD_*', 'TIA_*', 'RIN_*',
+                                                  'ONU_TX_*', 'ONU_RX_*', 'OLT_TD_*', 'OLT_RD_*', 'ETH_TD_*', 'ETH_RD_*', 'GTS_*')] +
                                                 [{'netclass': 'HV', 'pattern': HV_PREFIX + '*'}]}
     json.dump(pro, open(path, 'w'), indent=2, sort_keys=True)
 
@@ -373,9 +375,10 @@ def plane_vias(lay, clear=0.12):
             return False
         if any(z.Outline().Contains(V(x, y), -1, mm(VIA_D / 2 + clear)) for z in keepouts):
             return False
+        return free(x, y, VIA_D / 2, net, side, True) and stub_free(px, py, x, y, net, side)
+    def stub_free(px, py, x, y, net, side):
         n = max(2, int(math.hypot(x - px, y - py) / 0.05))
-        return free(x, y, VIA_D / 2, net, side, True) and \
-            all(free(px + (x - px) * k / n, py + (y - py) * k / n, 0.125, net, side, False) for k in range(n + 1))
+        return all(free(px + (x - px) * k / n, py + (y - py) * k / n, 0.125, net, side, False) for k in range(n + 1))
     added, missed = 0, []
     via_in_pad = {(fp.GetReference(), p.GetNumber()) for fp in lay.pcb.GetFootprints() for p in fp.Pads() if p.HasHole()}
     pads = [(fp, p) for fp in lay.pcb.GetFootprints() if fp.GetReference() != lay.bga for p in fp.Pads()
@@ -387,13 +390,14 @@ def plane_vias(lay, clear=0.12):
         bb = p.GetBoundingBox()
         half = max(pcbnew.ToMM(bb.GetWidth()), pcbnew.ToMM(bb.GetHeight())) / 2
         away = math.atan2(py - cy, px - cx) if (px, py) != (cx, cy) else 0.0
+        axis = 0.0 if bb.GetWidth() >= bb.GetHeight() else math.pi / 2   # along the pad: fine-pitch connector rows
+        angles = [away + (k + 1) // 2 * (1 if k % 2 else -1) * math.pi / 8 for k in range(16)] + [axis, axis + math.pi]
+        side = 'B' if fp.IsFlipped() else 'F'
         done = False
         for dist in (half + 0.35, half + 0.6, half + 0.9, half + 1.2, half + 1.6, half + 2.5, half + 3.5, half + 5.0):
-            for k in range(16):
-                a = away + (k + 1) // 2 * (1 if k % 2 else -1) * math.pi / 8
+            for a in angles:
                 x, y = px + dist * math.cos(a), py + dist * math.sin(a)
                 x, y = round(x / 0.05) * 0.05, round(y / 0.05) * 0.05
-                side = 'B' if fp.IsFlipped() else 'F'
                 if ok(px, py, x, y, net, side):
                     layer = pcbnew.B_Cu if side == 'B' else pcbnew.F_Cu
                     lay.track(net, [(px, py), (x, y)], 0.25, layer, locked=True)  # KRT never rips locked copper
@@ -405,6 +409,13 @@ def plane_vias(lay, clear=0.12):
                     break
             if done:
                 break
+        if not done:   # no room for its own via: a via of the net within reach, the stub alone
+            near = sorted((math.hypot(g[0][0] - px, g[0][1] - py), g[0]) for kind, g, n, _ in obst if kind == 'circle' and n == net)
+            reuse = next((xy for d, xy in near if d < half + 1.6 and stub_free(px, py, *xy, net, side)), None)
+            if reuse:
+                lay.track(net, [(px, py), reuse], 0.25, pcbnew.B_Cu if side == 'B' else pcbnew.F_Cu, locked=True)
+                obst.append(('seg', ((px, py), reuse, 0.125), net, side))
+                done = True
         if not done and plane_of(net, px, py):
             missed.append(f'{fp.GetReference()}.{p.GetNumber()}')
     return added, missed

@@ -45,8 +45,9 @@ class Part:
         self.pins = pins(sym)
 
 class Board:
-    def __init__(self, name):
+    def __init__(self, name, title=None):
         self.name, self.parts, self.count, self.block = name, [], collections.Counter(), 'misc'
+        self.title = title or f'{name.upper()} SerDes bridge for DE25-Nano'
 
     def add(self, prefix, lib, symname, value, footprint, conns, sym=None, dnp=False, on_board=True, **fields):
         """conns: {pin number or unique pin name: net}; other pins get a no-connect flag."""
@@ -162,7 +163,7 @@ def write_schematic(board, path, power_nets, paper=(1189, 841)):
     height = max(paper[1], y + 40)
     doc = [S('kicad_sch'), [S('version'), 20250114], [S('generator'), 'eeschema'], [S('generator_version'), '10.0'],
            [S('uuid'), root], [S('paper'), 'User', paper[0], round(height)],
-           [S('title_block'), [S('title'), f'{board.name.upper()} SerDes bridge for DE25-Nano'],
+           [S('title_block'), [S('title'), board.title],
             [S('comment'), 1, 'SPDX-License-Identifier: CERN-OHL-S-2.0']],
            [S('lib_symbols')] + lib_syms] + items + \
           [[S('sheet_instances'), [S('path'), '/', [S('page'), '1']]], [S('embedded_fonts'), S('no')]]
