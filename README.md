@@ -59,8 +59,9 @@ OLTs, our OLT sends each of its PLOAMs 3 times. OMCI over GEM both ways:
 downstream fragments of the OMCI Port-ID to the CPU, CPU packets upstream in
 the default allocation (OMCC), fragmented to the grant. Downstream AES-128
 counter-mode decryption of the encrypted Port-IDs with the key switch at the
-OLT's superframe, and downstream FEC frames (parity skipped, no correction yet),
-checked against the G.984.3 golden vectors (A.2.2, A.2.3 with FEC, A.3).
+OLT's superframe, and downstream FEC: RS(255,239) decoding, up to 8 byte errors
+corrected per codeword, with the counters of the OMCI FEC PM; checked against
+the G.984.3 golden vectors (A.2.2, A.2.3 with FEC, A.3).
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane
@@ -73,7 +74,7 @@ detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
 optics pins with the laser held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed: 9.2K ALMs, setup slack +0.061 ns
+HSMC card pins placed: 10.7K ALMs, setup slack +0.206 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 
 ## License

@@ -24,6 +24,7 @@ case class GemDecryptBench() extends Component {
     val late = out Bool ()
   }
   deframer.io.line := io.line
+  deframer.io.simPublic()
   decrypt.io.header << deframer.io.gemHeader
   decrypt.io.input << deframer.io.gem
   decrypt.io.inputCut := deframer.io.gemCut
@@ -184,7 +185,7 @@ object GemDecryptTest extends App {
 
     // FEC on: the A.2.3 frame (its superframe again: the counter takes it once two frames agree), then traffic across
     // the parity bytes of every codeword
-    for (s <- goldenFrame - 2 until goldenFrame) send(frame(s, goldenKey, 158, Nil))
+    for (s <- goldenFrame - 2 until goldenFrame) send(frame(s, goldenKey, 158, Nil, fec = true)) // FEC on after two frames
     got.clear()
     val latesBefore = lates
     val fecFrame = frame(goldenFrame, goldenKey, fecAt, fecPlain.map(Frag(0x123, _, true)), fec = true)
@@ -195,9 +196,17 @@ object GemDecryptTest extends App {
     check(got.toSeq == fecPlain.map((0x123, _)), "A.2.3 frame with FEC: plain text out")
     got.clear()
     val fecTraffic = traffic.take(traffic.length * 3 / 4)
-    send(frame(goldenFrame + 1, goldenKey, 158, fecTraffic.toSeq, fec = true))
+    // 8 byte errors in every third codeword (PSync spared): all corrected
+    val damaged = frame(goldenFrame + 1, goldenKey, 158, fecTraffic.toSeq, fec = true).toArray
+    val codewords = (0 until frameBytes by 255).filter(_ / 255 % 3 == 1)
+    for (c <- codewords; p <- rng.shuffle((c until scala.math.min(c + 255, frameBytes)).toList).take(8)) damaged(p) = damaged(p) ^ (1 + rng.nextInt(255))
+    val corrected0 = dut.deframer.io.fecCorrectedBytes.toLong
+    send(damaged.toSeq)
     check(lates == latesBefore && got.toSeq == fecTraffic.map(f => (f.port, f.data)),
-      s"${fecTraffic.length} fragments back to back with FEC: all decrypted")
+      s"${fecTraffic.length} fragments back to back with FEC, ${codewords.length * 8} byte errors: all decrypted")
+    send(frame(goldenFrame + 2, goldenKey, 158, Nil, fec = true)) // the last codewords out
+    check(dut.deframer.io.fecCorrectedBytes.toLong - corrected0 == codewords.length * 8 && dut.deframer.io.fecUncorrectable.toLong == 0,
+      s"FEC: ${codewords.length * 8} bytes corrected, none uncorrectable")
   }
   println("PASS GemDecryptTest")
 }

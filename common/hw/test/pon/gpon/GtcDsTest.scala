@@ -216,7 +216,7 @@ object GtcDsTest extends App {
     cd.waitSampling()
     dut.io.errorMask #= 0
     cd.waitSamplingWhere(frameStarts == 13)
-    cd.waitSampling(100) // the BIP covering the error is byte 21 of the next frame
+    cd.waitSampling(500) // the BIP covering the error: byte 21 of the next frame, after the FEC decoder
     check(d.io.bipErrors.toLong == 1 && d.io.hecErrors.toLong == 1 && d.io.synced.toBoolean,
       s"loopback k=$bitDelay: injected bit error counted once by BIP and HEC, still in sync " +
         s"(bip ${d.io.bipErrors.toLong}, hec ${d.io.hecErrors.toLong}, synced ${d.io.synced.toBoolean})")

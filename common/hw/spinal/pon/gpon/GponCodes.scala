@@ -86,6 +86,9 @@ object GponCodes {
     }._1
     val rsGenerator = Seq(0x3B, 0x24, 0x32, 0x62, 0xE5, 0x29, 0x41, 0xA3, 0x08, 0x1E, 0xD1, 0x44, 0xBD, 0x68, 0x0D, 0x3B) // g0-g15
 
+    val alphaPow: Seq[Int] = Seq.iterate(1, 255)(gfMul(_, 2)) // alpha^i, alpha = 2
+    def gfInv(x: Int): Int = if (x == 0) 0 else alphaPow((255 - alphaPow.indexOf(x)) % 255)
+
     /** RS(255,239) parity of a codeword's data bytes (short: zero pad implied), sent first first (G.984.3 A.3). */
     def rsParity(data: Seq[Int]): Seq[Int] = {
       val p = Array.fill(16)(0)

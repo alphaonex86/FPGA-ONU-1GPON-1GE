@@ -23,6 +23,7 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
     val omciValid = in Bool ()
     val errors = in Bits (8 bits) // pulses: hwLost, jobLost, allocFull, fecRequested, late, gem, encryptedFull, keyLate
     val bipErrors = in UInt (32 bits)
+    val fec = in Vec (UInt(32 bits), 4) // codewords, corrected bytes, corrected codewords, uncorrectable codewords
     val irq = out Bool ()
   }
   val busif = BusInterface(io.apb, SizeMapping(0, 256))
@@ -120,6 +121,10 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
 
   val BIP_ERRORS = busif.newReg("Downstream BIP errors (bits), for REI")
   BIP_ERRORS.field(UInt(32 bits), AccessType.RO, 0, "count")(SymbolName("count")) := io.bipErrors
+  for ((name, i) <- Seq("CODEWORDS", "CORRECTED_BYTES", "CORRECTED_CODEWORDS", "UNCORRECTABLE").zipWithIndex) {
+    val reg = busif.newReg("Downstream FEC count (OMCI FEC PM)")(SymbolName(s"FEC_$name"))
+    reg.field(UInt(32 bits), AccessType.RO, 0, "count")(SymbolName("count")) := io.fec(i)
+  }
 
   busif.accept(DocCHeader("onu_regs", "ONU")) // onu_regs.h next to the Verilog
 }
