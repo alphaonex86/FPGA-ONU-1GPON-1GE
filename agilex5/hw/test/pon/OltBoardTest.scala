@@ -15,6 +15,7 @@ object OltBoardTest extends App {
   val EVENTS = BOARD + 16
   val IRQ_ENABLE = BOARD + 20
   val UO_0 = 0x04 // OltRegs, read-write
+  val GEMQ_STATUS = 0x214
 
   SimConfig.compile(OltBoardCore()).doSim { dut =>
     val io = dut.io
@@ -72,6 +73,7 @@ object OltBoardTest extends App {
     val SLVERR = 2
 
     check(read(UO_0)._2 == SLVERR, "MAC register while the lane is down: error answer, no hang")
+    check(read(GEMQ_STATUS)._2 == SLVERR && read(0x300)._2 == SLVERR, "GEM queues while down, unmapped 0x300: errors")
     check(io.sfp.txDisable.toBoolean, "OLT laser off at power-up")
     check((read(STATUS)._1 & 8) == 0, "STATUS.alive low")
 
@@ -80,6 +82,7 @@ object OltBoardTest extends App {
     check((read(STATUS)._1 & 8) != 0, "STATUS.alive once the lane is ready")
     check((read(GTS_STATUS)._1 & 4) != 0, "GTS_STATUS.txReady")
     check(write(UO_0, 0x12345678L) == 0 && read(UO_0) == (0x12345678L, 0), "MAC register written and read across the clocks")
+    check(read(GEMQ_STATUS) == (512L, 0), "GEM queues: TX queue empty, 512 words")
 
     check(write(SFP_CTRL, 0x4) == 0, "SFP_CTRL: laser on, RS0 high")
     mgmt.waitSampling(2)

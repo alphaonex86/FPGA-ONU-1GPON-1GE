@@ -98,11 +98,11 @@ case class BoardRegs() extends Component {
 }
 
 /** OLT side of the board without the vendor blocks: HPS lightweight bridge (AXI4) -> APB3, 0x000 OltMac registers
-  * (across to the upstream domain; an error answer while the PON clocks are down, so the CPU never hangs), 0x100
-  * board registers; single 32-bit accesses only (readl/writel). The lane's tx clock (311.04 MHz) and half clock clock
-  * the MAC, reset until the lane is ready. */
+  * (across to the upstream domain), 0x100 board registers, 0x200 GEM CPU queues (OMCI); single 32-bit accesses only
+  * (readl/writel). MAC and queues answer an error while the PON clocks are down, so the CPU never hangs. The lane's
+  * tx clock (311.04 MHz) and half clock clock the MAC, reset until the lane is ready; the queues reset with it. */
 case class OltBoardCore() extends Component {
-  val bridge = Axi4SharedToApb3Bridge(addressWidth = 9, dataWidth = 32, idWidth = 4)
+  val bridge = Axi4SharedToApb3Bridge(addressWidth = 10, dataWidth = 32, idWidth = 4)
   val io = new Bundle {
     val axi = slave(Axi4(bridge.io.axi.config))
     val dsClk, usClk = in Bool ()
@@ -111,7 +111,7 @@ case class OltBoardCore() extends Component {
     val rxWord = in Bits (8 bits)
     val refclkFail = in Bits (8 bits)
     val sfp = master(SfpPins())
-    val ponIrq, boardIrq = out Bool ()
+    val ponIrq, boardIrq, gemIrq = out Bool ()
   }
   bridge.io.axi << io.axi.toShared()
   val apb = bridge.io.apb
@@ -144,27 +144,36 @@ case class OltBoardCore() extends Component {
     mac.io.usReset := usReset
     lanes.io.oltDsLine := mac.io.dsLine
     mac.io.usLine := lanes.io.oltUsLine
-    mac.io.gem.valid := False
-    mac.io.gem.payload.assignDontCare()
   }
+  val queuesDomain = ClockDomain.current.copy(reset = ClockDomain.current.readResetWire || RegNext(!board.io.alive).init(True))
+  val queues = queuesDomain(gpon.GemCpuQueues(dsDomain, usDomain))
+  pon.mac.io.gem << queues.io.tx
+  queues.io.rx << pon.mac.io.usGem
+  queues.io.rxCut := pon.mac.io.usGemCut
+  io.gemIrq := queues.io.irq
   board.io.burstReset := pon.mac.io.rxReset
   io.ponIrq := BufferCC(pon.mac.io.irq, False)
 
   val cc = Apb3CC(pon.mac.io.apb.config, ClockDomain.current, usDomain)
   pon.mac.io.apb <> cc.io.output
-  val toMac = !apb.PADDR(8)
-  val macUp = board.io.alive
-  for (slave <- Seq(cc.io.input, board.io.apb)) {
+  val alive = board.io.alive
+  val slaves = Seq(cc.io.input -> alive, board.io.apb -> True, queues.io.apb -> alive) // 256 bytes each, then errors
+  val index = apb.PADDR(9 downto 8)
+  apb.PREADY := True
+  apb.PRDATA := 0
+  val error = CombInit(True)
+  for (((slave, up), k) <- slaves.zipWithIndex) {
     slave.PADDR := apb.PADDR.resized
     slave.PENABLE := apb.PENABLE
     slave.PWRITE := apb.PWRITE
     slave.PWDATA := apb.PWDATA
+    slave.PSEL(0) := apb.PSEL(0) && index === k && up
+    when(index === k) {
+      apb.PREADY := slave.PREADY || !up
+      apb.PRDATA := slave.PRDATA
+      error := slave.PSLVERROR || !up
+    }
   }
-  cc.io.input.PSEL(0) := apb.PSEL(0) && toMac && macUp
-  board.io.apb.PSEL(0) := apb.PSEL(0) && !toMac
-  apb.PREADY := toMac ? (cc.io.input.PREADY || !macUp) | board.io.apb.PREADY
-  apb.PRDATA := toMac ? cc.io.input.PRDATA | board.io.apb.PRDATA
-  val error = toMac ? (cc.io.input.PSLVERROR || !macUp) | board.io.apb.PSLVERROR
   apb.PSLVERROR := RegNextWhen(error, apb.PSEL(0) && apb.PENABLE && apb.PREADY) init (False) // the bridge reads it after the access
 }
 
@@ -178,13 +187,14 @@ case class OltBoard() extends Component {
     val olt_rx_p, olt_rx_n = in Bool ()
     val lw = slave(Axi4(core.io.axi.config))
     val sfp = master(SfpPins())
-    val ponIrq, boardIrq = out Bool ()
+    val ponIrq, boardIrq, gemIrq = out Bool ()
   }
   noIoPrefix()
   core.io.axi <> io.lw
   io.sfp <> core.io.sfp
   io.ponIrq := core.io.ponIrq
   io.boardIrq := core.io.boardIrq
+  io.gemIrq := core.io.gemIrq
 
   val srcss = vendor.GtsSrcss(4)
   srcss.i_src_rs_priority := 0
@@ -224,5 +234,5 @@ case class OltBoard() extends Component {
 }
 
 object OltBoardVerilog extends App {
-  SpinalConfig(targetDirectory = "out/rtl").generateVerilog(OltBoard()) // + board_regs.h, olt_regs.h
+  SpinalConfig(targetDirectory = "out/rtl").generateVerilog(OltBoard()) // + board_regs.h, olt_regs.h, gem_queues.h
 }

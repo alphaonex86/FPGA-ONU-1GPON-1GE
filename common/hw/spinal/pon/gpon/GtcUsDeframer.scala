@@ -56,6 +56,7 @@ case class GtcUsDeframer() extends Component {
     val gem = master Flow (Fragment(UsGemByte()))
     val hecErrors = out UInt (32 bits)
     val gemCuts = out UInt (32 bits) // GEM fragments cut by the allocation end
+    val gemCut = out Bool ()         // with io.gem: the open fragment was cut
   }
 
   // delimiter search, registered: the burst is processed from `history`, one byte behind the line
@@ -233,5 +234,6 @@ case class GtcUsDeframer() extends Component {
   val gemCut = RegNext(delineator.io.cut) init (False)
   val gemCuts = Reg(UInt(32 bits)) init (0)
   io.gemCuts := gemCuts
+  io.gemCut := gemCut
   gemCuts := gemCuts + gemCut.asUInt
 }

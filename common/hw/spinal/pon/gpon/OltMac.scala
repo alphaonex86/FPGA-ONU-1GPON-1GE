@@ -25,6 +25,7 @@ case class OltMac(maxOnus: Int = 32, maxTconts: Int = 64) extends Component {
     val rxReset = out Bool () // to the OLT optics' burst reset pin
     val dbru = master Flow (UsDbru())
     val usGem = master Flow (Fragment(UsGemByte()))
+    val usGemCut = out Bool () // with usGem: the open fragment was cut
   }
   val usDomain = ClockDomain(io.usClk, io.usReset, config = ClockDomain.current.config)
   usDomain.setSynchronousWith(ClockDomain.current)
@@ -71,6 +72,7 @@ case class OltMac(maxOnus: Int = 32, maxTconts: Int = 64) extends Component {
     val bwmapCommit = scheduler.io.bwmapCommit.stage()
     io.dbru << receiver.io.dbru
     io.usGem << receiver.io.gem
+    io.usGemCut := receiver.io.gemCut
     regs.io.hecErrors := receiver.io.hecErrors
     regs.io.gemCuts := receiver.io.gemCuts
   }

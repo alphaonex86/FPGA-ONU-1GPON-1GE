@@ -57,7 +57,9 @@ HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 OLT board top (`agilex5/hw/spinal/pon/OltBoard.scala`): OLT MAC on its GTS lane
 (2x oversampled upstream), HPS lightweight bridge to the MAC and board registers
-(GTS reset/status, SFP cage pins, module I2C; `board_regs.h`), checked in
+(GTS reset/status, SFP cage pins, module I2C; `board_regs.h`) and GEM CPU
+queues for OMCI (whole packets downstream, upstream fragments with descriptors;
+`gem_queues.h`), checked in
 simulation and fit with timing met on the DE25-Standard FPGA
 (`agilex5/gts/fit.sh out/olt_board OltBoard`).
 
