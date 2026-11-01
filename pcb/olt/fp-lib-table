@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "bridge")(type "KiCad")(uri "${KIPRJMOD}/../lib/bridge.pretty")(options "")(descr "Bridge boards"))
+)

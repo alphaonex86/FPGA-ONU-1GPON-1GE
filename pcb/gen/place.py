@@ -138,8 +138,12 @@ def onu_layout():
     lay = Layout(bd, 64, 66)
     common(lay, lay.h)
     lay.place(refs(lay, 'VCXO_LVDS_3225')[0], 42.0, 37.5)
-    lay.keepout['F'].append((14, 37, 40, 62))   # RTL8290B + BOSA, footprint once traced
-    lay.keepout['B'].append((14, 37, 40, 62))
+    lay.place(refs(lay, 'BOSA_GPON')[0], 49.0, 49.5)          # fiber out over the east edge
+    lay.place(refs(lay, 'SY88236L')[0], 39.5, 49.5)           # MOD/BIAS/MD side facing the TX leads
+    lay.place(refs(lay, 'SN65LVDT2DBV')[0], 36.0, 56.0)       # at BEN+ (south-west corner)
+    lay.place(refs(lay, 'TPS61391')[0], 60.5, 33.0)           # north-east of the RX leads, bottom free (thermal vias)
+    lay.place(refs(lay, 'D_Schottky')[0], 60.5, 36.6)
+    lay.place(refs(lay, 'AD5593R')[0], 30.0, 58.0)
     return lay
 
 
@@ -195,6 +199,7 @@ def serdes(lay, olt):
         lay.track('BEN_P', [(w8[0] + 0.6, w8[1] + 0.6), (w8[0] + 0.6, ybot), bpe], SERDES_W)
         lay.track('BEN_N', [w9, (w9[0] + 0.4, w9[1] + 0.4)], NECK_W)
         lay.track('BEN_N', [(w9[0] + 0.4, w9[1] + 0.4), (w9[0] + 0.4, ybot), bne], SERDES_W)
+        optics_pairs(lay)
     # TX0 neck through the Y4 site: P at x-0.2, N at x+0.2 of the site
     site = (w4[0], g('Y5')[1])
     pn = (site[0] - 0.2, w4[1] + 0.2), (site[0] + 0.2, w5[1] + 0.6)
@@ -206,6 +211,26 @@ def serdes(lay, olt):
         lay.track('TX0_P', [tx_end[0], (tx_end[0][0], tx_end[0][1] + 1.0)], SERDES_W)
         lay.track('TX0_N', [tx_end[1], (tx_end[1][0], tx_end[1][1] + 1.0)], SERDES_W)
     return {'W4', 'W5', 'Y5', 'Y6', 'Y7', 'Y8', 'W8', 'W9'}
+
+def hand_pair(lay, net, pts, neck):
+    """F.Cu route, the last `neck` segments at the QFN pin width; its corridor kept free of passives."""
+    for k, (a, b) in enumerate(zip(pts, pts[1:])):
+        lay.track(net, [a, b], NECK_W * 2 if k >= len(pts) - 1 - neck else SERDES_W)
+        lay.keepout['F'].append((min(a[0], b[0]) - 0.45, min(a[1], b[1]) - 0.45, max(a[0], b[0]) + 0.45, max(a[1], b[1]) + 0.45))
+
+def optics_pairs(lay):
+    """SerDes caps -> SY88236L: TD to DIN on its west side (P/N swapped there), RD from ROUT on its north side,
+    1 mm apart and 45 degree corners."""
+    u = refs(lay, 'SY88236L')[0]
+    pin = lambda n: lay.pad_xy(u, n)
+    cap = lambda net: pad_of_net(lay, part_on(lay, net, 'C'), net)
+    tp, tn, a, b = cap('ONU_TD_P'), cap('ONU_TD_N'), pin('7'), pin('6')
+    hand_pair(lay, 'ONU_TD_P', [tp, (tp[0], a[1] - 1.0), (tp[0] + 1.0, a[1]), (a[0] - 0.6, a[1]), a], 1)
+    hand_pair(lay, 'ONU_TD_N', [tn, (tn[0], a[1] - 2.0), (tn[0] + 1.0, a[1] - 1.0), (b[0] - 1.3, a[1] - 1.0), (b[0] - 0.8, b[1]), b], 2)
+    rp, rn, c, d = cap('ONU_RD_P'), cap('ONU_RD_N'), pin('31'), pin('30')
+    yp, yn = rp[1] + 1.5, rn[1] + 1.1
+    hand_pair(lay, 'ONU_RD_P', [rp, (rp[0], yp), (rp[0] + c[1] - 1.56 - yp, c[1] - 1.56), (c[0], c[1] - 1.56), c], 1)
+    hand_pair(lay, 'ONU_RD_N', [rn, (rn[0], yn), (rn[0] + c[1] - 2.56 - yn, c[1] - 2.56), (d[0], c[1] - 2.56), d], 1)
 
 def escape(lay, net, steps, layer):
     """A ball boxed in by its neighbours' dogbones: from its (south-west) dogbone via, relative

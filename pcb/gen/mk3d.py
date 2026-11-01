@@ -7,7 +7,7 @@ come from the KiCad footprint itself; heights marked ~ are typical values, not a
 """
 import math, os
 import pcbnew
-from pcbgen import FP, ROOT
+from pcbgen import ROOT, fp_dir
 
 OUT = os.path.join(ROOT, 'lib', '3d')
 BLACK, SUBSTRATE, SOLDER, GOLD = (0.12, 0.12, 0.13), (0.30, 0.25, 0.12), (0.78, 0.78, 0.80), (0.86, 0.66, 0.22)
@@ -110,7 +110,7 @@ class Step:
 
 def pads(lib, name):
     """Footprint pads in model coordinates (KiCad y points down, the model's y up)."""
-    fp = pcbnew.FootprintLoad(f'{FP}/{lib}.pretty', name)
+    fp = pcbnew.FootprintLoad(fp_dir(lib), name)
     if fp is None:
         raise SystemExit(f'no footprint {lib}:{name}')
     return [(p.GetNumber(), pcbnew.ToMM(p.GetPosition().x), -pcbnew.ToMM(p.GetPosition().y),
@@ -157,9 +157,37 @@ def sfp_cage(s):
         else:   # connector alignment pegs
             s.solid(prism(circle(x, y, drill / 2 * 0.9, 12), -1.6, 0.0), BLACK)
 
+def along_x(y, z, r, x0, x1):
+    """Cylinder on the x axis: a z cylinder with its axes turned (x, y, z) -> (z, x, y), handedness kept."""
+    return [[(c, a, b) for a, b, c in f] for f in prism(circle(y, z, r), x0, x1)]
+
+def along_y(x, z, r, y0, y1):
+    return [[(b, c, a) for a, b, c in f] for f in prism(circle(z, x, r), y0, y1)]
+
+def strip(x0, y0, x1, y1, w, z0, z1):
+    """Flat lead from (x0, y0) to (x1, y1)."""
+    dx, dy = x1 - x0, y1 - y0
+    k = w / 2 / math.hypot(dx, dy)
+    n = (-dy * k, dx * k)
+    return prism([(x0 - n[0], y0 - n[1]), (x1 - n[0], y1 - n[1]), (x1 + n[0], y1 + n[1]), (x0 + n[0], y0 + n[1])], z0, z1)
+
+def bosa(s):
+    """~ GPON BOSA lying on the board (pcb/gen/mksym.py footprint): TX TO-56 at the back, RX TO-46 on the side."""
+    zc, lead = 3.5, 0.45
+    s.solid(along_x(0, zc, 2.8, 0.0, 3.0), STEEL)                  # TX can
+    s.solid(along_x(0, zc, 3.4, 3.0, 12.0), STEEL)                 # housing
+    s.solid(along_x(0, zc, 2.0, 12.0, 14.0), STEEL)                # receptacle
+    s.solid(along_x(0, zc, 1.6, 14.0, 22.0), BLACK)                # fiber boot, over the board edge
+    s.solid(along_y(6.0, zc, 2.35, 3.0, 7.0), STEEL)               # RX can
+    for num, x, y, *_ in pads('bridge', 'BOSA_GPON'):
+        s.solid(prism(circle(x, y, lead / 2, 8), -1.6, zc), GOLD)
+        to = (0.0, y * 0.5) if num[0] == 'T' else (6.0 + (x - 6.0) * 0.4, 7.0)
+        s.solid(strip(x, y, *to, lead, zc - lead / 2, zc + lead / 2), GOLD)
+
 MODELS = {'Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm': cabga381,
           'Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm': sit9121,
-          'Connector_SFP_and_Cage': sfp_cage}
+          'Connector_SFP_and_Cage': sfp_cage,
+          'BOSA_GPON': bosa}
 
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)

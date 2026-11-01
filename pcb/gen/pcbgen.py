@@ -17,7 +17,11 @@ BGA_C = (32.0, 26.0)
 VIA_D, VIA_HOLE = 0.45, 0.2
 POWER_PREFIX = ('+', 'GND')
 PLANE_NETS = ('GND', '+3V3', '+1V1')   # In1 GND, In2 +3V3 with a +1V1 island
+HV_PREFIX, HV_CLEAR = 'HV_', 0.2   # APD bias nets, up to 55 V
 SUB_RAILS = ('+1V1_SD', '+2V5')   # SerDes 1.1 V (~0.2 A) and VCCAUX 2.5 V (~50 mA): 0.2 mm, ~17 mV over 35 mm
+
+def fp_dir(lib):
+    return f'{ROOT}/lib/{lib}.pretty' if lib == 'bridge' else f'{FP}/{lib}.pretty'
 
 def unconnected_name(ref, part, num, multi_unit):
     unit, name = next(((p[0], p[2]) for p in part.pins if p[1] == num), (1, '~'))
@@ -78,7 +82,7 @@ class Layout:
         root = uid(bd.name, 'sheet')
         for ref, part in self.parts.items():
             lib, name = part.footprint.split(':')
-            fp = pcbnew.FootprintLoad(f'{FP}/{lib}.pretty', name)
+            fp = pcbnew.FootprintLoad(fp_dir(lib), name)
             fp.SetFPID(pcbnew.LIB_ID(lib, name))
             fp.SetReference(ref)
             fp.SetValue(part.value)
@@ -309,12 +313,13 @@ def write_project(path, bd):
     power = [n for n in power if n not in rails and n not in sub]
     pro['net_settings'] = {'meta': {'version': 4}, 'net_colors': None, 'netclass_assignments': None,
                            'classes': [cls('Default', 0.1, 0.1), cls('Power', 0.3, 0.1), cls('Rail', 0.15, 0.1), cls('Sub', 0.2, 0.1),
-                                       cls('SerDes', 0.2, 0.1)],
+                                       cls('SerDes', 0.2, 0.1), cls('HV', 0.2, HV_CLEAR)],
                            'netclass_patterns': [{'netclass': 'Power', 'pattern': n} for n in sorted(power)] +
                                                 [{'netclass': 'Rail', 'pattern': n} for n in rails] +
                                                 [{'netclass': 'Sub', 'pattern': n} for n in sub] +
                                                 [{'netclass': 'SerDes', 'pattern': p} for p in
-                                                 ('TX0_*', 'RX0_*', 'BEN_*', 'ONU_TD_*', 'ONU_RD_*', 'ONU_BEN_*')]}
+                                                 ('TX0_*', 'RX0_*', 'BEN_*', 'ONU_TD_*', 'ONU_RD_*', 'ONU_BEN_*', 'LD_*', 'TIA_*', 'RIN_*')] +
+                                                [{'netclass': 'HV', 'pattern': HV_PREFIX + '*'}]}
     json.dump(pro, open(path, 'w'), indent=2, sort_keys=True)
 
 
@@ -359,7 +364,7 @@ def plane_vias(lay, clear=0.12):
                 d = math.hypot(g[0][0] - x, g[0][1] - y) - g[1] - r
             else:
                 d = seg_dist((x, y), g[0], g[1]) - g[2] - r
-            if d < (0.25 + r if via and kind == 'circle' else clear):
+            if d < (0.25 + r if via and kind == 'circle' else clear + (HV_CLEAR - 0.1 if n.startswith(HV_PREFIX) else 0)):
                 return False
         return True
     keepouts = [z for z in lay.pcb.Zones() if z.GetIsRuleArea() and z.GetDoNotAllowVias()]
@@ -372,8 +377,9 @@ def plane_vias(lay, clear=0.12):
         return free(x, y, VIA_D / 2, net, side, True) and \
             all(free(px + (x - px) * k / n, py + (y - py) * k / n, 0.125, net, side, False) for k in range(n + 1))
     added, missed = 0, []
+    via_in_pad = {(fp.GetReference(), p.GetNumber()) for fp in lay.pcb.GetFootprints() for p in fp.Pads() if p.HasHole()}
     pads = [(fp, p) for fp in lay.pcb.GetFootprints() if fp.GetReference() != lay.bga for p in fp.Pads()
-            if not p.HasHole() and p.GetNetname().startswith(POWER_PREFIX)]
+            if not p.HasHole() and p.GetNetname().startswith(POWER_PREFIX) and (fp.GetReference(), p.GetNumber()) not in via_in_pad]
     for fp, p in sorted(pads, key=lambda fp_p: fp_p[1].GetNetname() == 'GND'):  # GND last: the outer pours also tie it
         net = p.GetNetname()
         cx, cy = P(fp.GetPosition())

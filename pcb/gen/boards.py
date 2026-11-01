@@ -47,12 +47,12 @@ def assign_balls(signals, clock):
     return out
 
 class Bridge(Board):
-    def r(self, value, a, b, fp=R0402):
-        return self.add('R', 'Device', 'R', value, fp, {'1': a, '2': b})
+    def r(self, value, a, b, fp=R0402, **fields):
+        return self.add('R', 'Device', 'R', value, fp, {'1': a, '2': b}, **fields)
 
-    def c(self, value, a, b='GND', fp=None):
-        fp = fp or (C0402 if value in ('100n', '1u') else C0603 if value in ('4.7u', '10u') else C0805)
-        return self.add('C', 'Device', 'C', value, fp, {'1': a, '2': b})
+    def c(self, value, a, b='GND', fp=None, **fields):
+        fp = fp or (C0603 if value in ('2.2u', '4.7u', '10u') else C0805 if value == '22u' else C0402)
+        return self.add('C', 'Device', 'C', value, fp, {'1': a, '2': b}, **fields)
 
     def fb(self, a, b):
         return self.add('FB', 'Device', 'FerriteBead_Small', '120R@100MHz', FB0603, {'1': a, '2': b},
@@ -158,6 +158,67 @@ class Bridge(Board):
 def lanes(idx, names):
     return {n: hdr(i) for n, i in zip(names, idx)}
 
+def optics(b):
+    """SY88236L burst laser driver + limiting amp, BOSA, TPS61391 APD bias, AD5593R trim/monitor (I2C 0x10).
+    Set-point resistors are starting values (SY88236L curves): Imod ~23 mA, Ibias max ~40 mA, trimmed by the DACs."""
+    b.block = 'optics'
+    for a, z in (('TX0_P', 'ONU_TD_P'), ('TX0_N', 'ONU_TD_N'), ('ONU_RD_P', 'RX0_P'), ('ONU_RD_N', 'RX0_N')):
+        b.c('100n', a, z)
+    b.r('0', 'BEN_P', 'ONU_BEN_P'); b.r('0', 'BEN_N', 'ONU_BEN_N')  # DC: bursts last up to 125 us
+    b.fb('+3V3', '+3V3_OPT'); b.decouple('+3V3_OPT', 4, 2)
+    b.add('U', LIB, 'SY88236L', 'SY88236LMG', 'Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.1x3.1mm_ThermalVias',
+          {'1': 'GND', '2': 'LOSLVL', '3': 'RX_SD', '4': 'RX_SD', '6': 'ONU_TD_N', '7': 'ONU_TD_P', '9': 'LD_BEN', '10': 'LD_BEN_N',
+           '11': 'LASER_DIS', '12': 'APCSET', '13': 'MODSET', '14': 'BIASMAX', '15': 'MODMON', '23': 'BIASMON', '25': 'APCFAULT_N',
+           '18': 'LD_MODN', '19': 'LD_MODP', '21': 'LD_BIAS', '22': 'LD_MD', '26': 'RSSI', '27': 'RIN_P', '28': 'RIN_N',
+           '30': 'ONU_RD_N', '31': 'ONU_RD_P', '17': '+3V3_OPT', '20': '+3V3_OPT', '32': '+3V3_OPT',
+           '5': 'GND', '8': 'GND', '16': 'GND', '24': 'GND', '29': 'GND', '33': 'GND'},
+          MPN='SY88236LMG')   # DIN P/N swapped for a straight route: ECP5 TXINVPOL = Invert
+    b.r('4.7k', 'LASER_DIS', '+3V3')  # TXDIS high = laser off while the ECP5 is unconfigured
+    b.r('4.7k', 'RX_SD', '+3V3')      # SD mode (LOS/SD_SEL low), open collector, JAM squelches on it
+    b.r('5.1k', 'LOSLVL', '+3V3_OPT')
+    b.add('U', LIB, 'SN65LVDT2DBV', 'SN65LVDT2DBVR', 'Package_TO_SOT_SMD:SOT-23-5',
+          {'A': 'ONU_BEN_P', 'B': 'ONU_BEN_N', 'R': 'LD_BEN', 'VCC': '+3V3_OPT', 'GND': 'GND'}, MPN='SN65LVDT2DBVR')
+    b.decouple('+3V3_OPT', 1)
+    b.r('6.2k', 'LD_BEN_N', 'GND')    # BEN- threshold for LVTTL on BEN+ (datasheet Fig. 2e)
+    for pin, r_gnd, dac in (('APCSET', '20k', 'APC_ADJ'), ('MODSET', '12k', 'MOD_ADJ')):
+        b.r(r_gnd, pin, 'GND'); b.r('10k', pin, dac)
+    b.r('5.6k', 'BIASMAX', 'GND')
+    b.r('3.9k', 'MODMON', 'GND'); b.r('1.5k', 'BIASMON', 'GND'); b.r('1k', 'RSSI', 'GND')   # <= 2.5 V ADC, RSSI < 1.2 V
+    b.r('10', 'LD_MODP', 'LD_K'); b.r('15', 'LD_MODN', '+3V3_OPT'); b.r('10', 'LD_BIAS', 'LD_K')
+    for a, z in (('TIA_P', 'RIN_P'), ('TIA_N', 'RIN_N')):
+        b.c('100n', a, z)
+    b.fb('+3V3_OPT', '+3V3_RX'); b.decouple('+3V3_RX', 2, 1)
+    b.add('U', LIB, 'BOSA_GPON', 'BOSA GPON (X100DG)', 'bridge:BOSA_GPON',
+          {'LD_A': '+3V3_OPT', 'LD_K': 'LD_K', 'MPD_A': 'LD_MD', 'MPD_K': '+3V3_OPT',
+           'VAPD': 'HV_APD', 'VCC': '+3V3_RX', 'OUT+': 'TIA_P', 'OUT-': 'TIA_N', 'GND': 'GND'},
+          MPN='desoldered from an X100DG; pad order to measure')
+    b.block = 'apd'   # Vout = 1.2 V * (1 + 300k/10k) + (1.2 V - APD_ADJ) * 300k/20k: 55 V .. 18 V, 37 V with the DAC off
+    b.fb('+3V3', '+3V3_APD'); b.decouple('+3V3_APD', 1, 1)
+    b.add('U', LIB, 'TPS61391', 'TPS61391RTER', 'Package_DFN_QFN:WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm_ThermalVias',
+          {'VIN': '+3V3_APD', 'EN': '+3V3_APD', '14': '+3V3_APDA', '15': '+3V3_APDA', 'AGND': 'GND', 'GND': 'GND', 'EP': 'GND',
+           'FB': 'APD_FB', 'ISHORT': 'APD_ISHORT', 'CAP': 'APD_CAP', 'SW': 'HV_SW', 'MONIN': 'HV_MONIN', 'APD': 'HV_APD',
+           'MON1': 'APD_MON', 'MON2': 'APD_MON2'}, MPN='TPS61391RTER')
+    b.add('L', 'Device', 'L', '4.7u', 'Inductor_SMD:L_Cenker_CKCS252012', {'1': '+3V3_APD', '2': 'HV_SW'}, MPN='4.7 uH, Isat >= 1 A, 2520')
+    b.add('D', 'Device', 'D_Schottky', 'BAT46WJ', 'Diode_SMD:D_SOD-323F', {'K': 'HV_OUT', 'A': 'HV_SW'}, MPN='BAT46WJ (100 V)')
+    hv = dict(MPN='100 V X7R')
+    b.c('100n', 'HV_OUT', fp=C0603, **hv)
+    b.r('100', 'HV_OUT', 'HV_FILT'); b.c('100n', 'HV_FILT', fp=C0603, **hv)
+    b.r('1k', 'HV_FILT', 'HV_MONIN')
+    b.c('220p', 'HV_APD', fp=C0603, **hv)
+    b.r('300k', 'HV_OUT', 'APD_FB', fp='Resistor_SMD:R_0603_1608Metric')   # 0603: 55 V across it
+    b.r('10k', 'APD_FB', 'GND'); b.r('20k', 'APD_FB', 'APD_ADJ')
+    b.r('33k', 'APD_ISHORT', 'GND')   # 3 mA short limit
+    b.c('47n', 'APD_CAP')
+    b.r('10', '+3V3_APD', '+3V3_APDA'); b.c('2.2u', '+3V3_APDA')
+    b.r('1.5k', 'APD_MON', 'GND'); b.c('10p', 'APD_MON')     # 4:5 mirror: 2 mA APD -> 2.4 V
+    b.r('3.01k', 'APD_MON2', 'GND'); b.c('10p', 'APD_MON2')
+    b.block = 'ddm'
+    b.add('U', 'Analog', 'AD5593R', 'AD5593RBRUZ', 'Package_SO:TSSOP-16_4.4x5mm_P0.65mm',
+          {'~{RESET}': 'DDM_RESET', 'A0': 'GND', 'V_{DD}': '+3V3', 'V_{LOGIC}': '+3V3', 'V_{REF}': 'DDM_VREF', 'GND': 'GND',
+           'SDA': 'ONU_SDA', 'SCL': 'ONU_SCL', 'IO0': 'APC_ADJ', 'IO1': 'MOD_ADJ', 'IO2': 'APD_ADJ', 'IO3': 'BIASMON',
+           'IO4': 'MODMON', 'IO5': 'APD_MON', 'IO6': 'RSSI', 'IO7': 'APCFAULT_N'}, MPN='AD5593RBRUZ')
+    b.r('10k', 'DDM_RESET', '+3V3'); b.c('100n', 'DDM_VREF'); b.decouple('+3V3', 1)
+
 def onu():
     b = Bridge('onu')
     c6 = [10, 11, 13, 15, 20, 22, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
@@ -182,16 +243,7 @@ def onu():
     b.fb('+3V3', '+3V3_XO'); b.decouple('+3V3_XO', 1, 1)
     b.r('10k', 'VCXO_PWM', 'VCXO_RC'); b.c('1u', 'VCXO_RC')
     b.r('10k', 'VCXO_RC', 'VCXO_VC'); b.c('1u', 'VCXO_VC')
-    b.block = 'optics'
-    b.add('U', LIB, 'RTL8290B_BOSA', 'RTL8290B + BOSA', '',
-          {'TD+': 'ONU_TD_P', 'TD-': 'ONU_TD_N', 'BEN+': 'ONU_BEN_P', 'BEN-': 'ONU_BEN_N', 'TX_DIS': 'LASER_DIS',
-           'SCL': 'ONU_SCL', 'SDA': 'ONU_SDA', 'RD+': 'ONU_RD_P', 'RD-': 'ONU_RD_N', 'SD': 'RX_SD',
-           'VCC': '+3V3_OPT', 'GND': 'GND'}, dnp=True, on_board=False)
-    for a, z in (('TX0_P', 'ONU_TD_P'), ('TX0_N', 'ONU_TD_N'), ('ONU_RD_P', 'RX0_P'), ('ONU_RD_N', 'RX0_N')):
-        b.c('100n', a, z)
-    b.r('0', 'BEN_P', 'ONU_BEN_P'); b.r('0', 'BEN_N', 'ONU_BEN_N')  # DC: bursts last up to 125 us
-    b.r('4.7k', 'LASER_DIS', '+3V3')  # laser dark while the ECP5 is unconfigured (polarity to confirm)
-    b.fb('+3V3', '+3V3_OPT'); b.decouple('+3V3_OPT', 2, 2)
+    optics(b)
     b.cable('ONU_PROGRAMN')
     b.holes()
     return b

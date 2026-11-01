@@ -14,7 +14,7 @@ Developed and proven on an FPGA, the final target is an ASIC that holds everythi
 - SFP cage autodetects the module (EEPROM): 1000BASE-X, EPON OLT or GPON OLT.
 - BOSA on board; all optics control (burst, APC, LOS, DDM) in the FPGA/ASIC
   logic; outside only analog: discrete RF transistors, a small ADC/DAC, the APD
-  bias boost and passives (FPGA phase: an RTL8290B BOSA driver and an ECP5
+  bias boost and passives (FPGA phase: an SY88236L BOSA driver and an ECP5
   SerDes bridge board on the DE25-Nano GPIO headers).
 - 32-bit RISC-V CPU (VexiiRiscv, rv32imac, no SIMD, no FPU), high energy
   efficiency, power management (clock gating, sleep states, DVFS); MMU (Sv32)

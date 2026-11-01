@@ -3136,108 +3136,550 @@
         (name "CAGE" (effects (font (size 1.27 1.27))))
         (number "CAGE" (effects (font (size 1.27 1.27)))))))
   (symbol
-    "RTL8290B_BOSA"
+    "SY88236L"
     (pin_names (offset 1.016))
     (exclude_from_sim no)
     (in_bom yes)
     (on_board yes)
     (property "Reference" "U" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "RTL8290B" (at 0 -19.05 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "SY88236LMG" (at 0 -46.99 0) (effects (font (size 1.27 1.27))))
+    (property
+      "Footprint"
+      "Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.1x3.1mm_ThermalVias"
+      (at 0 0 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
     (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (property
       "Description"
-      "RTL8290B + BOSA block from X100DG/X111W; pin numbers are placeholders until traced"
+      "Microchip SY88236L 2.5 Gb/s burst-mode laser driver + limiting amp (pin 26 = RSSI, per the pin diagram)"
       (at 0 0 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (symbol
-      "RTL8290B_BOSA_1_1"
+      "SY88236L_1_1"
       (rectangle
-        (start -10.16 2.54)
-        (end 10.16 -17.78)
+        (start -16.51 2.54)
+        (end 16.51 -45.72)
         (stroke (width 0.254) (type default))
         (fill (type background)))
       (pin
         input
         line
+        (at -19.05 0 0)
+        (length 2.54)
+        (name "DIN+" (effects (font (size 1.27 1.27))))
+        (number "6" (effects (font (size 1.27 1.27)))))
+      (pin
+        input
+        line
+        (at -19.05 -2.54 0)
+        (length 2.54)
+        (name "DIN-" (effects (font (size 1.27 1.27))))
+        (number "7" (effects (font (size 1.27 1.27)))))
+      (pin
+        input
+        line
+        (at -19.05 -5.08 0)
+        (length 2.54)
+        (name "BEN+" (effects (font (size 1.27 1.27))))
+        (number "9" (effects (font (size 1.27 1.27)))))
+      (pin
+        input
+        line
+        (at -19.05 -7.62 0)
+        (length 2.54)
+        (name "BEN-" (effects (font (size 1.27 1.27))))
+        (number "10" (effects (font (size 1.27 1.27)))))
+      (pin
+        input
+        line
+        (at -19.05 -10.16 0)
+        (length 2.54)
+        (name "TXDIS" (effects (font (size 1.27 1.27))))
+        (number "11" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -19.05 -12.7 0)
+        (length 2.54)
+        (name "APCSET" (effects (font (size 1.27 1.27))))
+        (number "12" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -19.05 -15.24 0)
+        (length 2.54)
+        (name "MODSET" (effects (font (size 1.27 1.27))))
+        (number "13" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -19.05 -17.78 0)
+        (length 2.54)
+        (name "BIASMAX" (effects (font (size 1.27 1.27))))
+        (number "14" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at -19.05 -20.32 0)
+        (length 2.54)
+        (name "MODMON" (effects (font (size 1.27 1.27))))
+        (number "15" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at -19.05 -22.86 0)
+        (length 2.54)
+        (name "BIASMON" (effects (font (size 1.27 1.27))))
+        (number "23" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at -19.05 -25.4 0)
+        (length 2.54)
+        (name "~{APCFAULT}" (effects (font (size 1.27 1.27))))
+        (number "25" (effects (font (size 1.27 1.27)))))
+      (pin
+        input
+        line
+        (at -19.05 -27.94 0)
+        (length 2.54)
+        (name "LOS/SD_SEL" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -19.05 -30.48 0)
+        (length 2.54)
+        (name "LOSLVL" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27)))))
+      (pin
+        open_collector
+        line
+        (at -19.05 -33.02 0)
+        (length 2.54)
+        (name "LOS/SD" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27)))))
+      (pin
+        input
+        line
+        (at -19.05 -35.56 0)
+        (length 2.54)
+        (name "~{JAM}" (effects (font (size 1.27 1.27))))
+        (number "4" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at 19.05 0 180)
+        (length 2.54)
+        (name "MOD+" (effects (font (size 1.27 1.27))))
+        (number "19" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at 19.05 -2.54 180)
+        (length 2.54)
+        (name "MOD-" (effects (font (size 1.27 1.27))))
+        (number "18" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at 19.05 -5.08 180)
+        (length 2.54)
+        (name "BIAS" (effects (font (size 1.27 1.27))))
+        (number "21" (effects (font (size 1.27 1.27)))))
+      (pin
+        input
+        line
+        (at 19.05 -7.62 180)
+        (length 2.54)
+        (name "MD" (effects (font (size 1.27 1.27))))
+        (number "22" (effects (font (size 1.27 1.27)))))
+      (pin
+        input
+        line
+        (at 19.05 -10.16 180)
+        (length 2.54)
+        (name "RIN+" (effects (font (size 1.27 1.27))))
+        (number "27" (effects (font (size 1.27 1.27)))))
+      (pin
+        input
+        line
+        (at 19.05 -12.7 180)
+        (length 2.54)
+        (name "RIN-" (effects (font (size 1.27 1.27))))
+        (number "28" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at 19.05 -15.24 180)
+        (length 2.54)
+        (name "ROUT+" (effects (font (size 1.27 1.27))))
+        (number "31" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at 19.05 -17.78 180)
+        (length 2.54)
+        (name "ROUT-" (effects (font (size 1.27 1.27))))
+        (number "30" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at 19.05 -20.32 180)
+        (length 2.54)
+        (name "RSSI" (effects (font (size 1.27 1.27))))
+        (number "26" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_in
+        line
+        (at 19.05 -22.86 180)
+        (length 2.54)
+        (name "VCC" (effects (font (size 1.27 1.27))))
+        (number "17" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 19.05 -25.4 180)
+        (length 2.54)
+        (name "VCC" (effects (font (size 1.27 1.27))))
+        (number "20" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 19.05 -27.94 180)
+        (length 2.54)
+        (name "VCC" (effects (font (size 1.27 1.27))))
+        (number "32" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_in
+        line
+        (at 19.05 -30.48 180)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "5" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 19.05 -33.02 180)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "8" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 19.05 -35.56 180)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "16" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 19.05 -38.1 180)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "24" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 19.05 -40.64 180)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "29" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 19.05 -43.18 180)
+        (length 2.54)
+        (name "EP" (effects (font (size 1.27 1.27))))
+        (number "33" (effects (font (size 1.27 1.27)))))))
+  (symbol
+    "TPS61391"
+    (pin_names (offset 1.016))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "U" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "TPS61391RTE" (at 0 -24.13 0) (effects (font (size 1.27 1.27))))
+    (property
+      "Footprint"
+      "Package_DFN_QFN:WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm_ThermalVias"
+      (at 0 0 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property
+      "Description"
+      "TI APD bias boost, 85 V, APD current mirror 4:5 (MON1) / 1:5 (MON2)"
+      (at 0 0 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (symbol
+      "TPS61391_1_1"
+      (rectangle
+        (start -10.16 2.54)
+        (end 10.16 -22.86)
+        (stroke (width 0.254) (type default))
+        (fill (type background)))
+      (pin
+        power_in
+        line
         (at -12.7 0 0)
         (length 2.54)
-        (name "TD+" (effects (font (size 1.27 1.27))))
-        (number "1" (effects (font (size 1.27 1.27)))))
+        (name "VIN" (effects (font (size 1.27 1.27))))
+        (number "10" (effects (font (size 1.27 1.27)))))
       (pin
         input
         line
         (at -12.7 -2.54 0)
         (length 2.54)
-        (name "TD-" (effects (font (size 1.27 1.27))))
-        (number "2" (effects (font (size 1.27 1.27)))))
+        (name "EN" (effects (font (size 1.27 1.27))))
+        (number "13" (effects (font (size 1.27 1.27)))))
       (pin
-        input
+        power_in
         line
         (at -12.7 -5.08 0)
         (length 2.54)
-        (name "BEN+" (effects (font (size 1.27 1.27))))
-        (number "3" (effects (font (size 1.27 1.27)))))
+        (name "AVCC" (effects (font (size 1.27 1.27))))
+        (number "14" (effects (font (size 1.27 1.27)))))
       (pin
-        input
+        passive
         line
         (at -12.7 -7.62 0)
         (length 2.54)
-        (name "BEN-" (effects (font (size 1.27 1.27))))
-        (number "4" (effects (font (size 1.27 1.27)))))
+        (name "AVCC" (effects (font (size 1.27 1.27))))
+        (number "15" (effects (font (size 1.27 1.27)))))
       (pin
         input
         line
         (at -12.7 -10.16 0)
         (length 2.54)
-        (name "TX_DIS" (effects (font (size 1.27 1.27))))
-        (number "5" (effects (font (size 1.27 1.27)))))
+        (name "FB" (effects (font (size 1.27 1.27))))
+        (number "12" (effects (font (size 1.27 1.27)))))
       (pin
-        input
+        passive
         line
         (at -12.7 -12.7 0)
         (length 2.54)
-        (name "SCL" (effects (font (size 1.27 1.27))))
-        (number "6" (effects (font (size 1.27 1.27)))))
+        (name "ISHORT" (effects (font (size 1.27 1.27))))
+        (number "11" (effects (font (size 1.27 1.27)))))
       (pin
-        bidirectional
+        passive
         line
         (at -12.7 -15.24 0)
         (length 2.54)
-        (name "SDA" (effects (font (size 1.27 1.27))))
-        (number "7" (effects (font (size 1.27 1.27)))))
+        (name "CAP" (effects (font (size 1.27 1.27))))
+        (number "9" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_in
+        line
+        (at -12.7 -17.78 0)
+        (length 2.54)
+        (name "AGND" (effects (font (size 1.27 1.27))))
+        (number "16" (effects (font (size 1.27 1.27)))))
       (pin
         output
         line
         (at 12.7 0 180)
         (length 2.54)
-        (name "RD+" (effects (font (size 1.27 1.27))))
+        (name "SW" (effects (font (size 1.27 1.27))))
         (number "8" (effects (font (size 1.27 1.27)))))
       (pin
-        output
+        input
         line
         (at 12.7 -2.54 180)
         (length 2.54)
-        (name "RD-" (effects (font (size 1.27 1.27))))
-        (number "9" (effects (font (size 1.27 1.27)))))
+        (name "MONIN" (effects (font (size 1.27 1.27))))
+        (number "6" (effects (font (size 1.27 1.27)))))
       (pin
         output
         line
         (at 12.7 -5.08 180)
         (length 2.54)
-        (name "SD" (effects (font (size 1.27 1.27))))
-        (number "10" (effects (font (size 1.27 1.27)))))
+        (name "APD" (effects (font (size 1.27 1.27))))
+        (number "5" (effects (font (size 1.27 1.27)))))
       (pin
-        power_in
+        output
         line
         (at 12.7 -7.62 180)
         (length 2.54)
-        (name "VCC" (effects (font (size 1.27 1.27))))
-        (number "11" (effects (font (size 1.27 1.27)))))
+        (name "MON1" (effects (font (size 1.27 1.27))))
+        (number "4" (effects (font (size 1.27 1.27)))))
       (pin
-        power_in
+        output
         line
         (at 12.7 -10.16 180)
         (length 2.54)
+        (name "MON2" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27)))))
+      (pin
+        no_connect
+        line
+        (at 12.7 -12.7 180)
+        (length 2.54)
+        (name "NC" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27)))))
+      (pin
+        no_connect
+        line
+        (at 12.7 -15.24 180)
+        (length 2.54)
+        (name "NC" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_in
+        line
+        (at 12.7 -17.78 180)
+        (length 2.54)
         (name "GND" (effects (font (size 1.27 1.27))))
-        (number "12" (effects (font (size 1.27 1.27))))))))
+        (number "7" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 12.7 -20.32 180)
+        (length 2.54)
+        (name "EP" (effects (font (size 1.27 1.27))))
+        (number "17" (effects (font (size 1.27 1.27)))))))
+  (symbol
+    "SN65LVDT2DBV"
+    (pin_names (offset 1.016))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "U" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "SN65LVDT2DBVR" (at 0 -8.89 0) (effects (font (size 1.27 1.27))))
+    (property
+      "Footprint"
+      "Package_TO_SOT_SMD:SOT-23-5"
+      (at 0 0 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property
+      "Description"
+      "TI LVDS receiver, 110 ohm termination, LVTTL out"
+      (at 0 0 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (symbol
+      "SN65LVDT2DBV_1_1"
+      (rectangle
+        (start -7.62 2.54)
+        (end 7.62 -7.62)
+        (stroke (width 0.254) (type default))
+        (fill (type background)))
+      (pin
+        input
+        line
+        (at -10.16 0 0)
+        (length 2.54)
+        (name "A" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27)))))
+      (pin
+        input
+        line
+        (at -10.16 -2.54 0)
+        (length 2.54)
+        (name "B" (effects (font (size 1.27 1.27))))
+        (number "4" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at 10.16 0 180)
+        (length 2.54)
+        (name "R" (effects (font (size 1.27 1.27))))
+        (number "5" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_in
+        line
+        (at 10.16 -2.54 180)
+        (length 2.54)
+        (name "VCC" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_in
+        line
+        (at 10.16 -5.08 180)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27)))))))
+  (symbol
+    "BOSA_GPON"
+    (pin_names (offset 1.016))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "U" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "BOSA GPON" (at 0 -13.97 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "bridge:BOSA_GPON" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property
+      "Description"
+      "GPON ONU BOSA (1310 nm DFB TX, 1490 nm APD-TIA RX) from the X100DG; pad order to measure"
+      (at 0 0 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (symbol
+      "BOSA_GPON_1_1"
+      (rectangle
+        (start -8.89 2.54)
+        (end 8.89 -12.7)
+        (stroke (width 0.254) (type default))
+        (fill (type background)))
+      (pin
+        passive
+        line
+        (at -11.43 0 0)
+        (length 2.54)
+        (name "LD_A" (effects (font (size 1.27 1.27))))
+        (number "T1" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -11.43 -2.54 0)
+        (length 2.54)
+        (name "LD_K" (effects (font (size 1.27 1.27))))
+        (number "T2" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -11.43 -5.08 0)
+        (length 2.54)
+        (name "MPD_A" (effects (font (size 1.27 1.27))))
+        (number "T3" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at -11.43 -7.62 0)
+        (length 2.54)
+        (name "MPD_K" (effects (font (size 1.27 1.27))))
+        (number "T4" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 11.43 0 180)
+        (length 2.54)
+        (name "VAPD" (effects (font (size 1.27 1.27))))
+        (number "R1" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_in
+        line
+        (at 11.43 -2.54 180)
+        (length 2.54)
+        (name "VCC" (effects (font (size 1.27 1.27))))
+        (number "R2" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at 11.43 -5.08 180)
+        (length 2.54)
+        (name "OUT+" (effects (font (size 1.27 1.27))))
+        (number "R3" (effects (font (size 1.27 1.27)))))
+      (pin
+        output
+        line
+        (at 11.43 -7.62 180)
+        (length 2.54)
+        (name "OUT-" (effects (font (size 1.27 1.27))))
+        (number "R4" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_in
+        line
+        (at 11.43 -10.16 180)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "R5" (effects (font (size 1.27 1.27))))))))
