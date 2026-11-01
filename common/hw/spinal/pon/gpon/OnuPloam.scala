@@ -13,6 +13,28 @@ case class OnuConfig() extends Bundle {
   val responseBits = UInt(16 bits) // downstream frame start to upstream frame start, less the MAC's own latency
   val to1Frames = UInt(20 bits)    // SN acquisition and ranging timeout (10 s)
   val to2Frames = UInt(12 bits)    // POPUP timeout (100 ms)
+  val key = Bits(128 bits)         // shadow key: generated and sent by the CPU on Request_Key
+}
+
+/** Up to n 12-bit IDs (Alloc-IDs, Port-IDs). */
+case class IdSet(n: Int) extends Area {
+  val ids = Vec(Reg(UInt(12 bits)), n)
+  val used = Vec(RegInit(False), n)
+  def hits(id: UInt): Seq[Bool] = ids.zip(used).map { case (a, u) => u && a === id }.toSeq
+  def contains(id: UInt): Bool = hits(id).orR
+  /** Adds `id` unless present; the result is high when the set was full. */
+  def add(id: UInt): Bool = {
+    val free = used.map(!_)
+    val full = !contains(id) && !free.orR
+    when(!contains(id) && free.orR) {
+      val slot = OHToUInt(OHMasking.first(free.asBits))
+      ids(slot) := id
+      used(slot) := True
+    }
+    full
+  }
+  def remove(id: UInt): Unit = for ((hit, u) <- hits(id).zip(used)) when(hit)(u := False)
+  def clear(): Unit = used.foreach(_ := False)
 }
 
 object ActivationState extends SpinalEnum { val O1, O2, O3, O4, O5, O6, O7 = newElement() }
@@ -40,11 +62,11 @@ object OnuPloam {
 
 /** ONU activation (G.984.3 clause 10.2, states O1-O7, timers TO1/TO2) and the fixed downstream PLOAM set, upstream
   * clock domain: Upstream_Overhead, Extended_Burst_Length, Assign_ONU-ID, Ranging_Time (main path), Deactivate_ONU-ID,
-  * Disable_Serial_Number, POPUP, Assign_Alloc-ID, Configure_Port-ID, Request_Password (Password 3 times), Acknowledge
-  * of `ackTypes`. Every PLOAM addressed to us but No_message also goes to the CPU, which handles the rest.
+  * Disable_Serial_Number, POPUP, Assign_Alloc-ID, Configure_Port-ID, Encrypted_Port-ID, Key_Switching_Time and
+  * Request_Key (to the decryption), Request_Password (Password 3 times), Acknowledge of `ackTypes`. Every PLOAM addressed to us but No_message also goes to the CPU, which handles the rest.
   * BWmap allocations for us become jobs at their ONU bit time; ownership and delay are those of the frame start's
   * state (a PLOAM acts from the next frame on). Upstream PLOAMs: ours first, then the CPU's. */
-case class OnuPloam(maxAllocIds: Int = 8, jobDepth: Int = 32) extends Component {
+case class OnuPloam(maxAllocIds: Int = 8, maxEncryptedPorts: Int = 16, jobDepth: Int = 32) extends Component {
   import OnuPloam._
   val io = new Bundle {
     val config = in(OnuConfig())
@@ -62,12 +84,17 @@ case class OnuPloam(maxAllocIds: Int = 8, jobDepth: Int = 32) extends Component 
     val eqd = out UInt (32 bits)
     val omciPort = out UInt (12 bits)
     val omciValid = out Bool ()
+    val encryptedPorts = out Vec (UInt(12 bits), maxEncryptedPorts)
+    val encryptedUsed = out Bits (maxEncryptedPorts bits)
+    val keySwitch = master Flow (UInt(30 bits)) // Key_Switching_Time: superframe of the first frame with the new key
+    val keyRequest = out Bool ()                // Request_Key: a scheduled switch is void
     val overhead = out(BurstOverhead())
     val snMessage = out Bits (96 bits)
     val transmit = out Bool ()       // O3-O5: bursts allowed
     val hwLost = out Bool ()         // pulses: our upstream PLOAM queue full
     val jobLost = out Bool ()        // job queue full
     val allocFull = out Bool ()      // Assign_Alloc-ID beyond maxAllocIds
+    val encryptedFull = out Bool ()  // Encrypted_Port-ID beyond maxEncryptedPorts
     val fecRequested = out Bool ()   // a grant for us asks for FEC, not supported
   }
   import ActivationState._
@@ -85,13 +112,15 @@ case class OnuPloam(maxAllocIds: Int = 8, jobDepth: Int = 32) extends Component 
   val snRequested = Reg(Bool()) init (False)
   val omciPort = Reg(UInt(12 bits)) init (0)
   val omciValid = RegInit(False)
-  val allocIds = Vec(Reg(UInt(12 bits)), maxAllocIds)
-  val allocUsed = Vec(RegInit(False), maxAllocIds)
+  val allocIds = IdSet(maxAllocIds)
+  val encrypted = IdSet(maxEncryptedPorts)
   io.state := state
   io.onuId := onuId
   io.eqd := eqd
   io.omciPort := omciPort
   io.omciValid := omciValid
+  io.encryptedPorts := encrypted.ids
+  io.encryptedUsed := encrypted.used.asBits
   io.transmit := state === O3 || state === O4 || state === O5
 
   // timers count 125 us frames of the local clock, LOS included
@@ -113,7 +142,8 @@ case class OnuPloam(maxAllocIds: Int = 8, jobDepth: Int = 32) extends Component 
     onuId := 0xFF
     eblValid := False
     omciValid := False
-    allocUsed.foreach(_ := False)
+    allocIds.clear()
+    encrypted.clear()
     to1On := False
     to2On := False
     hwQueue.io.flush := True
@@ -133,11 +163,13 @@ case class OnuPloam(maxAllocIds: Int = 8, jobDepth: Int = 32) extends Component 
   io.cpuRx.valid := received && state =/= O1 && (own || broadcast) && kind =/= 0x0B
   io.cpuRx.payload := m
 
-  // allocation table
   val newAllocId = (byte(3) ## byte(4)(7 downto 4)).asUInt
-  val allocHit = allocIds.zip(allocUsed).map { case (a, u) => u && a === newAllocId }
-  val free = allocUsed.map(!_)
+  val portId = (byte(4) ## byte(5)(7 downto 4)).asUInt
   io.allocFull := False
+  io.encryptedFull := False
+  io.keySwitch.valid := False
+  io.keySwitch.payload := (byte(3)(5 downto 0) ## byte(4) ## byte(5) ## byte(6)).asUInt
+  io.keyRequest := False
 
   val passwordLeft = Reg(UInt(2 bits)) init (0)
   val ack = Bool()
@@ -196,18 +228,23 @@ case class OnuPloam(maxAllocIds: Int = 8, jobDepth: Int = 32) extends Component 
       }
       is(0x0A) {
         when(own && state === O5) {
-          when(byte(5) === 0x01 && !allocHit.orR) {
-            when(free.orR) {
-              val slot = OHToUInt(OHMasking.first(free.asBits))
-              allocIds(slot) := newAllocId
-              allocUsed(slot) := True
-            } otherwise (io.allocFull := True)
-          }
-          when(byte(5) === 0xFF)(for ((hit, u) <- allocHit.zip(allocUsed)) when(hit)(u := False))
+          when(byte(5) === 0x01)(io.allocFull := allocIds.add(newAllocId))
+          when(byte(5) === 0xFF)(allocIds.remove(newAllocId))
         }
       }
       is(0x0E) {
-        when(own) { omciValid := byte(3)(0); omciPort := (byte(4) ## byte(5)(7 downto 4)).asUInt }
+        when(own) { omciValid := byte(3)(0); omciPort := portId }
+      }
+      is(0x08) {
+        when(own && state === O5 && byte(3)(1)) {
+          when(byte(3)(0))(io.encryptedFull := encrypted.add(portId)) otherwise (encrypted.remove(portId))
+        }
+      }
+      is(0x13) {
+        io.keySwitch.valid := (own || broadcast) && state === O5
+      }
+      is(0x0D) {
+        io.keyRequest := own
       }
       is(0x09) {
         when(own && (state === O4 || state === O5))(passwordLeft := 3)
@@ -257,7 +294,7 @@ case class OnuPloam(maxAllocIds: Int = 8, jobDepth: Int = 32) extends Component 
   val a = io.alloc.value
   val isSn = frameState === O3 && a.allocId === OltScheduler.snAllocId && a.flags(10)
   val isRanging = frameState === O4 && a.allocId === frameOnuId
-  val isOwn = frameState === O5 && (a.allocId === frameOnuId || allocIds.zip(allocUsed).map { case (x, u) => u && x === a.allocId }.orR)
+  val isOwn = frameState === O5 && (a.allocId === frameOnuId || allocIds.contains(a.allocId))
   val take = io.alloc.valid && io.alloc.crcOk && (isSn || isRanging || isOwn) && a.stop >= a.start
   when(io.alloc.valid && io.alloc.crcOk && isSn)(snRequested := True)
   io.fecRequested := take && a.flags(9)

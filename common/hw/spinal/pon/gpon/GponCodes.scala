@@ -6,6 +6,8 @@ import spinal.core._
 /** G.984.3 codes in hardware, plus Scala reference models for the tests. All MSB first. */
 object GponCodes {
   val frameBytes = 38880                  // downstream GTC frame: 125 us at 2.48832 Gb/s
+  val fecDataBytes = 239                  // RS(255,239): data bytes per codeword, 16 parity follow
+  val fecLastData = 38864                 // with FEC, the last (short) codeword's parity starts here
   val usFrameBytes = 19440                // upstream GTC frame: 125 us at 1.24416 Gb/s
   val usDelimiter = BigInt("AB5983", 16)  // usual upstream delimiter (set by Upstream_Overhead)
   val psync = BigInt("B6AB31E0", 16)
@@ -78,6 +80,28 @@ object GponCodes {
         }
       }
     }
+
+    def gfMul(a: Int, b: Int): Int = (0 until 8).foldLeft((0, a)) { case ((acc, x), i) =>
+      (if (((b >> i) & 1) == 1) acc ^ x else acc, ((x << 1) ^ (if ((x & 0x80) != 0) 0x11D else 0)) & 0xFF)
+    }._1
+    val rsGenerator = Seq(0x3B, 0x24, 0x32, 0x62, 0xE5, 0x29, 0x41, 0xA3, 0x08, 0x1E, 0xD1, 0x44, 0xBD, 0x68, 0x0D, 0x3B) // g0-g15
+
+    /** RS(255,239) parity of a codeword's data bytes (short: zero pad implied), sent first first (G.984.3 A.3). */
+    def rsParity(data: Seq[Int]): Seq[Int] = {
+      val p = Array.fill(16)(0)
+      for (d <- data) {
+        val feedback = d ^ p(15)
+        for (i <- 15 to 1 by -1) p(i) = p(i - 1) ^ gfMul(rsGenerator(i), feedback)
+        p(0) = gfMul(rsGenerator(0), feedback)
+      }
+      p.reverse.toSeq
+    }
+
+    /** Frame data bytes (36432) -> line bytes with the FEC parity inserted (G.984.3 13.2.1). */
+    def fecEncode(data: Seq[Int]): Seq[Int] = data.grouped(fecDataBytes).flatMap(cw => cw ++ rsParity(cw)).toSeq
+
+    /** Line position of frame data byte i, FEC on or off. */
+    def linePos(i: Int, fec: Boolean): Int = if (fec) i + 16 * (i / fecDataBytes) else i
 
     /** Line bytes of one frame -> clear bytes (PSync is not scrambled). */
     def descramble(frame: Seq[Int]): Seq[Int] =

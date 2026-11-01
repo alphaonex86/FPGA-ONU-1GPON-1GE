@@ -21,7 +21,7 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
     val eqd = in UInt (32 bits)
     val omciPort = in UInt (12 bits)
     val omciValid = in Bool ()
-    val errors = in Bits (6 bits) // pulses: hwLost, jobLost, allocFull, fecRequested, late, gem
+    val errors = in Bits (8 bits) // pulses: hwLost, jobLost, allocFull, fecRequested, late, gem, encryptedFull, keyLate
     val bipErrors = in UInt (32 bits)
     val irq = out Bool ()
   }
@@ -44,6 +44,9 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
   val TIMERS = busif.newReg("Activation timers, 125 us frames")
   io.config.to1Frames := TIMERS.field(UInt(20 bits), AccessType.RW, 80000, "TO1, SN acquisition and ranging")(SymbolName("to1"))
   io.config.to2Frames := TIMERS.field(UInt(12 bits), AccessType.RW, 800, "TO2, POPUP")(SymbolName("to2"))
+
+  val keyRegs = (0 until 4).map(i => busif.newReg(s"Shadow key bytes ${4 * i}-${4 * i + 3}: the next key, sent by the CPU on Request_Key"))
+  io.config.key := Cat(keyRegs.zipWithIndex.map { case (r, i) => r.field(Bits(32 bits), AccessType.RW, 0, "bytes")(SymbolName(s"key$i")) }.reverse)
 
   val STATE = busif.newReg("Activation state")
   STATE.field(UInt(3 bits), AccessType.RO, 0, "state, 0 = O1 .. 6 = O7")(SymbolName("state")) := io.state.asBits.asUInt.resized
@@ -100,7 +103,9 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
     "allocFull" -> (io.errors(2), "Assign_Alloc-ID beyond the table"),
     "fec" -> (io.errors(3), "a grant asks for FEC (not supported)"),
     "late" -> (io.errors(4), "an allocation was dropped, its burst start had passed"),
-    "gem" -> (io.errors(5), "the CPU GEM stream broke a packet (gap, wrong last, zero length)"))
+    "gem" -> (io.errors(5), "the CPU GEM stream broke a packet (gap, wrong last, zero length)"),
+    "encryptedFull" -> (io.errors(6), "Encrypted_Port-ID beyond the table"),
+    "keyLate" -> (io.errors(7), "a decrypted fragment dropped, its keystream late"))
   val errorBits = for (((name, (hit, doc)), k) <- errors.zipWithIndex) yield {
     val bit = sticky(hit, clearErrors(k))
     ERRORS.field(Bool(), AccessType.RO, 0, s"$name: $doc")(SymbolName(name)) := bit

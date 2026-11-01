@@ -19,7 +19,9 @@ case class Checked[T <: Data](valueType: HardType[T]) extends Bundle {
 object FrameSync extends SpinalEnum { val HUNT, PRESYNC, SYNC = newElement() }
 
 /** ONU downstream GTC deframer (G.984.3 clause 8.1): PSync hunt on any bit alignment, descrambling,
-  * Ident, PLOAM, BIP, PLend, BWmap and GEM delineation. No FEC; CRC and HEC detect only (no correction). */
+  * Ident, PLOAM, BIP, PLend, BWmap and GEM delineation. FEC frames (Ident FEC bit): parity bytes skipped, no
+  * correction (G.984.3 13.1.2.1); CRC and HEC detect only.
+  * Superframe counter: the Ident field once two frames agree, else the local count (G.984.3 12.2). */
 case class GtcDsDeframer() extends Component {
   val io = new Bundle {
     val line = in Bits (8 bits) // raw line bytes, any bit alignment, MSB first
@@ -32,6 +34,7 @@ case class GtcDsDeframer() extends Component {
     val alloc = master Flow (Checked(Allocation()))
     val gem = master Flow (Fragment(GemRxByte())) // last: end of the GEM fragment
     val gemCut = out Bool () // with io.gem: the open fragment was cut by the frame end
+    val gemHeader = master Flow (GemHeaderEvent())
     val bipErrors = out UInt (32 bits)
     val plendErrors = out UInt (32 bits)
     val hecErrors = out UInt (32 bits)
@@ -50,6 +53,10 @@ case class GtcDsDeframer() extends Component {
   val sync = RegInit(FrameSync.HUNT)
   val count = Reg(UInt(3 bits))  // PSync found in a row (PRESYNC) or missed in a row (SYNC)
   val pos = Reg(UInt(16 bits))   // frame position of `byte`, meaningful out of HUNT
+  val dataPos = Reg(UInt(16 bits)) // the same less the FEC parity bytes before it: the field positions
+  val codewordPos = Reg(UInt(8 bits))
+  val parity = Reg(Bool()) init (False) // `byte` is FEC parity
+  val fecIndication = Reg(Bool()) init (False)
   val active = sync === FrameSync.SYNC
   io.synced := active
   io.alignment := alignment
@@ -59,11 +66,18 @@ case class GtcDsDeframer() extends Component {
     when(found.orR) {
       alignment := OHToUInt(OHMasking.first(found.asBits))
       pos := 4
+      dataPos := 4
+      codewordPos := 4
+      parity := False
       count := 1
       sync := FrameSync.PRESYNC
     }
   } otherwise {
-    pos := (pos === frameBytes - 1) ? U(0, 16 bits) | pos + 1
+    val lastByte = pos === frameBytes - 1
+    pos := lastByte ? U(0, 16 bits) | pos + 1
+    dataPos := lastByte ? U(0, 16 bits) | dataPos + (!parity).asUInt
+    codewordPos := (lastByte || codewordPos === 254) ? U(0, 8 bits) | codewordPos + 1
+    parity := !lastByte && fecIndication && (codewordPos >= fecDataBytes - 1 && codewordPos =/= 254 || pos >= fecLastData - 1)
     when(pos === 3) {
       val ok = found(alignment)
       when(sync === FrameSync.PRESYNC) {
@@ -82,20 +96,25 @@ case class GtcDsDeframer() extends Component {
   scrambler := scramblerNext
   val clear = (pos < 4) ? byte | byte ^ keystream
 
-  val crcStart = pos === 8 || pos === 22 || pos === 26 || (pos >= 30 && (pos - 30)(2 downto 0) === 0)
+  // fields: data bytes only, at dataPos (the PCBd head is in the first codeword: pos = dataPos there)
+  val crcStart = dataPos === 8 || dataPos === 22 || dataPos === 26 || (dataPos >= 30 && (dataPos - 30)(2 downto 0) === 0)
   val crc = Reg(Bits(8 bits))
   val crcIn = crcStart ? B(0, 8 bits) | crc
   val crcOk = crcIn === clear
-  crc := crc8Step(crcIn, clear)
   val shift = Reg(Bits(96 bits)) // last field bytes, newest in the low byte
-  shift := (shift ## clear)(95 downto 0)
+  when(!parity) {
+    crc := crc8Step(crcIn, clear)
+    shift := (shift ## clear)(95 downto 0)
+  }
 
   val superframe = Reg(UInt(30 bits)) init (0)
-  val fecIndication = Reg(Bool()) init (False)
+  val lastIdent = Reg(UInt(30 bits)) init (0)
   io.superframe := superframe
   io.fecIndication := fecIndication
   when(active && pos === 7) {
-    superframe := (shift(23 downto 0) ## clear)(29 downto 0).asUInt
+    val ident = (shift(23 downto 0) ## clear)(29 downto 0).asUInt
+    lastIdent := ident
+    superframe := (ident === lastIdent + 1) ? ident | superframe + 1
     fecIndication := shift(23)
   }
 
@@ -115,7 +134,7 @@ case class GtcDsDeframer() extends Component {
   when(sync =/= FrameSync.HUNT && pos === 21) {
     bip := 0
     when(active)(bipErrorBits := CountOne(bip ^ clear))
-  } otherwise {
+  } elsewhen (!parity) {
     bip := bip ^ clear
   }
 
@@ -140,19 +159,21 @@ case class GtcDsDeframer() extends Component {
     pcbdEnd := U(30, 16 bits) + (plend(23 downto 12).asUInt << 3)
     plendError := active && !usable
   }
-  val inBwmap = frameOk && pos >= 30 && pos < pcbdEnd
-  val inPayload = frameOk && pos >= pcbdEnd && pos >= 30
+  val inBwmap = frameOk && dataPos >= 30 && dataPos < pcbdEnd
+  val inPayload = frameOk && dataPos >= pcbdEnd && dataPos >= 30
 
   val alloc = Flow(Checked(Allocation()))
-  alloc.valid := inBwmap && (pos - 30)(2 downto 0) === 7
+  alloc.valid := inBwmap && !parity && (dataPos - 30)(2 downto 0) === 7
   alloc.value := Allocation.fromLine(shift(55 downto 0))
   alloc.crcOk := crcOk
   io.alloc << alloc.stage()
 
   val delineator = GemDelineator()
   delineator.io.restart := !inPayload
-  delineator.io.byte.valid := inPayload
+  delineator.io.byte.valid := inPayload && !parity
   delineator.io.byte.payload := clear
+  delineator.io.counter := superframe @@ (pos >> 2).resize(16)
+  io.gemHeader << delineator.io.header.stage()
   io.gem << delineator.io.gem.stage()
   val hecError = RegNext(delineator.io.hecError) init (False)
   val hecErrors = Reg(UInt(32 bits)) init (0)

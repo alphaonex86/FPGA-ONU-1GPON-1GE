@@ -64,6 +64,12 @@ object GtcDsTest extends App {
   check(validHeaders.forall(h => Model.gemHeader((h >> 28).toInt, ((h >> 16) & 0xFFF).toInt, ((h >> 13) & 7).toInt) == h),
     "model HEC of the 36 appendix III headers")
   check(Model.descramble(vectorLine) == vectorClear, "model scrambler on annex A.5")
+  // annex A.3: a full and a short codeword, parity last
+  val fecFull = hex("""00 65 f2 50 51 52 53 54 55 56 57 58 59 5a 5b 5c a2 ec 40 21 f7""") ++ (0 to 0xd9) ++
+    hex("d1 ee 8b 7e 8e 33 b7 89 cb e4 c4 64 cb 12 d4 d9")
+  val fecShort = (0xda to 0xfe) ++ (0 to 0x44) ++ hex("72 d1 ba 17 30 b5 03 71 70 49 54 35 1c 40 1e 59")
+  check(fecFull.length == 255 && fecShort.length == 122, "annex A.3 vectors: 255 and 122 bytes")
+  check(Seq(fecFull, fecShort).forall(cw => Model.rsParity(cw.dropRight(16)) == cw.takeRight(16)), "model RS(255,239) parity on annex A.3")
 
   /** Feeds packets (Port-ID, bytes) one byte per clock. */
   class GemDriver(s: Stream[Fragment[GemTxByte]], cd: ClockDomain) {

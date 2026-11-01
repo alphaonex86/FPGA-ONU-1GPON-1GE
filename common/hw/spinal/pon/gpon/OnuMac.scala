@@ -11,8 +11,8 @@ object OnuMac {
 
 /** GPON ONU MAC: downstream deframer in the default clock domain (311.04 MHz recovered clock, one line byte per
   * clock), activation and upstream burst framer in the upstream domain (usClk: the downstream clock divided by two,
-  * same source). OMCI: downstream GEM fragments of the OMCI Port-ID out on gemRx, gemTx packets upstream in the
-  * default allocation (OMCC). Upstream timing is anchored to the downstream frame start to the bit: its byte time, which half of
+  * same source). OMCI: downstream GEM fragments of the OMCI Port-ID out on gemRx (after the AES decryption of the
+  * encrypted Port-IDs), gemTx packets upstream in the default allocation (OMCC). Upstream timing is anchored to the downstream frame start to the bit: its byte time, which half of
   * the upstream clock it came in and the PSync bit alignment, so a re-sync (POPUP) keeps the ranged EqD valid. */
 case class OnuMac(maxAllocIds: Int = 8) extends Component {
   val io = new Bundle {
@@ -52,6 +52,11 @@ case class OnuMac(maxAllocIds: Int = 8) extends Component {
   val (frameStart, frameOffset) = held(deframer.io.frameStart, secondHalf.asUInt @@ ~deframer.io.alignment(2 downto 1))
   val (dsPloamValid, dsPloam) = held(deframer.io.ploam.valid, deframer.io.ploam.payload)
   val (dsAllocValid, dsAlloc) = held(deframer.io.alloc.valid, deframer.io.alloc.payload)
+  val decrypt = GemDecrypt()
+  decrypt.io.header << deframer.io.gemHeader
+  decrypt.io.input << deframer.io.gem
+  decrypt.io.inputCut := deframer.io.gemCut
+  val (keyLate, _) = held(decrypt.io.late, False)
 
   val upstream = new ClockingArea(usDomain) {
     val ploam = OnuPloam(maxAllocIds)
@@ -75,7 +80,7 @@ case class OnuMac(maxAllocIds: Int = 8) extends Component {
     regs.io.eqd := ploam.io.eqd
     regs.io.omciPort := ploam.io.omciPort
     regs.io.omciValid := ploam.io.omciValid
-    regs.io.errors := framer.io.gemError ## framer.io.late ## ploam.io.fecRequested ## ploam.io.allocFull ## ploam.io.jobLost ## ploam.io.hwLost
+    regs.io.errors := RegNext(keyLate) ## ploam.io.encryptedFull ## framer.io.gemError ## framer.io.late ## ploam.io.fecRequested ## ploam.io.allocFull ## ploam.io.jobLost ## ploam.io.hwLost
     regs.io.bipErrors := RegNext(deframer.io.bipErrors)
 
     framer.io.job << ploam.io.job
@@ -91,13 +96,20 @@ case class OnuMac(maxAllocIds: Int = 8) extends Component {
     io.usBen := framer.io.ben
   }
 
-  // OMCI fragments to the CPU (Port-ID quasi-static, from the synchronous upstream domain)
+  // from the synchronous upstream domain: quasi-static or pulses of one upstream clock (seen twice, idempotent)
+  decrypt.io.ports := upstream.ploam.io.encryptedPorts
+  decrypt.io.portsUsed := upstream.ploam.io.encryptedUsed
+  decrypt.io.shadowKey := upstream.regs.io.config.key
+  decrypt.io.keySwitch << upstream.ploam.io.keySwitch
+  decrypt.io.keyRequest := upstream.ploam.io.keyRequest
+
+  // OMCI fragments to the CPU
   val omciPort = RegNext(upstream.ploam.io.omciPort)
   val omciValid = RegNext(upstream.ploam.io.omciValid) init (False)
-  val omci = deframer.io.gem.valid && omciValid && deframer.io.gem.portId === omciPort
-  io.gemRx.valid := omci
-  io.gemRx.last := deframer.io.gem.last
+  val gem = decrypt.io.output
+  io.gemRx.valid := gem.valid && omciValid && gem.portId === omciPort
+  io.gemRx.last := gem.last
   io.gemRx.allocId := 0
-  io.gemRx.gem := deframer.io.gem.fragment
-  io.gemRxCut := deframer.io.gemCut
+  io.gemRx.gem := gem.fragment
+  io.gemRxCut := decrypt.io.outputCut
 }

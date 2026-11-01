@@ -49,8 +49,12 @@ object OnuPloamQuirksTest extends App {
     val jobs = mutable.ArrayBuffer[(Int, Int, Long, Boolean)]() // frame, allocId, bit, sn
     var frame = 0
     var lost = false
+    val keySwitches = mutable.ArrayBuffer[Long]()
+    var keyRequests = 0
     cd.onSamplings {
       if (io.cpuRx.valid.toBoolean) toCpu += io.cpuRx.payload.toBigInt
+      if (io.keySwitch.valid.toBoolean) keySwitches += io.keySwitch.payload.toLong
+      if (io.keyRequest.toBoolean) keyRequests += 1
       if (io.job.valid.toBoolean) jobs += ((frame, io.job.payload.alloc.allocId.toInt, io.job.payload.bit.toLong, io.job.payload.sn.toBoolean))
       if (io.hwLost.toBoolean || io.jobLost.toBoolean) lost = true
     }
@@ -134,7 +138,8 @@ object OnuPloamQuirksTest extends App {
     activate(zteId, zteEqd, maple = false)
     check(answers(send(Some(ploam(zteId, 0x09)))) == Seq.fill(3)(pw(zteId)), "Request_Password x1: Password x3")
     val reqKey = ploam(zteId, 0x0D)
-    check(answers(send(Some(reqKey))).isEmpty && toCpu.contains(reqKey), "Request_Key x1: to the CPU only (it sends the key)")
+    check(answers(send(Some(reqKey))).isEmpty && toCpu.contains(reqKey) && keyRequests == 1,
+      "Request_Key x1: to the CPU only (it sends the key), a pending key switch void")
     acked(zteId, Seq(ploam(zteId, 0x13, 0x2F, 0x24, 0x0B, 0x1D),            // Key_Switching_Time
       ploam(zteId, 0x0E, 0x01, 0x05, 0x30),                                // Configure_Port-ID: OMCI 0x053
       ploam(zteId, 0x08, 0x02, 0x05, 0x30),                                // Encrypted_Port-ID
@@ -143,6 +148,13 @@ object OnuPloamQuirksTest extends App {
       (0x164 to 0x161 by -1).map(p => ploam(zteId, 0x08, 0x02, p >> 4, (p & 0xF) << 4)) ++
       (0x1E3 to 0x1E0 by -1).map(a => ploam(zteId, 0x0A, a >> 4, (a & 0xF) << 4, 0x01)))
     check(io.omciValid.toBoolean && io.omciPort.toInt == 0x053, "OMCI Port-ID 0x053")
+    check(keySwitches == Seq.fill(3)(0x2F240B1DL), "Key_Switching_Time x3: superframe 0x2F240B1D to the decryption")
+    check(io.encryptedUsed.toInt == 0, "Encrypted_Port-ID with a = 0, as ZTE sends them: no port encrypted")
+    def encryptedPorts = io.encryptedPorts.zipWithIndex.filter(p => (io.encryptedUsed.toInt >> p._2 & 1) == 1).map(_._1.toInt)
+    acked(zteId, Seq(ploam(zteId, 0x08, 0x03, 0x16, 0x40), ploam(zteId, 0x08, 0x01, 0x05, 0x30)))
+    check(encryptedPorts == Seq(0x164), "Encrypted_Port-ID a = 1: 0x164 encrypted, once for 3 copies; b = 0: ignored")
+    acked(zteId, Seq(ploam(zteId, 0x08, 0x02, 0x16, 0x40), ploam(zteId, 0x08, 0x03, 0x05, 0x30)))
+    check(encryptedPorts == Seq(0x053), "a = 0: 0x164 clear again")
 
     val grants = Seq((zteId, 0, 100, 140)) ++ (0x1E0 to 0x1E3).zipWithIndex.map { case (a, k) => (a, 0, 150 + 50 * k, 190 + 50 * k) }
     send(None, grants)
@@ -163,8 +175,8 @@ object OnuPloamQuirksTest extends App {
     check(state == 5, "Deactivate_ONU-ID with a bad CRC: ignored")
 
     // ZTE sends Deactivate once, a few ms after the last Acknowledge; then a new activation with the next ONU-ID
-    check(answers(send(Some(ploam(zteId, 0x05)))).isEmpty && state == 2 && io.onuId.toInt == 0xFF && !io.omciValid.toBoolean,
-      "Deactivate_ONU-ID x1: O2, ONU-ID and OMCI port gone, no answer")
+    check(answers(send(Some(ploam(zteId, 0x05)))).isEmpty && state == 2 && io.onuId.toInt == 0xFF && !io.omciValid.toBoolean &&
+      io.encryptedUsed.toInt == 0, "Deactivate_ONU-ID x1: O2, ONU-ID, OMCI and encrypted ports gone, no answer")
     send(None, grants)
     idle(1)
     check(jobsOf(frame - 2).isEmpty, "deactivated: no burst for the old allocations")
