@@ -8,7 +8,7 @@
 set -euo pipefail
 
 QUARTUS=${QUARTUS:-$HOME/altera_pro/26.1.1/quartus/bin}
-DEVICE=${DEVICE:-A5ED013BB32AE4SCS}   # DE25-Standard; DE25-Nano: A5EB013BB23BE4SCS
+DEVICE=${DEVICE:-A5ED013BB32AE4SR1}   # DE25-Standard; DE25-Nano: A5EB013BB23BE4SCS
 [ $# -ge 4 ] || { echo "usage: $0 VERILOG TOP DIR FIT_PERIOD_NS [POWER_PERIOD_NS]" >&2; exit 1; }
 verilog=$(realpath "$1"); top=$2; dir=$3; fit_period=$4; power_period=${5:-}
 clk2=${CLK2:-}; ratio=${clk2#*:}; clk2=${clk2%%:*}

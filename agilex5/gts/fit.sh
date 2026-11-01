@@ -35,7 +35,7 @@ clock_pins="clock_50:D8" # board oscillator, 3.3 V; HVIO: to the helper PLL over
 cd "$dir"
 {
     echo 'set_global_assignment -name FAMILY "Agilex 5"'
-    echo 'set_global_assignment -name DEVICE A5ED013BB32AE4SCS'
+    echo 'set_global_assignment -name DEVICE A5ED013BB32AE4SR1'
     echo "set_global_assignment -name TOP_LEVEL_ENTITY $top"
     echo "set_global_assignment -name SYSTEMVERILOG_FILE $verilog"
     for f in ${sources:-}; do echo "set_global_assignment -name SYSTEMVERILOG_FILE $f"; done

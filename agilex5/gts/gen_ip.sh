@@ -4,7 +4,7 @@
 # Usage: gen_ip.sh DIR
 set -euo pipefail
 QSYS=${QSYS:-$HOME/altera_pro/26.1.1/qsys/bin}
-PART=${PART:-A5ED013BB32AE4SCS}
+PART=${PART:-A5ED013BB32AE4SR1}
 [ $# -eq 1 ] || { echo "usage: $0 DIR" >&2; exit 1; }
 mkdir -p "$1"; cd "$1"
 PON=155.520000   # VCXO pin: every PON lane (CDRs need a PON-family refclk, the VCXO tracks the ISP OLT)
