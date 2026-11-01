@@ -45,8 +45,11 @@ case class OltBoardRegs() extends Component {
 }
 
 /** OLT side of the board without the vendor blocks: 0x000 OltMac registers (across to the upstream domain), 0x100
-  * board registers, 0x200 GEM CPU queues (OMCI). MAC and queues answer an error while the PON clocks are down. The
-  * lane's tx clock (311.04 MHz) and half clock clock the MAC, reset until the lane is ready; the queues reset with it. */
+  * board registers, 0x200 GEM CPU queues (OMCI), 0x300 Ethernet bridge. MAC and queues answer an error while the PON
+  * clocks are down, the bridge also while the Ethernet lane is. The lane's tx clock (311.04 MHz) and half clock clock
+  * the MAC, reset until the lane is ready; the queues reset with it, the bridge queues while either lane is down.
+  * Upstream GEM goes through the bridge's Port-ID lookup (by default to the CPU, also while the Ethernet lane is down);
+  * downstream, the CPU packets before the bridged ones. */
 case class OltBoardCore() extends Component {
   val io = new Bundle {
     val axi = slave(Axi4(HpsBridge.axiConfig))
@@ -57,6 +60,8 @@ case class OltBoardCore() extends Component {
     val refclkFail = in Bits (8 bits)
     val sfp = master(SfpPins())
     val ponIrq, boardIrq, gemIrq = out Bool ()
+    val ethTxClk, ethRxClk, ethDown = in Bool () // the Ethernet lane: clocks, not ready (asynchronous)
+    val eth = master(EthFrames())
   }
   val board = OltBoardRegs()
   io.lane <> board.io.lane
@@ -86,12 +91,25 @@ case class OltBoardCore() extends Component {
 
   val queuesDomain = ClockDomain.current.copy(reset = ClockDomain.current.readResetWire || RegNext(!board.io.alive).init(True))
   val queues = queuesDomain(gpon.GemCpuQueues(domains.ds, domains.us))
-  pon.mac.io.gem << queues.io.tx
-  queues.io.rx << pon.mac.io.usGem
-  queues.io.rxCut := pon.mac.io.usGemCut
   io.gemIrq := queues.io.irq
+
+  val bridgeDown = !io.lane.txReady || io.ethDown
+  def bridgeDomain(clk: Bool): ClockDomain = ClockDomain(clk, ClockDomain(clk)(BufferCC(bridgeDown)))
+  val bridge = GemEthBridge(domains.us, bridgeDomain(io.usClk), bridgeDomain(io.dsClk), bridgeDomain(io.ethTxClk),
+    bridgeDomain(io.ethRxClk), defaultAction = 1)
+  bridge.io.ponRx << pon.mac.io.usGem
+  bridge.io.ponRxCut := pon.mac.io.usGemCut
+  bridge.io.cpuPort.setIdle()
+  queues.io.rx << bridge.io.toCpu
+  queues.io.rxCut := bridge.io.toCpuCut
+  pon.mac.io.gem << new ClockingArea(domains.ds) {
+    val ds = StreamArbiterFactory.lowerFirst.fragmentLock.onArgs(queues.io.tx, bridge.io.ponTx)
+  }.ds
+  io.eth <> bridge.io.eth
+  val bridgeUp = board.io.alive && !BufferCC(io.ethDown, True)
 
   val cc = Apb3CC(pon.mac.io.apb.config, ClockDomain.current, domains.us)
   pon.mac.io.apb <> cc.io.output
-  HpsBridge(io.axi, Seq(cc.io.input -> board.io.alive, board.io.apb -> True, queues.io.apb -> board.io.alive))
+  HpsBridge(io.axi, Seq(cc.io.input -> board.io.alive, board.io.apb -> True, queues.io.apb -> board.io.alive,
+    bridge.io.apb -> bridgeUp))
 }

@@ -16,6 +16,7 @@ case class EthBoardRegs() extends Component {
     val lane = master(GtsLaneCtrl())
     val sfp = master(SfpPins())
     val sgmii = out Bool ()
+    val bridge = out UInt (2 bits)
     val anComplete, synced = in Bool () // lane clock domains
     val alive = out Bool () // both lane clocks run: the frame queues answer
     val irq = out Bool ()
@@ -24,6 +25,8 @@ case class EthBoardRegs() extends Component {
   BoardFields.lane(busif, "ETH", io.lane)
   io.alive := synced(io.lane.txReady) && synced(io.lane.rxReady) && !io.lane.txReset && !io.lane.rxReset
   val cage = sfpCage(busif, "Ethernet", io.sfp, io.alive, False, "both lane clocks run and the frame queues answer")
+  val BRIDGE = busif.newReg("Frames of the port go to (set while the link is idle)")
+  io.bridge := BRIDGE.field(UInt(2 bits), AccessType.RW, 0, "0 the CPU frame queues, 1 the OLT bridge, 2 the ONU bridge")(SymbolName("to"))
   val PCS = busif.newReg("1000BASE-X / SGMII PCS")
   io.sgmii := PCS.field(Bool(), AccessType.RW, 0, "SGMII (copper SFP), else 1000BASE-X")(SymbolName("sgmii"))
   val pcs = Seq("anComplete" -> synced(io.anComplete), "synced" -> synced(io.synced))
@@ -34,7 +37,7 @@ case class EthBoardRegs() extends Component {
 }
 
 /** Ethernet side of the board without the vendor blocks: 0x000 board registers, 0x100 frame queues (GemCpuQueues,
-  * Port-ID 0, one fragment per frame, a bad frame as cut). The lane's tx and rx clocks (125 MHz) clock the port, each
+  * Port-ID 0, one fragment per frame, a bad frame as cut); BRIDGE gives the port to the queues or to a PON bridge. The lane's tx and rx clocks (125 MHz) clock the port, each
   * reset until its lane side is ready; the queues reset while either is down. anSpeedup: short autonegotiation timer
   * (simulation). */
 case class EthBoardCore(anSpeedup: Boolean = false) extends Component {
@@ -46,6 +49,7 @@ case class EthBoardCore(anSpeedup: Boolean = false) extends Component {
     val rxWord = in Bits (10 bits)
     val sfp = master(SfpPins())
     val boardIrq, frameIrq = out Bool ()
+    val olt, onu = slave(EthFrames()) // the PON bridges, lane clock domains
   }
   val board = EthBoardRegs()
   io.lane <> board.io.lane
@@ -65,15 +69,26 @@ case class EthBoardCore(anSpeedup: Boolean = false) extends Component {
 
   val queuesDomain = ClockDomain.current.copy(reset = ClockDomain.current.readResetWire || RegNext(!board.io.alive).init(True))
   val queues = queuesDomain(gpon.GemCpuQueues(txCd, rxCd))
-  port.io.tx << queues.io.tx.translateWith {
+  val cpuTx = queues.io.tx.translateWith {
     val f = Fragment(Bits(8 bits))
     f.fragment := queues.io.tx.fragment.data
     f.last := queues.io.tx.last
     f
   }
+  val txTo = txCd(BufferCC(board.io.bridge, U(0, 2 bits))) // static while frames flow
+  val rxTo = rxCd(BufferCC(board.io.bridge, U(0, 2 bits)))
+  val sources = Seq(cpuTx, io.olt.tx, io.onu.tx)
+  for ((source, k) <- sources.zipWithIndex) source.ready := port.io.tx.ready && txTo === k
+  port.io.tx.valid := sources.zipWithIndex.map { case (source, k) => source.valid && txTo === k }.orR
+  port.io.tx.payload := txTo.mux(1 -> io.olt.tx.payload, 2 -> io.onu.tx.payload, default -> cpuTx.payload)
+  for ((f, k) <- Seq(io.olt -> 1, io.onu -> 2)) {
+    f.rx.valid := port.io.rx.valid && rxTo === k
+    f.rx.payload := port.io.rx.payload
+    f.rxBad := port.io.rxBad
+  }
   val rx = queues.io.rx
   val bad = port.io.rx.last && port.io.rxBad
-  rx.valid := port.io.rx.valid
+  rx.valid := port.io.rx.valid && rxTo === 0
   rx.last := port.io.rx.last && !bad
   rx.allocId := 0
   rx.gem.portId := 0

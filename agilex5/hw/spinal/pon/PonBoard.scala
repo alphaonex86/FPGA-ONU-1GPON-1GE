@@ -117,6 +117,12 @@ case class PonBoard() extends Component {
   duplex(ethLane, eth.io.lane, io.eth_refclk, ethLane.o_tx_clkout, ethLane.o_rx_clkout, eth.io.txWord, eth.io.rxWord)
   eth.io.txClk := ethLane.o_tx_clkout
   eth.io.rxClk := ethLane.o_rx_clkout
+  olt.io.ethTxClk := ethLane.o_tx_clkout
+  olt.io.ethRxClk := ethLane.o_rx_clkout
+  olt.io.ethDown := !ethLane.o_tx_ready || !ethLane.o_rx_ready
+  eth.io.olt <> olt.io.eth
+  eth.io.onu.tx.valid := False // ONU bridge: not yet
+  eth.io.onu.tx.payload.assignDontCare()
   io.eth_tx_p := ethLane.o_tx_serial_data
   io.eth_tx_n := ethLane.o_tx_serial_data_n
   ethLane.i_rx_serial_data := io.eth_rx_p

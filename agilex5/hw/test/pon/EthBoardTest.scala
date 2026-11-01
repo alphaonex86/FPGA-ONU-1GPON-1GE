@@ -11,7 +11,7 @@ object EthBoardTest extends App {
   val ETH_STATUS = 0x04
   val SFP_CTRL = 0x08
   val STATUS = 0x0C
-  val PCS = 0x10
+  val PCS = 0x14
   val TX_HEAD = 0x100
   val TX_DATA = 0x104
   val RX_DESC_0 = 0x108
@@ -26,6 +26,7 @@ object EthBoardTest extends App {
            io.lane.rxLockedToData, io.lane.rxLockedToRef, io.sfp.modAbs, io.sfp.los, io.sfp.txFault,
            io.sfp.scl.read, io.sfp.sda.read)) b #= false
     io.rxWord #= 0
+    for (f <- Seq(io.olt, io.onu)) f.tx.valid #= false
     io.txClk #= false
     io.rxClk #= false
     fork { // 125 MHz lane, looped back 4 bits late

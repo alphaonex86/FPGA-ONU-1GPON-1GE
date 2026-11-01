@@ -72,6 +72,13 @@ taxi's 1000BASE-X/SGMII PCS (autonegotiation) and 1G MAC (`common/hw/ext/taxi`,
 submodule: `git submodule update --init`), two ports back to back; on the board
 its own lane, SFP cage pins and HPS frame queues (`eth_board_regs.h`), checked
 from the CPU registers to the looped-back lane.
+L2 bridge GEM <-> Ethernet (`common/hw/spinal/pon/GemEthBridge.scala`,
+`bridge_regs.h`): per Port-ID action towards Ethernet (drop, CPU, Ethernet;
+whole frames with a good FCS), the outer VLAN ID or the untagged default picks
+the Port-ID towards the PON, store-and-forward queues across the four clocks,
+drops counted. On the board the Ethernet port goes to the CPU queues or to the
+OLT bridge (`eth_board_regs.h` BRIDGE); a frame from the lane reaches the OLT
+MAC's downstream GEM in simulation.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane
@@ -84,7 +91,7 @@ detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
 optics pins with the laser held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed: 13.0K ALMs, setup slack +0.235 ns
+HSMC card pins placed: 13.5K ALMs, setup slack +0.204 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 
 ## License
