@@ -31,6 +31,7 @@ case class GtcDsDeframer() extends Component {
     val ploam = master Flow (Checked(Bits(96 bits)))
     val alloc = master Flow (Checked(Allocation()))
     val gem = master Flow (Fragment(GemRxByte())) // last: end of the GEM fragment
+    val gemCut = out Bool () // with io.gem: the open fragment was cut by the frame end
     val bipErrors = out UInt (32 bits)
     val plendErrors = out UInt (32 bits)
     val hecErrors = out UInt (32 bits)
@@ -158,6 +159,7 @@ case class GtcDsDeframer() extends Component {
   io.hecErrors := hecErrors
   hecErrors := hecErrors + hecError.asUInt
   val gemCut = RegNext(delineator.io.cut) init (False)
+  io.gemCut := gemCut
   val gemCuts = Reg(UInt(32 bits)) init (0)
   io.gemCuts := gemCuts
   gemCuts := gemCuts + gemCut.asUInt

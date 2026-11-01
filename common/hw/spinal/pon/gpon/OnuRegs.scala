@@ -21,7 +21,7 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
     val eqd = in UInt (32 bits)
     val omciPort = in UInt (12 bits)
     val omciValid = in Bool ()
-    val errors = in Bits (5 bits) // pulses: hwLost, jobLost, allocFull, fecRequested, late
+    val errors = in Bits (6 bits) // pulses: hwLost, jobLost, allocFull, fecRequested, late, gem
     val bipErrors = in UInt (32 bits)
     val irq = out Bool ()
   }
@@ -99,7 +99,8 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
     "jobLost" -> (io.errors(1), "allocation queue full"),
     "allocFull" -> (io.errors(2), "Assign_Alloc-ID beyond the table"),
     "fec" -> (io.errors(3), "a grant asks for FEC (not supported)"),
-    "late" -> (io.errors(4), "an allocation was dropped, its burst start had passed"))
+    "late" -> (io.errors(4), "an allocation was dropped, its burst start had passed"),
+    "gem" -> (io.errors(5), "the CPU GEM stream broke a packet (gap, wrong last, zero length)"))
   val errorBits = for (((name, (hit, doc)), k) <- errors.zipWithIndex) yield {
     val bit = sticky(hit, clearErrors(k))
     ERRORS.field(Bool(), AccessType.RO, 0, s"$name: $doc")(SymbolName(name)) := bit

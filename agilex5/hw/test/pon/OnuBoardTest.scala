@@ -15,6 +15,7 @@ object OnuBoardTest extends App {
   val EVENTS = BOARD + 0x18
   val IRQ_ENABLE = BOARD + 0x1C
   val VCXO_CTRL = BOARD + 0x20
+  val QUEUES_STATUS = 0x200 + 0x14 // GemCpuQueues STATUS: txFree
 
   SimConfig.compile(OnuBoardCore()).doSim { dut =>
     val io = dut.io
@@ -43,7 +44,7 @@ object OnuBoardTest extends App {
       high / 16000.0
     }
 
-    check(read(SN_0)._2 == SLVERR, "MAC register while the ONU lane is down: error answer")
+    check(read(SN_0)._2 == SLVERR && read(QUEUES_STATUS)._2 == SLVERR, "MAC and GEM queues while the ONU lane is down: error answer")
     check(io.pins.laserDisable.toBoolean, "laser off at power-up")
     check(math.abs(pinMean() - 0.5) < 0.01, "VCXO pin at the center duty while the ONU clocks are down")
 
@@ -51,6 +52,8 @@ object OnuBoardTest extends App {
     io.onuLane.rxReady #= true
     mgmt.waitSampling(20)
     check(write(SN_0, 0x47504F4EL) == 0 && read(SN_0) == (0x47504F4EL, 0), "MAC register across the clocks once up")
+    val (queues, queuesResp) = read(QUEUES_STATUS)
+    check(queuesResp == 0 && (queues & 0xFFFF) == 512, s"GEM queues once up: TX queue empty (${queues & 0xFFFF} words free)")
     write(OPTICS, 0)
     mgmt.waitSampling(4)
     check(io.pins.laserDisable.toBoolean, "laser still off while the burst enable lane is not ready")

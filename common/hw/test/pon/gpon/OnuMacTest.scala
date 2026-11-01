@@ -25,14 +25,20 @@ case class PonLoop() extends Component {
     val onuApb = slave(cloneOf(onu.io.apb))
     val oltIrq = out Bool ()
     val onuIrq = out Bool ()
+    val oltGem = slave(cloneOf(olt.io.gem))      // downstream GEM, OLT side
+    val oltUsGem = master(cloneOf(olt.io.usGem))
+    val onuGemTx = slave(cloneOf(onu.io.gemTx))  // upstream GEM, ONU side
+    val onuGemRx = master(cloneOf(onu.io.gemRx))
   }
   val usDomain = ClockDomain(io.usClk, io.usReset)
   olt.io.usClk := io.usClk
   olt.io.usReset := io.usReset
   onu.io.usClk := io.usClk
   onu.io.usReset := io.usReset
-  olt.io.gem.valid := False
-  olt.io.gem.payload.assignDontCare()
+  olt.io.gem << io.oltGem
+  io.oltUsGem << olt.io.usGem
+  onu.io.gemTx << io.onuGemTx
+  io.onuGemRx << onu.io.gemRx
   io.oltDs := olt.io.dsLine
   olt.io.usLine := io.oltUs
   onu.io.dsLine := io.onuDs
@@ -73,7 +79,8 @@ class Cpu(apb: Apb3Driver, cd: ClockDomain, irq: Bool) {
 
 /** Closed loop OLT MAC <-> ONU MAC over a simulated fibre, both driven by CPU models through their registers:
   * activation to O5 and the ONU response time, Assign_Alloc-ID / Configure_Port-ID / BER_Interval acknowledged,
-  * Request_Password answered 3 times, a CPU PLOAM each way, a DBA T-CONT in the ONU's burst with its DBRu, a fibre cut
+  * Request_Password answered 3 times, a CPU PLOAM each way, a DBA T-CONT in the ONU's burst with its DBRu,
+  * OMCI over GEM both ways (upstream fragmented in the default allocation), a fibre cut
   * (O6) restored with a downstream shift then a directed POPUP keeping the EqD to the bit, Disable_Serial_Number
   * (O7, laser dark), re-activation, a cut longer than TO2 (O1). */
 object OnuMacTest extends App {
@@ -92,6 +99,8 @@ object OnuMacTest extends App {
     val onuP = dut.onu.upstream.ploam.io
     for (apb <- Seq(io.oltApb, io.onuApb)) { apb.PSEL #= 0; apb.PENABLE #= false }
     io.oltUs #= 0
+    val oltGem = new GtcDsTest.GemDriver(io.oltGem, ds)
+    val onuGem = new GtcDsTest.GemDriver(io.onuGemTx, us)
     io.onuDs #= 0
     ds.fallingEdge(); us.fallingEdge()
     ds.assertReset(); us.assertReset()
@@ -229,6 +238,35 @@ object OnuMacTest extends App {
     val dbru300 = dbrus.filter(_._1 == 300)
     check(dbru300.length >= 4 && dbru300.forall(_._2), s"T-CONT 300 granted in the ONU's burst, ${dbru300.length} DBRu with good CRC")
     check(bursts.filter(x => x._1 > frames - 4).forall(x => x._2 && x._5 == 0), "two-allocation bursts to the bit")
+
+    // OMCI over GEM: the ONU CPU's packets upstream in its default allocation, fragmented to fit (50 bytes after the
+    // PLOAMu); downstream only the OMCI Port-ID reaches the ONU CPU
+    val usFragments = mutable.ArrayBuffer[(Int, Int, Boolean, List[Int])]() // allocId, Port-ID, end, bytes
+    val open = mutable.ArrayBuffer[Int]()
+    us.onSamplings {
+      val g = io.oltUsGem
+      if (g.valid.toBoolean) {
+        open += g.gem.data.toInt
+        if (g.last.toBoolean) {
+          usFragments += ((g.allocId.toInt, g.gem.portId.toInt, g.gem.pti.toInt % 2 == 1, open.toList))
+          open.clear()
+        }
+      }
+    }
+    val dsGem = mutable.ArrayBuffer[(Int, Int)]() // Port-ID, byte
+    ds.onSamplings { if (io.onuGemRx.valid.toBoolean) dsGem += ((io.onuGemRx.gem.portId.toInt, io.onuGemRx.gem.data.toInt)) }
+    val omci = Seq.tabulate(2)(k => List.tabulate(48)(i => (i * 7 + k * 101) & 0xFF))
+    onuGem.queue ++= omci.map(0x123 -> _)
+    val f2 = frames
+    us.waitSamplingWhere(usFragments.count(_._3) == 2 || frames > f2 + 10)
+    val packets = usFragments.foldLeft((List[List[Int]](), List[Int]())) { case ((done, cur), f) =>
+      if (f._3) (done :+ (cur ++ f._4), Nil) else (done, cur ++ f._4) }._1
+    check(packets == omci && usFragments.forall(f => f._1 == onuId && f._2 == 0x123) && usFragments.length > 2,
+      s"ONU OMCI upstream: 2 packets in ${usFragments.length} fragments of the default allocation (${usFragments.map(_._4.length)})")
+    val omciDown = List.tabulate(48)(i => 255 - i)
+    oltGem.queue ++= Seq(0x456 -> List.fill(20)(0x5A), 0x123 -> omciDown)
+    waitFrames(3)
+    check(dsGem.map(_._2).toList == omciDown && dsGem.forall(_._1 == 0x123), "downstream: only the OMCI Port-ID to the ONU CPU")
 
     // fibre cut: O6; back with the downstream 11 bits later (5.5 upstream bits), directed POPUP: same EqD
     dsCut = true

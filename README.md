@@ -55,7 +55,9 @@ simulated fibre (ranging, DBA, fibre cut and POPUP, Disable_Serial_Number),
 and against the PLOAM sequences of real OLTs (ZTE as recorded by stock ONUs,
 Broadcom Maple): every copy answered like the stock ONU, EqD drift updates to
 the bit, deactivation churn; meets timing on the DE25-Standard FPGA. Like those
-OLTs, our OLT sends each of its PLOAMs 3 times.
+OLTs, our OLT sends each of its PLOAMs 3 times. OMCI over GEM both ways:
+downstream fragments of the OMCI Port-ID to the CPU, CPU packets upstream in
+the default allocation (OMCC), fragmented to the grant.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane
@@ -65,10 +67,10 @@ queues for OMCI (whole packets downstream, upstream fragments with descriptors;
 `gem_queues.h`). ONU side: ONU MAC on the BOSA data and burst enable lanes, its
 clock kept on the recovered downstream clock by a VCXO loop (DDMTD phase
 detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
-phase wander in simulation, the OLT tolerating 4), optics pins with the laser
-held off until both lanes are up.
+phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
+optics pins with the laser held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed: 7.5K ALMs, setup slack +0.243 ns
+HSMC card pins placed: 8.1K ALMs, setup slack +0.152 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 
 ## License

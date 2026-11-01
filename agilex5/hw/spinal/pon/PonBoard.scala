@@ -22,7 +22,7 @@ case class PonBoard() extends Component {
     val sfp = master(SfpPins())
     val onuPins = master(OnuPins())
     val vcxoPwm = out Bool ()
-    val oltPonIrq, oltBoardIrq, oltGemIrq, onuPonIrq, onuBoardIrq = out Bool ()
+    val oltPonIrq, oltBoardIrq, oltGemIrq, onuPonIrq, onuBoardIrq, onuGemIrq = out Bool ()
   }
   noIoPrefix()
   olt.io.axi <> io.lwOlt
@@ -35,6 +35,7 @@ case class PonBoard() extends Component {
   io.oltGemIrq := olt.io.gemIrq
   io.onuPonIrq := onu.io.ponIrq
   io.onuBoardIrq := onu.io.boardIrq
+  io.onuGemIrq := onu.io.gemIrq
 
   val srcss = vendor.GtsSrcss(4)
   srcss.i_src_rs_priority := 0

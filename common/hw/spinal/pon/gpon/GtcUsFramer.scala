@@ -9,8 +9,10 @@ object FramerState extends SpinalEnum { val IDLE, OVERHEAD, PLOU, ALLOC = newEle
 
 /** ONU upstream GTC burst framer (G.984.3 clause 8.2), no FEC, one line byte per clock (155.52 MHz). Jobs come in
   * time order; a job starting where the previous one ends continues its burst, otherwise a burst opens with guard,
-  * preamble, delimiter and PLOu. Allocation content: PLOAMu, DBRu (empty report), idle GEM frames. The line leaves on
-  * the jobs' bit alignment with its burst enable (laser on), a fixed latency after io.time. */
+  * preamble, delimiter and PLOu. Allocation content: PLOAMu, DBRu (empty report), then GEM frames: in the gemAllocId
+  * allocations the packets of io.gem (one byte per clock once started), fragmented to fit and continued in the next
+  * such allocation, else idle. A packet left open when the bursts stop is discarded. The line leaves on the jobs' bit
+  * alignment with its burst enable (laser on), a fixed latency after io.time. */
 case class GtcUsFramer() extends Component {
   val io = new Bundle {
     val job = slave Stream (UsJob())
@@ -20,6 +22,9 @@ case class GtcUsFramer() extends Component {
     val overhead = in(BurstOverhead())
     val snMessage = in Bits (96 bits) // Serial_Number_ONU with a zero random delay field
     val ploam = slave Stream (Bits(96 bits)) // other PLOAMu messages, No_message when none
+    val gem = slave Stream (Fragment(GemTxByte()))
+    val gemAllocId = in UInt (12 bits)   // the allocations carrying io.gem (OMCC: the default Alloc-ID)
+    val gemError = out Bool ()           // io.gem broke a packet (gap, wrong last, zero length)
     val line = out Bits (8 bits)
     val ben = out Bits (8 bits)       // burst enable per line bit
     val late = out Bool ()            // a job whose burst start had passed was dropped
@@ -32,6 +37,8 @@ case class GtcUsFramer() extends Component {
   io.job.ready := False
   io.ploam.ready := False
   io.late := False
+  io.gem.ready := False
+  io.gemError := False
 
   val state = RegInit(IDLE)
   val shift = Reg(UInt(3 bits)) init (0)
@@ -40,7 +47,13 @@ case class GtcUsFramer() extends Component {
   val nextBit = Reg(UInt(27 bits)) // where a contiguous job starts
   val ploamLeft = Reg(UInt(4 bits))
   val dbruLeft = Reg(UInt(2 bits))
-  val gemIndex = Reg(UInt(3 bits))
+  val gemIndex = Reg(UInt(3 bits)) init (0) // header byte being sent
+  val headerPli, headerPort = Reg(UInt(12 bits))
+  val headerPti = Reg(Bits(3 bits))
+  val fragmentLeft = Reg(UInt(12 bits)) init (0)
+  val packetLeft = Reg(UInt(12 bits)) init (0)
+  val portId = Reg(UInt(12 bits))
+  val gemAlloc = Reg(Bool())
   val message = Reg(Bits(96 bits))
   val fieldStart = Reg(Bool())
   val crc = Reg(Bits(8 bits))
@@ -56,7 +69,7 @@ case class GtcUsFramer() extends Component {
     val ploamU = j.alloc.flags(10)
     ploamLeft := ploamU ? U(13, 4 bits) | U(0, 4 bits)
     dbruLeft := j.alloc.flags(8 downto 7).mux(1 -> U(2, 2 bits), 2 -> U(3, 2 bits), default -> U(0, 2 bits))
-    gemIndex := 0
+    gemAlloc := j.alloc.allocId === io.gemAllocId && !j.sn
     fieldStart := True
     io.ploam.ready := ploamU && !j.sn
     message := j.sn ? (io.snMessage | (j.random.resize(12).asBits ## B(0, 4 bits)).resize(96)) |
@@ -126,12 +139,39 @@ case class GtcUsFramer() extends Component {
         dbruLeft := dbruLeft - 1
         clear := (dbruLeft === 1) ? crcIn | B(0, 8 bits)
         fieldStart := False
-      } otherwise {
-        when(gemIndex =/= 0 || allocLeft >= 5) { // idle GEM frames, zeros in a tail shorter than a header
-          clear := B(gemMask, 40 bits).subdivideIn(8 bits)(U(4, 3 bits) - gemIndex)
-          gemIndex := (gemIndex === 4) ? U(0, 3 bits) | gemIndex + 1
+      } elsewhen (gemIndex =/= 0) { // header bytes 1-4, the HEC from registers (timing)
+        val line = gemHeader(headerPli, headerPort, headerPti) ^ B(gemMask, 40 bits)
+        clear := line.subdivideIn(8 bits)(U(4, 3 bits) - gemIndex)
+        gemIndex := (gemIndex === 4) ? U(0, 3 bits) | gemIndex + 1
+      } elsewhen (fragmentLeft =/= 0) {
+        io.gem.ready := True
+        clear := io.gem.fragment.data
+        fragmentLeft := fragmentLeft - 1
+        packetLeft := packetLeft - 1
+        io.gemError := !io.gem.valid || (io.gem.last =/= (packetLeft === 1))
+      } elsewhen (allocLeft >= 5) { // a GEM frame: data if a packet is pending and a byte of it fits, else idle
+        val continuing = packetLeft =/= 0
+        val length = continuing ? packetLeft | io.gem.fragment.length.resize(12)
+        val port = continuing ? portId | io.gem.fragment.portId
+        val room = allocLeft - 5
+        val endOfPacket = length.resize(16) <= room
+        val fragment = endOfPacket ? length | ((room > 4095) ? U(4095, 12 bits) | room.resize(12))
+        val sendData = gemAlloc && room =/= 0 && (continuing || io.gem.valid) && length =/= 0
+        headerPli := sendData ? fragment | U(0, 12 bits)
+        headerPort := sendData ? port | U(0, 12 bits)
+        headerPti := sendData ? (B"00" ## endOfPacket) | B"000"
+        clear := (sendData ? fragment(11 downto 4).asBits | B(0, 8 bits)) ^ B(gemMask >> 32, 8 bits)
+        gemIndex := 1
+        when(sendData) {
+          fragmentLeft := fragment
+          packetLeft := length
+          portId := port
         }
-      }
+        when(!continuing && io.gem.valid && length === 0) { // invalid packet: dropped, reported
+          io.gem.ready := True
+          io.gemError := True
+        }
+      } // else zeros: a tail shorter than a header
       when(allocLeft === 1) {
         when(io.job.valid && head.bit === nextBit) {
           io.job.ready := True
@@ -144,7 +184,15 @@ case class GtcUsFramer() extends Component {
   scrambler := (state === PLOU && index === 0) ? scramblerByte(B"7'x7F")._2 | scramblerNext
   val keyNow = (state === PLOU && index === 0) ? scramblerByte(B"7'x7F")._1 | keystream
   when(scrambled)(bip := (state === PLOU && index === 0) ? B(0, 8 bits) | bip ^ clear)
-  when(!io.enable)(state := IDLE)
+  when(!io.enable) {
+    state := IDLE
+    gemIndex := 0
+    fragmentLeft := 0
+    when(packetLeft =/= 0 && io.gem.valid) { // the open packet is discarded
+      io.gem.ready := True
+      packetLeft := packetLeft - 1
+    }
+  }
 
   // grid bytes, then shifted onto the line by the burst's bit alignment
   val gridLine = RegNext(overheadByte ? ovLine | (scrambled ? (clear ^ keyNow) | B(0, 8 bits))) init (0)

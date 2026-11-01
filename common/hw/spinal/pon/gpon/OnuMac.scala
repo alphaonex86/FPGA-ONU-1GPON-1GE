@@ -11,7 +11,8 @@ object OnuMac {
 
 /** GPON ONU MAC: downstream deframer in the default clock domain (311.04 MHz recovered clock, one line byte per
   * clock), activation and upstream burst framer in the upstream domain (usClk: the downstream clock divided by two,
-  * same source). Upstream timing is anchored to the downstream frame start to the bit: its byte time, which half of
+  * same source). OMCI: downstream GEM fragments of the OMCI Port-ID out on gemRx, gemTx packets upstream in the
+  * default allocation (OMCC). Upstream timing is anchored to the downstream frame start to the bit: its byte time, which half of
   * the upstream clock it came in and the PSync bit alignment, so a re-sync (POPUP) keeps the ranged EqD valid. */
 case class OnuMac(maxAllocIds: Int = 8) extends Component {
   val io = new Bundle {
@@ -23,6 +24,10 @@ case class OnuMac(maxAllocIds: Int = 8) extends Component {
     val usLine = out Bits (8 bits)
     val usBen = out Bits (8 bits) // burst enable per line bit (laser on)
     val apb = slave(Apb3(Apb3Config(addressWidth = 8, dataWidth = 32))) // OnuRegs
+    val gemTx = slave Stream (Fragment(GemTxByte()))
+    // downstream domain
+    val gemRx = master Flow (Fragment(UsGemByte())) // allocId 0
+    val gemRxCut = out Bool ()
     val irq = out Bool ()
   }
   val usDomain = ClockDomain(io.usClk, io.usReset, config = ClockDomain.current.config)
@@ -70,7 +75,7 @@ case class OnuMac(maxAllocIds: Int = 8) extends Component {
     regs.io.eqd := ploam.io.eqd
     regs.io.omciPort := ploam.io.omciPort
     regs.io.omciValid := ploam.io.omciValid
-    regs.io.errors := framer.io.late ## ploam.io.fecRequested ## ploam.io.allocFull ## ploam.io.jobLost ## ploam.io.hwLost
+    regs.io.errors := framer.io.gemError ## framer.io.late ## ploam.io.fecRequested ## ploam.io.allocFull ## ploam.io.jobLost ## ploam.io.hwLost
     regs.io.bipErrors := RegNext(deframer.io.bipErrors)
 
     framer.io.job << ploam.io.job
@@ -80,7 +85,19 @@ case class OnuMac(maxAllocIds: Int = 8) extends Component {
     framer.io.overhead := ploam.io.overhead
     framer.io.snMessage := ploam.io.snMessage
     framer.io.ploam << ploam.io.usPloam
+    framer.io.gem << io.gemTx
+    framer.io.gemAllocId := ploam.io.onuId.asUInt.resized
     io.usLine := framer.io.line
     io.usBen := framer.io.ben
   }
+
+  // OMCI fragments to the CPU (Port-ID quasi-static, from the synchronous upstream domain)
+  val omciPort = RegNext(upstream.ploam.io.omciPort)
+  val omciValid = RegNext(upstream.ploam.io.omciValid) init (False)
+  val omci = deframer.io.gem.valid && omciValid && deframer.io.gem.portId === omciPort
+  io.gemRx.valid := omci
+  io.gemRx.last := deframer.io.gem.last
+  io.gemRx.allocId := 0
+  io.gemRx.gem := deframer.io.gem.fragment
+  io.gemRxCut := deframer.io.gemCut
 }
