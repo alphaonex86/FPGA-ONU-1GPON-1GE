@@ -79,6 +79,12 @@ object GtcUsTest extends App {
     var cycle = 0
     dut.io.delimiter #= usDelimiter
     dut.io.delimiterErrors #= 1
+    val lead = 12
+    val width = 4
+    dut.io.resetLead #= lead
+    dut.io.resetBytes #= width
+    val resets = mutable.ArrayBuffer[(Int, Int)]() // first and last high clock
+    var resetFrom = -1
     dut.io.grant.valid #= false
     dut.io.time #= 0
     dut.io.line #= 0
@@ -96,6 +102,8 @@ object GtcUsTest extends App {
         g.window #= w
       }
       val io = dut.io
+      if (io.rxReset.toBoolean && resetFrom < 0) resetFrom = cycle
+      if (!io.rxReset.toBoolean && resetFrom >= 0) { resets += ((resetFrom, cycle - 1)); resetFrom = -1 }
       if (io.burst.valid.toBoolean) gotBursts += ((io.burst.found.toBoolean, io.burst.allocId.toInt, io.burst.onuId.toInt,
         io.burst.ind.toInt, io.burst.delayBits.toLong, io.burst.bipErrors.toInt))
       if (io.ploam.valid.toBoolean) gotPloams += ((io.ploam.value.toBigInt, io.ploam.crcOk.toBoolean))
@@ -127,6 +135,9 @@ object GtcUsTest extends App {
     check(gotPackets.filter(_._1 != 0x201) == sent, s"${sent.length} GEM packets per allocation, contiguous allocations")
     check(gotPackets.count(_._1 == 0x201) == 1 && gotPackets.find(_._1 == 0x201).get._3 != b2.allocs.head.packets.head._2,
       "the packet with the flipped bit is delivered, corrupted")
+    val expected = bursts.map(b => b.time - 4 - b.window - lead).map(end => (end - width + 1, end))
+    check(resets == expected, s"optics reset: $width bytes ending $lead bytes before each burst's search window " +
+      s"(got $resets, expected $expected)")
     check(dut.io.hecErrors.toLong == 0 && dut.io.gemCuts.toLong == 0 && grants.isEmpty, "no HEC error, no cut, all grants used")
   }
   println("PASS GtcUsTest")

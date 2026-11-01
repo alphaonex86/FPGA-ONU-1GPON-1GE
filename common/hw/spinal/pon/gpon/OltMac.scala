@@ -22,6 +22,7 @@ case class OltMac(maxOnus: Int = 32, maxTconts: Int = 64) extends Component {
     val time = out UInt (24 bits) // upstream byte time of usLine
     val apb = slave(Apb3(Apb3Config(addressWidth = 8, dataWidth = 32))) // OltRegs
     val irq = out Bool ()
+    val rxReset = out Bool () // to the OLT optics' burst reset pin
     val dbru = master Flow (UsDbru())
     val usGem = master Flow (Fragment(UsGemByte()))
   }
@@ -60,6 +61,9 @@ case class OltMac(maxOnus: Int = 32, maxTconts: Int = 64) extends Component {
     receiver.io.time := time
     receiver.io.delimiter := B(GponCodes.usDelimiter, 24 bits)
     receiver.io.delimiterErrors := 1
+    receiver.io.resetLead := regs.io.config.rxResetLead
+    receiver.io.resetBytes := regs.io.config.rxResetBytes
+    io.rxReset := receiver.io.rxReset
     scheduler.io.burst := receiver.io.burst
     scheduler.io.usPloam := receiver.io.ploam
     scheduler.io.dbru := receiver.io.dbru

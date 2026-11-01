@@ -53,6 +53,10 @@ case class OltRegs(maxTconts: Int = 64) extends Component {
   io.config.tconts := DBA.field(UInt(8 bits), AccessType.RW, 0, "T-CONT entries in use, sorted by ONU-ID")(SymbolName("tconts"))
   io.config.blockBytes := DBA.field(UInt(16 bits), AccessType.RW, 48, "DBRu reporting block")(SymbolName("blockBytes"))
 
+  val RX_RESET = busif.newReg("Burst-mode receiver reset of the OLT optics, in the gap before each burst")
+  io.config.rxResetLead := RX_RESET.field(UInt(8 bits), AccessType.RW, 0, "it ends this many bytes before the burst's delimiter search")(SymbolName("lead"))
+  io.config.rxResetBytes := RX_RESET.field(UInt(8 bits), AccessType.RW, 0, "its width in upstream bytes, 0 off")(SymbolName("bytes"))
+
   val TCONT_A = busif.newReg("T-CONT entry, first word")
   val tcIndex = TCONT_A.field(UInt(8 bits), AccessType.RW, 0, "table index")(SymbolName("index"))
   val tcAllocId = TCONT_A.field(UInt(12 bits), AccessType.RW, 0, "Alloc-ID")(SymbolName("allocId"))

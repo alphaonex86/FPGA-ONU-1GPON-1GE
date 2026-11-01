@@ -20,6 +20,8 @@ case class OltConfig() extends Bundle {
   val gapBytes = UInt(16 bits)     // between bursts: guard, preamble, delimiter, PLOu
   val tconts = UInt(8 bits)        // T-CONT table entries in use, sorted by ONU-ID
   val blockBytes = UInt(16 bits)   // DBRu reporting block (OMCI, default 48)
+  val rxResetLead = UInt(8 bits)   // OLT optics reset before each burst (GtcUsDeframer), per module datasheet
+  val rxResetBytes = UInt(8 bits)
 }
 
 /** T-CONT of an active ONU, granted in its burst after its default allocation: fixedBytes every frame, up to

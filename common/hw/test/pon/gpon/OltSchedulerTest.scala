@@ -49,6 +49,8 @@ case class OltUsLoop(maxOnus: Int, maxTconts: Int = 8) extends Component {
   receiver.io.time := io.time
   receiver.io.delimiter := B(usDelimiter, 24 bits)
   receiver.io.delimiterErrors := 1
+  receiver.io.resetLead := io.config.rxResetLead
+  receiver.io.resetBytes := io.config.rxResetBytes
   scheduler.io.burst := receiver.io.burst
   scheduler.io.usPloam := receiver.io.ploam
   scheduler.io.dbru := receiver.io.dbru
@@ -94,6 +96,8 @@ class OltActivation(maxFrames: Int) {
     config.gapBytes #= gapBytes
     config.tconts #= 0
     config.blockBytes #= 48
+    config.rxResetLead #= 0
+    config.rxResetBytes #= 0
   }
 
   val cpuPloam = BigInt("FF0A", 16) << 80

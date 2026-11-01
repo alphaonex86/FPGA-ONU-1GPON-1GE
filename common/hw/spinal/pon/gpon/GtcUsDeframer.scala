@@ -47,6 +47,9 @@ case class GtcUsDeframer() extends Component {
     val grant = slave Stream (UsGrant())
     val delimiter = in Bits (24 bits)
     val delimiterErrors = in UInt (2 bits)
+    val resetLead = in UInt (8 bits)  // burst-mode receiver reset: ends resetLead bytes before a burst's search window
+    val resetBytes = in UInt (8 bits) // and lasts resetBytes (0: off)
+    val rxReset = out Bool ()         // one clock behind the line bytes of io.time
     val burst = master Flow (UsBurst())
     val ploam = master Flow (Checked(Bits(96 bits)))
     val dbru = master Flow (UsDbru())
@@ -76,10 +79,15 @@ case class GtcUsDeframer() extends Component {
   val huntStart = expected - head.window
   val huntEnd = expected + head.window
   io.grant.ready := False
+  val resetEnd = huntStart - io.resetLead
+  val resetBegin = resetEnd - io.resetBytes
 
   val state = RegInit(UsState.IDLE)
   val cur = Reg(UsGrant()) // allocation being received
   val contiguous = io.grant.valid && head.time === cur.time + cur.bytes
+  // in IDLE the head grant opens the next burst: the optics' receiver resets in the gap before it
+  io.rxReset := RegNext(state === UsState.IDLE && io.grant.valid && after(io.time, resetBegin) && !after(io.time, resetEnd) &&
+    io.resetBytes =/= 0) init (False)
 
   val headerIndex = Reg(UInt(2 bits))
   val bipRx = Reg(Bits(8 bits))
