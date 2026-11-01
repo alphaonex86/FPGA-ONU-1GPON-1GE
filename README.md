@@ -63,7 +63,10 @@ OLT's superframe, and downstream FEC: RS(255,239) decoding, up to 8 byte errors
 corrected per codeword, with the counters of the OMCI FEC PM; checked against
 the G.984.3 golden vectors (A.2.2, A.2.3 with FEC, A.3). The OLT sends
 downstream FEC when enabled (CTRL register), every codeword's parity checked
-against the model and decoded by our ONU in the closed loop.
+against the model and decoded by our ONU in the closed loop. Upstream FEC in
+the ONU when the OLT asks for it (Use_FEC): parity per codeword with the shorter
+last one, the content sized to the data bytes, checked by a Scala OLT model; our
+OLT does not ask for it (like Maple's default).
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane
@@ -76,7 +79,7 @@ detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
 optics pins with the laser held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed: 10.8K ALMs, setup slack +0.192 ns
+HSMC card pins placed: 11.1K ALMs, setup slack +0.129 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 
 ## License

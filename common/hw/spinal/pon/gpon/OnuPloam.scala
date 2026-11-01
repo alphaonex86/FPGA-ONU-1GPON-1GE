@@ -95,7 +95,6 @@ case class OnuPloam(maxAllocIds: Int = 8, maxEncryptedPorts: Int = 16, jobDepth:
     val jobLost = out Bool ()        // job queue full
     val allocFull = out Bool ()      // Assign_Alloc-ID beyond maxAllocIds
     val encryptedFull = out Bool ()  // Encrypted_Port-ID beyond maxEncryptedPorts
-    val fecRequested = out Bool ()   // a grant for us asks for FEC, not supported
   }
   import ActivationState._
 
@@ -297,7 +296,6 @@ case class OnuPloam(maxAllocIds: Int = 8, maxEncryptedPorts: Int = 16, jobDepth:
   val isOwn = frameState === O5 && (a.allocId === frameOnuId || allocIds.contains(a.allocId))
   val take = io.alloc.valid && io.alloc.crcOk && (isSn || isRanging || isOwn) && a.stop >= a.start
   when(io.alloc.valid && io.alloc.crcOk && isSn)(snRequested := True)
-  io.fecRequested := take && a.flags(9)
 
   val picked = RegNext(take) init (False)
   val pickedAlloc = RegNext(a)

@@ -80,7 +80,7 @@ case class OnuMac(maxAllocIds: Int = 8) extends Component {
     regs.io.eqd := ploam.io.eqd
     regs.io.omciPort := ploam.io.omciPort
     regs.io.omciValid := ploam.io.omciValid
-    regs.io.errors := RegNext(keyLate) ## ploam.io.encryptedFull ## framer.io.gemError ## framer.io.late ## ploam.io.fecRequested ## ploam.io.allocFull ## ploam.io.jobLost ## ploam.io.hwLost
+    regs.io.errors := RegNext(keyLate) ## ploam.io.encryptedFull ## framer.io.gemError ## framer.io.late ## ploam.io.allocFull ## ploam.io.jobLost ## ploam.io.hwLost
     regs.io.bipErrors := RegNext(deframer.io.bipErrors)
     regs.io.fec := RegNext(Vec(deframer.io.fecCodewords, deframer.io.fecCorrectedBytes, deframer.io.fecCorrectedCodewords,
       deframer.io.fecUncorrectable))

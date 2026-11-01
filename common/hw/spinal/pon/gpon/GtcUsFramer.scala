@@ -7,12 +7,14 @@ import GponCodes._
 
 object FramerState extends SpinalEnum { val IDLE, OVERHEAD, PLOU, ALLOC = newElement() }
 
-/** ONU upstream GTC burst framer (G.984.3 clause 8.2), no FEC, one line byte per clock (155.52 MHz). Jobs come in
+/** ONU upstream GTC burst framer (G.984.3 clause 8.2), one line byte per clock (155.52 MHz). Jobs come in
   * time order; a job starting where the previous one ends continues its burst, otherwise a burst opens with guard,
   * preamble, delimiter and PLOu. Allocation content: PLOAMu, DBRu (empty report), then GEM frames: in the gemAllocId
   * allocations the packets of io.gem (one byte per clock once started), fragmented to fit and continued in the next
   * such allocation, else idle. A packet left open when the bursts stop is discarded. The line leaves on the jobs' bit
-  * alignment with its burst enable (laser on), a fixed latency after io.time. */
+  * alignment with its burst enable (laser on), a fixed latency after io.time. FEC (clause 13.3) when the burst's first
+  * allocation asks for it (Use_FEC, not on serial number and ranging grants): codewords from the BIP byte, 16 parity
+  * bytes after every 239 and at the end of the burst (shorter last codeword), the content sized to the data bytes. */
 case class GtcUsFramer() extends Component {
   val io = new Bundle {
     val job = slave Stream (UsJob())
@@ -32,9 +34,10 @@ case class GtcUsFramer() extends Component {
   import FramerState._
 
   def after(a: UInt, b: UInt): Bool = !(a - b).msb
-  val head = io.job.payload
+  val jobs = io.job.m2sPipe() // io.job: the job after this one, to know the burst's end when an allocation starts
+  val head = jobs.payload
   val burstStart = (head.bit >> 3).resize(24) - 3 - io.overhead.bytes
-  io.job.ready := False
+  jobs.ready := False
   io.ploam.ready := False
   io.late := False
   io.gem.ready := False
@@ -43,7 +46,10 @@ case class GtcUsFramer() extends Component {
   val state = RegInit(IDLE)
   val shift = Reg(UInt(3 bits)) init (0)
   val index = Reg(UInt(8 bits))
-  val allocLeft = Reg(UInt(16 bits))
+  val allocLeft = Reg(UInt(16 bits))   // data bytes of the allocation left
+  val encodedLeft = Reg(UInt(16 bits)) // line bytes of the allocation left (parity included)
+  val fec = Reg(Bool())
+  val codewordPos = Reg(UInt(8 bits))  // of the current byte, from the BIP byte
   val nextBit = Reg(UInt(27 bits)) // where a contiguous job starts
   val ploamLeft = Reg(UInt(4 bits))
   val dbruLeft = Reg(UInt(2 bits))
@@ -62,10 +68,25 @@ case class GtcUsFramer() extends Component {
   val scrambler = Reg(Bits(7 bits))
   val (keystream, scramblerNext) = scramblerByte(scrambler)
 
-  def startAlloc(j: UsJob): Unit = {
+  def div255(x: UInt): UInt = ((x.resize(17) + (x >> 8) + 1) >> 8).resize(16) // x < 65535
+  // data bytes of an allocation starting at codeword position `at` (< 239): parity of each codeword started before its
+  // end, or with the burst ending there of all its codewords, the last one 16 or all its bytes (fewer than 17: zeros)
+  def dataBytes(at: UInt, bytes: UInt, last: Bool): UInt = {
+    val end = at.resize(16) + bytes
+    val full = div255(end - 1)
+    val lastLength = end - (full << 8).resize(16) + full
+    val parity = last ? ((full << 4).resize(16) + ((lastLength < 16) ? lastLength | U(16, 16 bits))) |
+      (div255(end + 15) << 4).resize(16)
+    (parity > bytes) ? U(0, 16 bits) | bytes - parity
+  }
+  def startAlloc(j: UsJob, burstFec: Bool): Unit = {
     val bytes = j.alloc.stop - j.alloc.start + 1
-    allocLeft := bytes
-    nextBit := j.bit + (bytes << 3).resize(27)
+    val endBit = j.bit + (bytes << 3).resize(27)
+    val last = !(io.job.valid && io.job.payload.bit === endBit)
+    val at = (codewordPos === 254) ? U(0, 8 bits) | codewordPos + 1
+    encodedLeft := bytes
+    allocLeft := burstFec ? dataBytes(at, bytes, last) | bytes
+    nextBit := endBit
     val ploamU = j.alloc.flags(10)
     ploamLeft := ploamU ? U(13, 4 bits) | U(0, 4 bits)
     dbruLeft := j.alloc.flags(8 downto 7).mux(1 -> U(2, 2 bits), 2 -> U(3, 2 bits), default -> U(0, 2 bits))
@@ -90,20 +111,25 @@ case class GtcUsFramer() extends Component {
     ovBen(7 - k) := p >= ov.guard
   }
 
+  val contiguous = jobs.valid && head.bit === nextBit
+  val parity = state === ALLOC && fec && (codewordPos >= fecDataBytes || !contiguous && encodedLeft <= 16)
+  // RS(255,239) encoder as downstream (G.984.3 A.3), restarted at each codeword
+  val rs = Vec(Reg(Bits(8 bits)) init (0), 16)
+  val rsState = (codewordPos === 0) ? Vec(rs.map(_ => B(0, 8 bits))) | rs
   val clear = Bits(8 bits)
   clear := 0
   val scrambled, overheadByte = False
   switch(state) {
     is(IDLE) {
       when(!io.enable) {
-        io.job.ready := io.job.valid
-      } elsewhen (io.job.valid) {
+        jobs.ready := jobs.valid
+      } elsewhen (jobs.valid) {
         when(io.time === burstStart) {
           state := OVERHEAD
           index := 0
           shift := head.bit(2 downto 0)
         } elsewhen (after(io.time, burstStart)) {
-          io.job.ready := True
+          jobs.ready := True
           io.late := True
         }
       }
@@ -111,7 +137,7 @@ case class GtcUsFramer() extends Component {
     is(OVERHEAD) {
       overheadByte := True
       index := index + 1
-      when(index === ov.bytes - 1) { state := PLOU; index := 0 }
+      when(index === ov.bytes - 1) { state := PLOU; index := 0; codewordPos := 0 }
     }
     is(PLOU) {
       scrambled := True
@@ -120,17 +146,22 @@ case class GtcUsFramer() extends Component {
         is(0)(clear := bip)
         is(1)(clear := io.onuId)
         default {
-          clear := io.ploam.valid ## B(0, 7 bits) // Ind: PLOAMu waiting
-          io.job.ready := True
-          startAlloc(head)
+          val burstFec = head.alloc.flags(9) && !head.sn
+          clear := io.ploam.valid ## burstFec ## B(0, 6 bits) // Ind: PLOAMu waiting, FEC
+          fec := burstFec
+          jobs.ready := True
+          startAlloc(head, burstFec)
           state := ALLOC
         }
       }
     }
     is(ALLOC) {
       scrambled := True
-      allocLeft := allocLeft - 1
-      when(ploamLeft =/= 0) {
+      encodedLeft := encodedLeft - 1
+      when(!parity && allocLeft =/= 0)(allocLeft := allocLeft - 1)
+      when(parity || allocLeft === 0) {
+        // parity (below), or data bytes beyond the content (an allocation breaking the FEC pointer rules): zeros
+      } elsewhen (ploamLeft =/= 0) {
         ploamLeft := ploamLeft - 1
         clear := (ploamLeft === 1) ? crcIn | message(95 downto 88)
         message := message |<< 8
@@ -172,18 +203,23 @@ case class GtcUsFramer() extends Component {
           io.gemError := True
         }
       } // else zeros: a tail shorter than a header
-      when(allocLeft === 1) {
-        when(io.job.valid && head.bit === nextBit) {
-          io.job.ready := True
-          startAlloc(head)
+      when(encodedLeft === 1) {
+        when(contiguous) {
+          jobs.ready := True
+          startAlloc(head, fec)
         } otherwise (state := IDLE)
       }
     }
   }
-  when(state === ALLOC && (ploamLeft =/= 0 || dbruLeft =/= 0))(crc := crc8Step(crcIn, clear))
+  when(parity)(clear := rsState(15))
+  val feedback = clear ^ rsState(15)
+  for (i <- 0 until 16) rs(i) := (if (i == 0) B(0, 8 bits) else rsState(i - 1)) ^
+    (parity ? B(0, 8 bits) | Gf.mulConst(feedback, Model.rsGenerator(i)))
+  when(scrambled)(codewordPos := (codewordPos === 254) ? U(0, 8 bits) | codewordPos + 1)
+  when(state === ALLOC && !parity && (ploamLeft =/= 0 || dbruLeft =/= 0))(crc := crc8Step(crcIn, clear))
   scrambler := (state === PLOU && index === 0) ? scramblerByte(B"7'x7F")._2 | scramblerNext
   val keyNow = (state === PLOU && index === 0) ? scramblerByte(B"7'x7F")._1 | keystream
-  when(scrambled)(bip := (state === PLOU && index === 0) ? B(0, 8 bits) | bip ^ clear)
+  when(scrambled && !parity)(bip := (state === PLOU && index === 0) ? B(0, 8 bits) | bip ^ clear)
   when(!io.enable) {
     state := IDLE
     gemIndex := 0
