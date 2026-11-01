@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "bridge")(type "KiCad")(uri "${KIPRJMOD}/../lib/bridge.kicad_sym")(options "")(descr "Bridge boards"))
+)
