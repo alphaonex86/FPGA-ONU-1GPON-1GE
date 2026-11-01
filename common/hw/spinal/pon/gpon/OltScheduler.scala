@@ -15,7 +15,7 @@ case class OltConfig() extends Bundle {
   val requestStart = UInt(16 bits) // StartTime of the SN and ranging requests
   val quietBefore = UInt(4 bits)   // empty BWmaps before a request frame, so no ranged burst lands in its window
   val quietAfter = UInt(4 bits)    // and after it
-  val snPeriod = UInt(16 bits)     // frames between SN requests
+  val snPeriod = UInt(16 bits)     // frames outside request windows between SN requests
   val grantBytes = UInt(16 bits)   // per active ONU and frame, its PLOAMu included
   val gapBytes = UInt(16 bits)     // between bursts: guard, preamble, delimiter, PLOu
   val tconts = UInt(8 bits)        // T-CONT table entries in use, sorted by ONU-ID
@@ -328,7 +328,7 @@ case class OltScheduler(maxOnus: Int = 32, maxTconts: Int = 64) extends Componen
   }
   val step = RegInit(Step.IDLE)
   val snAge = Reg(UInt(16 bits)) init (0)
-  when(io.frameStart && snAge =/= snAge.maxValue)(snAge := snAge + 1)
+  when(io.frameStart && !winActive && snAge =/= snAge.maxValue)(snAge := snAge + 1) // normal frames: never starved
   val sn = Reg(Bits(64 bits))
   val onuId = Reg(UInt(idBits bits))
   val tries = Reg(UInt(2 bits))
