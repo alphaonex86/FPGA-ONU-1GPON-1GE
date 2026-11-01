@@ -2523,7 +2523,7 @@
 			(uuid "019cf790-8a49-4c5f-ad1f-cef45747fde9")
 		)
 		(embedded_fonts no)
-		(model "${KICAD10_3DMODEL_DIR}/Oscillator.3dshapes/Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm.step"
+		(model "${KIPRJMOD}/../lib/3d/Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -10587,7 +10587,7 @@
 			(uuid "fa1e280c-db50-49d6-b90d-df57bb7fa362")
 		)
 		(embedded_fonts no)
-		(model "${KICAD10_3DMODEL_DIR}/Package_BGA.3dshapes/Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm.step"
+		(model "${KIPRJMOD}/../lib/3d/Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm.step"
 			(offset
 				(xyz 0 0 0)
 			)

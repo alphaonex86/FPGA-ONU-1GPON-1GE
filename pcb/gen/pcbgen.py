@@ -28,6 +28,20 @@ def unconnected_name(ref, part, num, multi_unit):
 def is_free(net):
     return not net or net.startswith('unconnected-')
 
+def own_models(fp):
+    """Point the footprint's 3D models at pcb/lib/3d where we made one; return how many changed."""
+    models, changed = list(fp.Models()), 0   # python sees copies: edit them, then put them back
+    for m in models:
+        name = os.path.basename(m.m_Filename)
+        if os.path.exists(f'{ROOT}/lib/3d/{name}') and m.m_Filename != f'${{KIPRJMOD}}/../lib/3d/{name}':
+            m.m_Filename = f'${{KIPRJMOD}}/../lib/3d/{name}'
+            changed += 1
+    if changed:
+        fp.Models().clear()
+        for m in models:
+            fp.Add3DModel(m)
+    return changed
+
 class Layout:
     def __init__(self, bd, width, height):
         self.bd, self.w, self.h = bd, width, height
@@ -48,6 +62,7 @@ class Layout:
             lib, name = part.footprint.split(':')
             fp = pcbnew.FootprintLoad(f'{FP}/{lib}.pretty', name)
             fp.SetFPID(pcbnew.LIB_ID(lib, name))
+            own_models(fp)
             fp.SetReference(ref)
             fp.SetValue(part.value)
             fp.SetPath(pcbnew.KIID_PATH(f'/{root}/{uid(bd.name, ref, 1)}'))
