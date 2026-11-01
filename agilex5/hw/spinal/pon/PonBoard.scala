@@ -15,6 +15,7 @@ case class PonBoard() extends Component {
   val onu = OnuBoardCore()
   val io = new Bundle {
     val pon_refclk = in Bool () // VCXO 155.52 MHz
+    val clock_50 = in Bool () // board oscillator, 50 MHz
     val olt_tx_p, olt_tx_n, onu_tx_p, onu_tx_n, ben_tx_p, ben_tx_n = out Bool ()
     val olt_rx_p, olt_rx_n, onu_rx_p, onu_rx_n = in Bool ()
     val lwOlt, lwOnu = slave(Axi4(HpsBridge.axiConfig))
@@ -79,6 +80,11 @@ case class PonBoard() extends Component {
   onu.io.dsClk := onuClocks.clock_div1x
   onu.io.usClk := onuClocks.clock_div2x
   onu.io.rxClk := onuLane.o_rx_clkout
+  val helperPll = vendor.HelperPll()
+  helperPll.refclk := io.clock_50
+  helperPll.rst := False
+  onu.io.helperClk := helperPll.outclk_0
+  onu.io.helperLocked := helperPll.locked
   io.onu_tx_p := onuLane.o_tx_serial_data
   io.onu_tx_n := onuLane.o_tx_serial_data_n
   onuLane.i_rx_serial_data := io.onu_rx_p

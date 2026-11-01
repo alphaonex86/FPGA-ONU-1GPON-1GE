@@ -30,6 +30,9 @@ deploy intel_srcss_gts srcss NUM_LANES_SHORELINE=4   # one reset request/grant p
 # PON core clocks 311.04 / 155.52 MHz from the OLT tx_clkout: the clock network divider keeps them aligned and timed
 # together (the GTS tx_clkout2 is asynchronous to tx_clkout in the IP constraints)
 deploy intelclkctrl pon_clocks CLOCK_DIVIDER=1 CLOCK_DIVIDER_OUTPUTS=2
+# VCXO loop helper clock (VcxoTracker DDMTD): 50 MHz x 87 / 28 = 155.357 MHz, 1.05e-3 below the halved 311.04
+deploy altera_iopll helper_pll gui_reference_clock_frequency=50.0 gui_number_of_clocks=1 gui_output_clock_frequency0=155.357143 \
+    gui_operation_mode=direct gui_use_locked=true
 # Every PON lane is duplex at 2488.32: the 1244.16 Gb/s direction is 2x oversampled (TX bits doubled, RX every
 # other bit), same waveform on the fiber, no dual simplex group (Quartus refuses TX and RX variants on one channel).
 # The OLT lane's tx_clkout, through pon_clocks, clocks every PON lane's core.

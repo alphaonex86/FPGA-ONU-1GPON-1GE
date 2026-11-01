@@ -53,3 +53,11 @@ case class PonClocks() extends BlackBox {
   val clock_div1x, clock_div2x = out Bool ()
   noIoPrefix()
 }
+
+/** I/O PLL from gen_ip.sh (helper_pll): 155.357 MHz from a 50 MHz board oscillator, the VCXO loop's helper clock. */
+case class HelperPll() extends BlackBox {
+  setDefinitionName("helper_pll")
+  val refclk, rst = in Bool ()
+  val outclk_0, locked = out Bool ()
+  noIoPrefix()
+}

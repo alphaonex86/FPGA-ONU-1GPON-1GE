@@ -63,10 +63,12 @@ Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS
 (GTS reset/status, SFP cage pins, module I2C; `olt_board_regs.h`, `onu_board_regs.h`) and GEM CPU
 queues for OMCI (whole packets downstream, upstream fragments with descriptors;
 `gem_queues.h`). ONU side: ONU MAC on the BOSA data and burst enable lanes, its
-clock kept on the recovered downstream clock by a VCXO loop (phase detector +
-PI + sigma-delta), optics pins with the laser held off until both lanes are up.
+clock kept on the recovered downstream clock by a VCXO loop (DDMTD phase
+detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
+phase wander in simulation, the OLT tolerating 4), optics pins with the laser
+held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed: 7.4K ALMs, setup slack +0.006 ns
+HSMC card pins placed: 7.5K ALMs, setup slack +0.243 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 
 ## License

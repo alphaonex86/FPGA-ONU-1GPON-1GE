@@ -5,16 +5,18 @@ import spinal.core._
 import spinal.core.sim._
 import pon.gpon.GtcDsTest.check
 
-case class VcxoBench(updateShift: Int) extends Component {
-  val rx = ClockDomain.external("rx")
-  val tracker = VcxoTracker(rx, updateShift)
+case class VcxoBench(integralShift: Int) extends Component {
+  val tracker = VcxoTracker(integralShift)
   val io = new Bundle {
+    val rxClk, localClk = in Bool ()
     val enable = in Bool ()
     val center, kp, ki = in UInt (16 bits)
     val phase = out SInt (16 bits)
     val duty = out UInt (16 bits)
     val pin = out Bool ()
   }
+  tracker.io.rxClk := io.rxClk
+  tracker.io.localClk := io.localClk
   tracker.io.enable := io.enable
   tracker.io.center := io.center
   tracker.io.kp := io.kp
@@ -26,54 +28,53 @@ case class VcxoBench(updateShift: Int) extends Component {
   io.pin := modulator.io.pin
 }
 
-/** VcxoTracker against a VCXO model (frequency up with the filtered duty, +-1 % over the range) and a recovered
-  * clock 0.31 % slower: the loop pulls the local clock onto it and holds the phase. The ONU's upstream timing follows
-  * that phase, so its wander must stay under the OLT's drift threshold (DOWi re-ranges, TIWi deactivates). */
+/** VcxoTracker (DDMTD, helper 6436 ps, the clocks halved as on the board) against a VCXO model (100 ppm slow at the center duty, +-200 ppm over the duty
+  * range, a first-order filter, 1 ps rms edge jitter) and a 311.04 MHz recovered clock: the loop pulls the local
+  * clock onto it and holds the phase. The ONU's upstream timing follows that phase, so its wander must stay well under
+  * the OLT's drift threshold (DOWi re-ranges past 4 bits, TIWi deactivates past 8). Loop time compressed: a fast
+  * filter and gains to match, the integral shift of a fast loop. */
 object VcxoTrackerTest extends App {
-  val updateShift = 8
-  SimConfig.withTimeScale(1 ps).withTimePrecision(1 ps).compile(VcxoBench(updateShift)).doSim { dut =>
+  SimConfig.withTimeScale(1 ps).withTimePrecision(1 ps).compile(VcxoBench(integralShift = 24)).doSim(seed = 7) { dut =>
     val io = dut.io
-    val local = dut.clockDomain
-    val rxHalf = 1605
-    dut.rx.forkStimulus(2 * rxHalf)
+    val helper = dut.clockDomain
+    val rxPeriod = 3215 // 311.04 MHz
+    val usBit = rxPeriod / 4.0
+    helper.forkStimulus(6436)
     io.enable #= false
     io.center #= 0x8000
-    io.kp #= 32800
-    io.ki #= 21000
-    var filtered = 0.5 // RC on the card
-    var cycles, rxCycles = 0L
-    var pinHigh = 0L
-    local.fallingEdge()
-    local.assertReset()
-    var edge = 0.0 // exact time of the next local edge, ps: a continuous frequency, not one quantized to 1 ps
-    val wander = new Array[Double](1 << 17) // local edge time less the recovered clock's, ps
+    io.kp #= 6000
+    io.ki #= 36000
+    io.rxClk #= false
+    io.localClk #= false
+    fork { while (true) { sleep(rxPeriod); io.rxClk #= !io.rxClk.toBoolean } } // halved: one level per clock
+    var filtered = 0.5 // duty seen by the VCXO
+    var edge = 0.0     // exact time of the next local edge, ps
+    var cycles, pinHigh, helperCycles = 0L
+    val window = 1 << 18
+    val wander = new Array[Double](window) // local rising edge less the recovered clock's, ps
+    val rng = new scala.util.Random(1)
     fork {
       while (true) {
-        val half = 1600 / (1 + 0.02 * (filtered - 0.5))
-        for (_ <- 0 until 2) { edge += half; sleep(math.round(edge) - simTime()); local.clockToggle() }
-        wander((cycles & ((1 << 17) - 1)).toInt) = edge - 2 * rxHalf * cycles
+        edge += rxPeriod * (1 + 100e-6 - 400e-6 * (filtered - 0.5))
+        sleep(math.max(1, math.round(edge + rng.nextGaussian()) - simTime()))
+        io.localClk #= !io.localClk.toBoolean
+        wander((cycles % window).toInt) = edge - rxPeriod * (cycles + 1)
         cycles += 1
-        if (io.pin.toBoolean) pinHigh += 1
-        if (cycles % (1 << updateShift) == 0) filtered += 0.3 * (io.duty.toLong / 65536.0 - filtered)
+        if ((cycles & 255) == 0) filtered += (io.duty.toLong / 65536.0 - filtered) * 256 / 20000.0
       }
     }
-    dut.rx.onSamplings { rxCycles += 1 }
-    sleep(20000)
-    local.deassertReset()
-    local.waitSampling(4 << updateShift)
+    helper.onSamplings { helperCycles += 1; if (io.pin.toBoolean) pinHigh += 1 }
+    helper.waitSampling(4000)
     check(io.duty.toInt == 0x8000 && io.phase.toInt == 0, "off: duty at center, no error")
     io.enable #= true
-    local.waitSampling(1500 << updateShift)
-    val (c0, r0, p0) = (cycles, rxCycles, pinHigh)
-    var worst = 0
-    for (_ <- 0 until 400) { local.waitSampling(1 << updateShift); worst = worst max io.phase.toInt.abs }
-    val ratio = (cycles - c0).toDouble / (rxCycles - r0)
-    val usBit = 2 * rxHalf / 4.0 // one upstream bit: a quarter of the 311.04 MHz clock
+    helper.waitSampling(4000000)
+    val (c0, h0, p0) = (cycles, helperCycles, pinHigh)
+    helper.waitSampling(window + 1000)
     val peak = (wander.max - wander.min) / usBit
-    check(worst <= 3, s"locked: phase error within 3 clocks (worst $worst)")
-    check(peak < 4, f"upstream phase wander $peak%.2f bits peak to peak, under DOWi (G.984.3 Table 10-2: 4 bits)")
-    check(math.abs(ratio - 1) < 2e-4, s"frequency follows the recovered clock (ratio $ratio)")
-    val mean = (pinHigh - p0).toDouble / (cycles - c0)
+    val ppm = ((cycles - c0) * rxPeriod.toDouble / ((helperCycles - h0) * 6436.0) - 1) * 1e6
+    check(math.abs(ppm) < 5, f"frequency follows the recovered clock ($ppm%.2f ppm)")
+    check(peak < 1, f"upstream phase wander $peak%.3f bits peak to peak over $window clocks (DOWi: 4 bits)")
+    val mean = (pinHigh - p0).toDouble / (helperCycles - h0)
     check(math.abs(mean - io.duty.toLong / 65536.0) < 0.01, s"sigma-delta pin mean = duty ($mean, ${io.duty.toLong})")
   }
   println("PASS VcxoTrackerTest")

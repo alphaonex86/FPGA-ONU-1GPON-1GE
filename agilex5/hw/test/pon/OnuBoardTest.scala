@@ -20,11 +20,12 @@ object OnuBoardTest extends App {
     val io = dut.io
     val mgmt = dut.clockDomain
     mgmt.forkStimulus(10)
-    for (c <- Seq(io.dsClk, io.usClk, io.rxClk)) c #= false
+    for (c <- Seq(io.dsClk, io.usClk, io.rxClk, io.helperClk)) c #= false
+    io.helperLocked #= true
     fork {
       var n = 0
       while (true) {
-        sleep(2); io.dsClk #= !io.dsClk.toBoolean; io.rxClk #= io.dsClk.toBoolean
+        sleep(2); io.dsClk #= !io.dsClk.toBoolean; io.rxClk #= io.dsClk.toBoolean; io.helperClk #= !io.helperClk.toBoolean
         if (n % 2 == 0) io.usClk #= !io.usClk.toBoolean
         n += 1
       }
