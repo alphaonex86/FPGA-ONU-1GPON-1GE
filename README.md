@@ -31,6 +31,14 @@ Developed and proven on an FPGA, the final target is an ASIC that holds everythi
 - Vendor-neutral RTL: vendor primitives only in thin wrappers, so the same tree
   goes from FPGA to ASIC.
 
+## Layout
+
+- `common/`: board-neutral parts: RTL and tests (`hw/`), KiCad generator and
+  shared parts library (`pcb/gen`, `pcb/lib`).
+- `agilex5/`: common to the Agilex 5 boards (Quartus benches).
+- `de25-standard/`: Terasic DE25-Standard, our HSMC card (to come).
+- `de25-nano/`: Terasic DE25-Nano, ECP5 SerDes bridge boards (alternative).
+
 ## Status
 
 GPON OLT MAC in simulation (SpinalHDL): GTC downstream framer and deframer,

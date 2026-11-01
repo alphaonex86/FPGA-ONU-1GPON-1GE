@@ -5,8 +5,8 @@ import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
 from boards import onu, olt, ECP5_BALLS, ball_xy
 from kisch import uid
+from paths import LIB, KI_LIB, board_dir
 
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 FP = '/usr/share/kicad/footprints'
 OX, OY = 100.0, 100.0           # board origin on the page
 mm = pcbnew.FromMM
@@ -21,7 +21,7 @@ HV_PREFIX, HV_CLEAR = 'HV_', 0.2   # APD bias nets, up to 55 V
 SUB_RAILS = ('+1V1_SD', '+2V5')   # SerDes 1.1 V (~0.2 A) and VCCAUX 2.5 V (~50 mA): 0.2 mm, ~17 mV over 35 mm
 
 def fp_dir(lib):
-    return f'{ROOT}/lib/{lib}.pretty' if lib == 'bridge' else f'{FP}/{lib}.pretty'
+    return f'{LIB}/{lib}.pretty' if lib == 'bridge' else f'{FP}/{lib}.pretty'
 
 def unconnected_name(ref, part, num, multi_unit):
     unit, name = next(((p[0], p[2]) for p in part.pins if p[1] == num), (1, '~'))
@@ -33,12 +33,12 @@ def is_free(net):
     return not net or net.startswith('unconnected-')
 
 def own_models(fp):
-    """Point the footprint's 3D models at pcb/lib/3d where we made one; return how many changed."""
+    """Point the footprint's 3D models at common/pcb/lib/3d where we made one; return how many changed."""
     models, changed = list(fp.Models()), 0   # python sees copies: edit them, then put them back
     for m in models:
         name = os.path.basename(m.m_Filename)
-        if os.path.exists(f'{ROOT}/lib/3d/{name}') and m.m_Filename != f'${{KIPRJMOD}}/../lib/3d/{name}':
-            m.m_Filename = f'${{KIPRJMOD}}/../lib/3d/{name}'
+        if os.path.exists(f'{LIB}/3d/{name}') and m.m_Filename != f'{KI_LIB}/3d/{name}':
+            m.m_Filename = f'{KI_LIB}/3d/{name}'
             changed += 1
     if changed:
         fp.Models().clear()
@@ -281,7 +281,7 @@ class Layout:
                         self.track(net, [(cx + bx, cy + by), (cx + nx, cy + ny)], 0.1)
 
     def save(self):
-        d = f'{ROOT}/{self.bd.name}'
+        d = board_dir(self.bd.name)
         path = f'{d}/{self.bd.name}.kicad_pcb'
         self.pcb.Save(path)
         write_project(f'{d}/{self.bd.name}.kicad_pro', self.bd)

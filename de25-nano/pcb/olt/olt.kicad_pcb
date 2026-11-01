@@ -4935,7 +4935,7 @@
 			(uuid "1f68c056-5e03-4736-894b-1770872ff1a8")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../lib/3d/Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm.step"
+		(model "${KIPRJMOD}/../../../common/pcb/lib/3d/Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -6853,7 +6853,7 @@
 			(uuid "db62d660-326c-4d8c-b8a1-daf61a013355")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../lib/3d/Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm.step"
+		(model "${KIPRJMOD}/../../../common/pcb/lib/3d/Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -9456,7 +9456,7 @@
 			)
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../lib/3d/Connector_SFP_and_Cage.step"
+		(model "${KIPRJMOD}/../../../common/pcb/lib/3d/Connector_SFP_and_Cage.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -10318,7 +10318,7 @@
 			(uuid "9dca618f-84c9-4079-b461-5d98d7f4b5c4")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../lib/3d/Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm.step"
+		(model "${KIPRJMOD}/../../../common/pcb/lib/3d/Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm.step"
 			(offset
 				(xyz 0 0 0)
 			)

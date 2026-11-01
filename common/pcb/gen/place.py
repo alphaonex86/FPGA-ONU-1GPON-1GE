@@ -3,7 +3,8 @@
 import os, sys
 import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
-from pcbgen import Layout, BGA_C, ball_xy, P, ROOT, plane_vias, PLANE_NETS
+from pcbgen import Layout, BGA_C, ball_xy, P, plane_vias, PLANE_NETS
+from paths import board_dir
 from boards import onu, olt
 
 PASSIVE = ('R', 'C', 'FB', 'L', 'RN', 'TP')
@@ -270,7 +271,7 @@ if __name__ == '__main__':
         if make.__name__.split('_')[0] not in names:
             continue
         lay = make()
-        target = os.path.join(ROOT, lay.bd.name, lay.bd.name + '.kicad_pcb')
+        target = os.path.join(board_dir(lay.bd.name), lay.bd.name + '.kicad_pcb')
         if os.path.exists(target) and not force:  # a routed board is the source from then on
             sys.exit(f'{target} exists: routing would be lost; --force to regenerate')
         hand = serdes(lay, lay.bd.name == 'olt')   # its exact-placed pair parts first, the passives fill around

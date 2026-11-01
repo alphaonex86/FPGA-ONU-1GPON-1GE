@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
-"""Write pcb/lib/bridge.kicad_sym: ECP5 from the Lattice pinout CSV (facts only) + small parts,
-and pcb/lib/bridge.pretty (BOSA footprint). Without the CSV the ECP5 symbol already in the library is kept.
+"""Write common/pcb/lib/bridge.kicad_sym: ECP5 from the Lattice pinout CSV (facts only) + small parts,
+and common/pcb/lib/bridge.pretty (BOSA footprint). Without the CSV the ECP5 symbol already in the library is kept.
 
     python3 mksym.py [<ECP5UM-25 pinout .csv from latticesemi.com>] ../lib/bridge.kicad_sym
 """
 import csv, math, os, re, sys
 from sexp import Sym as S, dump, lib_symbol
 from kisch import box_symbol
+from paths import KI_LIB
 
 def ecp5_symbol(csv_path):
     balls = []  # (ball, function, bank, dual)
@@ -85,7 +86,7 @@ lib = [S('kicad_symbol_lib'), [S('version'), 20251024], [S('generator'), 'kicad_
 open(out, 'w').write(dump(lib) + '\n')
 print('symbols', [s[1] for s in syms])
 
-# BOSA footprint (pcb/lib/x100dg-bosa-land.jpg): both TO cans stand on the board under the body, leads straight down;
+# BOSA footprint (common/pcb/lib/x100dg-bosa-land.jpg): both TO cans stand on the board under the body, leads straight down;
 # TX TO-56 4 leads in a + at the back (x = 0), RX TO-46 4 leads in an X + 1 centre lead (x = RX_X), fiber out at +x past
 # the board edge. Pin circles from public TO-56/TO-46 headers, RX_X scaled from the photo; lead order still unknown.
 BOSA_LEN, BOSA_R, BOSA_BACK, RX_X, TX_PCD, RX_PCD, DRILL, PAD = 15.0, 3.5, 3.2, 8.5, 2.0, 2.54, 0.7, 1.05
@@ -116,7 +117,7 @@ def bosa_footprint():
           [S('property'), 'Reference', 'REF**', [S('at'), 7, 0], [S('layer'), 'F.Fab'], font],
           [S('property'), 'Value', 'BOSA_GPON', [S('at'), 7, 1.8], [S('layer'), 'F.Fab'], font],
           [S('attr'), S('through_hole')]] + body + [yard] + pads + labels + \
-         [[S('model'), '${KIPRJMOD}/../lib/3d/BOSA_GPON.step', [S('offset'), [S('xyz'), 0, 0, 0]],
+         [[S('model'), KI_LIB + '/3d/BOSA_GPON.step', [S('offset'), [S('xyz'), 0, 0, 0]],
            [S('scale'), [S('xyz'), 1, 1, 1]], [S('rotate'), [S('xyz'), 0, 0, 0]]]]
     d = os.path.join(os.path.dirname(out), 'bridge.pretty')
     os.makedirs(d, exist_ok=True)

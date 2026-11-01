@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 # VexiiRiscv single vs dual issue: CoreMark/Dhrystone per MHz (Verilator sim),
-# ALM/M20K/Fmax and vectorless core dynamic power (Quartus Pro, DE25-Nano FPGA).
+# ALM/M20K/Fmax and vectorless core dynamic power (Quartus Pro, quartus_core.sh DEVICE).
 set -euo pipefail
 
 REF=${REF:-/mnt/data/perso/FPGA/projects/FPGA-ONU-ref}

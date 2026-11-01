@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 """3D models the KiCad library lacks (its footprints name them, kicad-packages3d has none), as
-faceted STEP into pcb/lib/3d (finish.py points the boards' footprints at them). Balls, pads and pins
+faceted STEP into common/pcb/lib/3d (finish.py points the boards' footprints at them). Balls, pads and pins
 come from the KiCad footprint itself; heights marked ~ are typical values, not a vendor drawing.
 
     python3 mk3d.py
 """
 import math, os
 import pcbnew
-from pcbgen import ROOT, fp_dir
+from pcbgen import fp_dir
+from paths import LIB
 
-OUT = os.path.join(ROOT, 'lib', '3d')
+OUT = os.path.join(LIB, '3d')
 BLACK, SUBSTRATE, SOLDER, GOLD = (0.12, 0.12, 0.13), (0.30, 0.25, 0.12), (0.78, 0.78, 0.80), (0.86, 0.66, 0.22)
 STEEL, CERAMIC, MARK = (0.80, 0.80, 0.83), (0.92, 0.88, 0.78), (0.55, 0.55, 0.55)
 
@@ -162,7 +163,7 @@ def along_x(y, z, r, x0, x1):
     return [[(c, a, b) for a, b, c in f] for f in prism(circle(y, z, r), x0, x1)]
 
 def bosa(s):
-    """~ GPON BOSA of the X100DG (pcb/gen/mksym.py footprint): TX and RX TO cans standing under the body, fiber along +x."""
+    """~ GPON BOSA of the X100DG (mksym.py footprint): TX and RX TO cans standing under the body, fiber along +x."""
     zc, lead = 4.8, 0.45
     s.solid(prism(circle(0.0, 0.0, 2.8, 24), 0.3, 3.0), STEEL)    # TX TO-56 can
     s.solid(prism(circle(8.5, 0.0, 2.7, 24), 0.3, 3.0), STEEL)    # RX TO-46 can

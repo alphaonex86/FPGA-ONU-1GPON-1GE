@@ -3793,7 +3793,7 @@
 			(uuid "2e5edef4-cbb4-4ec0-9a84-ccacb8a6e1ac")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../lib/3d/Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm.step"
+		(model "${KIPRJMOD}/../../../common/pcb/lib/3d/Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -11859,7 +11859,7 @@
 			(uuid "1c5e1fbf-8660-4578-9d66-062409aa00b1")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../lib/3d/BOSA_GPON.step"
+		(model "${KIPRJMOD}/../../../common/pcb/lib/3d/BOSA_GPON.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -13603,7 +13603,7 @@
 			(uuid "8c909ba8-7353-44cf-a3cc-3cf100d5b004")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../lib/3d/Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm.step"
+		(model "${KIPRJMOD}/../../../common/pcb/lib/3d/Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm.step"
 			(offset
 				(xyz 0 0 0)
 			)

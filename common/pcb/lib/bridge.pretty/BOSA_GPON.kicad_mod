@@ -75,7 +75,7 @@
     (effects (font (size 0.8 0.8) (thickness 0.12))))
   (fp_text user "R5" (at 8.5 2.6) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))
   (model
-    "${KIPRJMOD}/../lib/3d/BOSA_GPON.step"
+    "${KIPRJMOD}/../../../common/pcb/lib/3d/BOSA_GPON.step"
     (offset (xyz 0 0 0))
     (scale (xyz 1 1 1))
     (rotate (xyz 0 0 0))))
