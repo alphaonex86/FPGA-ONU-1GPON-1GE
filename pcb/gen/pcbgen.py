@@ -42,6 +42,24 @@ def own_models(fp):
             fp.Add3DModel(m)
     return changed
 
+def finish_footprint(fp):
+    """Our silk conventions, on generated and routed boards alike: references on the fab layer
+    (0402 density makes them unreadable on silk; JLC assembles from the CPL), passive outlines on fab too,
+    no field text but the value on fab. Return whether anything changed."""
+    changed = own_models(fp) > 0
+    fab = pcbnew.B_Fab if fp.IsFlipped() else pcbnew.F_Fab
+    for f in fp.GetFields():
+        if f.IsReference() and f.GetLayer() != fab:
+            f.SetLayer(fab); changed = True
+        elif not f.IsReference() and not f.IsValue() and f.IsVisible():
+            f.SetVisible(False); changed = True
+    if fp.GetReference().rstrip('0123456789') in ('R', 'C', 'L', 'FB', 'RN'):
+        to_fab = {pcbnew.F_SilkS: pcbnew.F_Fab, pcbnew.B_SilkS: pcbnew.B_Fab}   # not Remove(): it breaks the SWIG state
+        for g in fp.GraphicalItems():
+            if g.GetLayer() in to_fab:
+                g.SetLayer(to_fab[g.GetLayer()]); changed = True
+    return changed
+
 class Layout:
     def __init__(self, bd, width, height):
         self.bd, self.w, self.h = bd, width, height
@@ -62,12 +80,12 @@ class Layout:
             lib, name = part.footprint.split(':')
             fp = pcbnew.FootprintLoad(f'{FP}/{lib}.pretty', name)
             fp.SetFPID(pcbnew.LIB_ID(lib, name))
-            own_models(fp)
             fp.SetReference(ref)
             fp.SetValue(part.value)
             fp.SetPath(pcbnew.KIID_PATH(f'/{root}/{uid(bd.name, ref, 1)}'))
             for k, v in part.fields.items():
                 fp.SetField(k, v)
+            finish_footprint(fp)
             units = {pin[0] for pin in part.pins}
             for pad in fp.Pads():
                 num = pad.GetNumber()
@@ -281,6 +299,7 @@ def write_project(path, bd):
                   'min_track_width': 0.1, 'min_via_diameter': VIA_D, 'min_through_hole_diameter': VIA_HOLE,
                   'min_via_annular_width': 0.1, 'min_hole_clearance': 0.2, 'min_hole_to_hole': 0.25,
                   'min_copper_edge_clearance': 0.3, 'min_silk_clearance': 0.0},
+        'rule_severities': {'lib_footprint_mismatch': 'ignore'},   # finish_footprint moves silk to fab on purpose
         'track_widths': [0.1, 0.15, 0.2, 0.3, 0.5], 'via_dimensions': [{'diameter': VIA_D, 'drill': VIA_HOLE}]}}
     power = [n for n in bd.nets() if n.startswith(POWER_PREFIX)]
     # BGA rails without a plane thread the via field: 0.35 mm channels fit 0.15 mm at 0.1 clearance

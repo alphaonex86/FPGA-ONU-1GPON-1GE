@@ -27,8 +27,8 @@ if __name__ == '__main__':
     for t in gone:
         pcb.Remove(t)
     pcb.Save(rejected)
-    errors, open_new = drc(rejected)
-    _, open_old = drc(board)
+    errors, open_new, _ = drc(rejected)
+    _, open_old, _ = drc(board)
     print(f'salvage: dropped {len(gone)} segment(s) -> errors {dict(errors)}, open {open_new} (board {open_old})')
     if not errors and open_new < open_old:
         shutil.copy(rejected, board)

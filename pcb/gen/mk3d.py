@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 """3D models the KiCad library lacks (its footprints name them, kicad-packages3d has none), as
-faceted STEP into pcb/lib/3d, then point the boards' footprints at them. Balls, pads and pins
+faceted STEP into pcb/lib/3d (finish.py points the boards' footprints at them). Balls, pads and pins
 come from the KiCad footprint itself; heights marked ~ are typical values, not a vendor drawing.
 
     python3 mk3d.py
 """
 import math, os
 import pcbnew
-from pcbgen import FP, ROOT, own_models
+from pcbgen import FP, ROOT
 
 OUT = os.path.join(ROOT, 'lib', '3d')
 BLACK, SUBSTRATE, SOLDER, GOLD = (0.12, 0.12, 0.13), (0.30, 0.25, 0.12), (0.78, 0.78, 0.80), (0.86, 0.66, 0.22)
@@ -168,9 +168,3 @@ if __name__ == '__main__':
         make(s)
         s.write(os.path.join(OUT, name + '.step'), name)
         print(name, len(s.solids), 'solids')
-    for b in ('olt', 'onu'):   # routed boards: only their model paths change
-        path = os.path.join(ROOT, b, b + '.kicad_pcb')
-        pcb = pcbnew.LoadBoard(path)
-        if sum(own_models(fp) for fp in pcb.Footprints()):
-            pcbnew.SaveBoard(path, pcb, True)   # board only: the .kicad_pro stays write_project's
-            print(path, 'models repointed')

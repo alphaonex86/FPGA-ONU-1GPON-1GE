@@ -1,10 +1,15 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
-"""Last copper step on a routed board: GND pours on both outer layers, zone refill, DRC.
+"""Last step on a routed board: footprint conventions (finish_footprint), GND pours on both outer
+layers, zone refill, dangling copper removed, DRC.
 
     python3 finish.py <board>.kicad_pcb
 """
 import collections, json, os, subprocess, sys, tempfile
-import pcbnew
+import pcbnew, re
+from pcbgen import finish_footprint
+from sexp import TOK
+
+UUID = re.compile(r'\(uuid "([^"]+)"\)')
 
 def outer_pours(pcb):
     gnd = pcb.FindNet('GND')
@@ -28,7 +33,7 @@ def outer_pours(pcb):
     return True
 
 def drc(path):
-    """Refill zones, save, return (errors by type, unconnected count)."""
+    """Refill zones, save, return (errors by type, unconnected count, uuids of dangling vias/tracks)."""
     with tempfile.TemporaryDirectory() as d:
         report = os.path.join(d, 'drc.json')
         r = subprocess.run(['nice', '-n', '19', 'kicad-cli', 'pcb', 'drc', '--refill-zones', '--save-board',
@@ -37,13 +42,42 @@ def drc(path):
             sys.exit(f'kicad-cli drc failed ({r.returncode}): {r.stderr.strip()}')
         rep = json.load(open(report))
     errors = collections.Counter(v['type'] for v in rep['violations'] if v['severity'] == 'error')
-    return errors, len(rep['unconnected_items'])
+    dangling = {i['uuid'] for v in rep['violations'] if v['type'] in ('via_dangling', 'track_dangling') for i in v['items']}
+    return errors, len(rep['unconnected_items']), dangling
+
+def drop_dangling(path):
+    """Vias and track ends joined on one side only (escapes the router bypassed): useless copper,
+    removed while the board stays connected."""
+    errors, open_items, dangling = drc(path)
+    for _ in range(5):
+        if not dangling or errors or open_items:
+            break
+        drop_items(path, dangling)
+        errors, open_items, dangling = drc(path)
+    return errors, open_items
+
+def drop_items(path, uuids):
+    """Cut the top-level via/segment/arc items with these uuids out of the file text (removing them
+    through pcbnew breaks its SWIG state for the rest of the process)."""
+    text, out, depth, start, last = open(path).read(), [], 0, 0, 0
+    for m in TOK.finditer(text):
+        t = m.group(0)
+        if t == '(':
+            depth += 1
+            start = m.start() if depth == 2 else start
+        elif t == ')':
+            item = text[start:m.end()]
+            if depth == 2 and item.startswith(('(via', '(segment', '(arc')) and UUID.search(item).group(1) in uuids:
+                out.append(text[last:start]); last = m.end()
+            depth -= 1
+    out.append(text[last:])
+    open(path, 'w').write(''.join(out))
 
 if __name__ == '__main__':
     path = sys.argv[1]
     pcb = pcbnew.LoadBoard(path)
-    if outer_pours(pcb):
-        pcb.Save(path)
-    errors, open_items = drc(path)
+    if outer_pours(pcb) | any([finish_footprint(fp) for fp in pcb.Footprints()]):
+        pcbnew.SaveBoard(path, pcb, True)   # board only: the .kicad_pro stays write_project's
+    errors, open_items = drop_dangling(path)
     print(f'{path}: errors {dict(errors)}, unconnected {open_items}')
     sys.exit(1 if errors or open_items else 0)
