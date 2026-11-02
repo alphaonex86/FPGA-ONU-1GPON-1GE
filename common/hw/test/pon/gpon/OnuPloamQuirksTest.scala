@@ -10,9 +10,9 @@ import GtcDsTest.{bigToBytes, bytesToBig, check}
 /** OnuPloam against the downstream PLOAM sequences of real OLTs, as recorded by stock ONUs (ZTE at two ISPs) and read
   * out of an OLT firmware (Broadcom Maple, HSGQ G008): copies, order, foreign ONUs' messages, EqD drift updates,
   * deactivation churn with a new ONU-ID, messages left to the CPU, Annex D (Swift_POPUP, Ranging_Adjustment). The ONU
-  * must answer exactly like the stock ONU (every copy acknowledged, Password 3 times, nothing else upstream) and keep its bursts where the OLT expects them:
-  * an OLT re-ranges past 4 bits of drift and deactivates past 8 (G.984.3 Table 10-2). One frame per call, compressed in
-  * time (the gaps between messages carry no state but TO1/TO2). */
+  * must answer exactly like the stock ONU (every copy acknowledged, Password 3 times, nothing else upstream) and keep
+  * its bursts where the OLT expects them: an OLT re-ranges past 4 bits of drift and deactivates past 8 (G.984.3
+  * Table 10-2). One frame per call, compressed in time (the gaps between messages carry no state but TO1/TO2). */
 object OnuPloamQuirksTest extends App {
   val sn = BigInt("414C434C12345678", 16)
   val other = BigInt("48575443000000B2", 16)
