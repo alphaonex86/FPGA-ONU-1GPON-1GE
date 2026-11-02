@@ -100,7 +100,8 @@ object EponMacTest extends App {
       check(received.drop(before).toSeq == frames.map(f => (withFcs(f), true)),
         s"slip $slip: 5 frames back to back, LLID, mode, bytes and FCS, good")
     }
-    check(preambles.take(sent.length).map(_.toSeq).toSeq == sent.map(expectedPreamble).toSeq, s"preambles on the line as the CRC-8 model (first ${preambles.head.map(_.toHexString).mkString(" ")})")
+    check(preambles.take(sent.length).map(_.toSeq).toSeq == sent.map(expectedPreamble).toSeq,
+      s"preambles on the line as the CRC-8 model (first ${preambles.head.map(_.toHexString).mkString(" ")})")
     check(gaps.drop(1).forall(_ >= Epon.ipg), s"IPG >= ${Epon.ipg} bytes (min ${gaps.drop(1).min})")
 
     var before = received.length
