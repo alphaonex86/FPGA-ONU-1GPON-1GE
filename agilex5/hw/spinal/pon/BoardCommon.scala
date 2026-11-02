@@ -76,6 +76,14 @@ object BoardFields {
     val enables = IRQ_ENABLE.field(Bits(pins.length bits), AccessType.RW, 0, "same bits as EVENTS")(SymbolName("events"))
     RegNext((Vec(bits).asBits & enables).orR) init (False)
   }
+
+  /** A PON side's Ethernet bridge: the Port-ID lookup in the MAC's GEM receive domain, the queues on the same clocks
+    * reset while `down` (asynchronous: either lane not ready). */
+  def ethBridge(ponRx: ClockDomain, ponTx: ClockDomain, ethTxClk: Bool, ethRxClk: Bool, down: Bool,
+                defaultAction: Int): GemEthBridge = {
+    def domain(clk: Bool): ClockDomain = ClockDomain(clk, ClockDomain(clk)(BufferCC(down)))
+    GemEthBridge(ponRx, domain(ponRx.clock), domain(ponTx.clock), domain(ethTxClk), domain(ethRxClk), defaultAction)
+  }
 }
 
 /** HPS lightweight bridge (AXI4, single 32-bit accesses: readl/writel) -> APB3 slaves of 256 bytes each, slave k at

@@ -4,12 +4,15 @@ package pon.gpon
 import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
+import spinal.lib.bus.amba3.apb._
 import spinal.lib.bus.amba3.apb.sim.Apb3Driver
+import pon.{Crc32, EthFrames, GemEthBridge}
 import scala.collection.mutable
 import GponCodes._
 import GtcDsTest.{bigToBytes, bytesToBig, check}
 
-/** Our OLT and ONU MACs; the test carries their lines (fibre delay, cut). Test only. */
+/** Our OLT and ONU MACs, each with its Ethernet bridge (ONU data GEM upstream from it); the test carries their lines
+  * (fibre delay, cut). Test only. */
 case class PonLoop() extends Component {
   val olt = OltMac(8, 8)
   val onu = OnuMac()
@@ -29,16 +32,36 @@ case class PonLoop() extends Component {
     val oltUsGem = master(cloneOf(olt.io.usGem))
     val onuGemTx = slave(cloneOf(onu.io.gemTx))  // upstream GEM, ONU side
     val onuGemRx = master(cloneOf(onu.io.gemRx))
+    val onuGemBacklog = in UInt (16 bits)
+    val ethClk = in Bool ()
+    val oltEth, onuEth = master(EthFrames())
+    val oltBridgeApb, onuBridgeApb = slave(Apb3(Apb3Config(addressWidth = 8, dataWidth = 32)))
   }
   val usDomain = ClockDomain(io.usClk, io.usReset)
+  val ethDomain = ClockDomain(io.ethClk, io.usReset)
   olt.io.usClk := io.usClk
   olt.io.usReset := io.usReset
   onu.io.usClk := io.usClk
   onu.io.usReset := io.usReset
-  olt.io.gem << io.oltGem
-  io.oltUsGem << olt.io.usGem
+  val oltBridge = GemEthBridge(usDomain, usDomain, ClockDomain.current, ethDomain, ethDomain, defaultAction = 1)
+  oltBridge.io.ponRx << olt.io.usGem
+  oltBridge.io.ponRxCut := olt.io.usGemCut
+  oltBridge.io.cpuPort.setIdle()
+  io.oltUsGem << oltBridge.io.toCpu
+  olt.io.gem << StreamArbiterFactory.lowerFirst.fragmentLock.onArgs(io.oltGem, oltBridge.io.ponTx)
+  io.oltEth <> oltBridge.io.eth
+  oltBridge.io.apb <> io.oltBridgeApb
+  val onuBridge = GemEthBridge(ClockDomain.current, ClockDomain.current, usDomain, ethDomain, ethDomain, defaultAction = 0)
+  onuBridge.io.ponRx << onu.io.gemRx
+  onuBridge.io.ponRxCut := onu.io.gemRxCut
+  onuBridge.io.cpuPort << onu.io.omciPort
+  io.onuGemRx << onuBridge.io.toCpu
   onu.io.gemTx << io.onuGemTx
-  io.onuGemRx << onu.io.gemRx
+  onu.io.gemTxBacklog := io.onuGemBacklog
+  onu.io.dataTx << onuBridge.io.ponTx
+  onu.io.dataTxBacklog := onuBridge.io.ponTxBacklog
+  io.onuEth <> onuBridge.io.eth
+  onuBridge.io.apb <> io.onuBridgeApb
   io.oltDs := olt.io.dsLine
   olt.io.usLine := io.oltUs
   onu.io.dsLine := io.onuDs
@@ -57,6 +80,32 @@ case class PonLoop() extends Component {
   onu.upstream.ploam.io.omciValid.simPublic()
   onu.upstream.ploam.io.omciPort.simPublic()
   onu.deframer.io.synced.simPublic()
+}
+
+/** An Ethernet port on a bridge: frames sent with a 12-clock gap, frames received collected. Test only. */
+class EthSide(f: EthFrames, cd: ClockDomain) {
+  val toSend = mutable.Queue[List[Int]]()
+  val received = mutable.ArrayBuffer[List[Int]]()
+  private val current = mutable.ArrayBuffer[Int]()
+  private var index, gap = 0
+  f.rx.valid #= false
+  f.rxBad #= false
+  f.tx.ready #= true
+  cd.onSamplings {
+    if (f.tx.valid.toBoolean) {
+      current += f.tx.fragment.toInt
+      if (f.tx.last.toBoolean) { received += current.toList; current.clear() }
+    }
+    f.rx.valid #= false
+    if (gap > 0) gap -= 1
+    else for (frame <- toSend.headOption) {
+      f.rx.valid #= true
+      f.rx.fragment #= frame(index)
+      f.rx.last #= index == frame.length - 1
+      index += 1
+      if (index == frame.length) { toSend.dequeue(); index = 0; gap = 12 }
+    }
+  }
 }
 
 /** A CPU on one MAC's registers: queued register writes and PLOAMs, interrupts served. Test only. */
@@ -80,7 +129,8 @@ class Cpu(apb: Apb3Driver, cd: ClockDomain, irq: Bool) {
 /** Closed loop OLT MAC <-> ONU MAC over a simulated fibre, both driven by CPU models through their registers:
   * activation to O5 and the ONU response time, Assign_Alloc-ID / Configure_Port-ID / BER_Interval acknowledged,
   * Request_Password answered 3 times, a CPU PLOAM each way, a DBA T-CONT in the ONU's burst with its DBRu,
-  * OMCI over GEM both ways (upstream fragmented in the default allocation), a fibre cut
+  * OMCI over GEM both ways (upstream fragmented in the default allocation, Ethernet frames at once in the T-CONT with
+  * their DBRu), Ethernet frames end to end both ways through the bridges, a fibre cut
   * (O6) restored with a downstream shift then a directed POPUP keeping the EqD to the bit, Disable_Serial_Number
   * (O7, laser dark), re-activation, a cut longer than TO2 (O1). */
 object OnuMacTest extends App {
@@ -101,6 +151,12 @@ object OnuMacTest extends App {
     io.oltUs #= 0
     val oltGem = new GtcDsTest.GemDriver(io.oltGem, ds)
     val onuGem = new GtcDsTest.GemDriver(io.onuGemTx, us)
+    us.onSamplings(io.onuGemBacklog #= onuGem.queue.map(_._2.length).sum) // whole packets until sent
+    val oltEth = new EthSide(io.oltEth, dut.ethDomain)
+    val onuEth = new EthSide(io.onuEth, dut.ethDomain)
+    for (apb <- Seq(io.oltBridgeApb, io.onuBridgeApb)) { apb.PSEL #= 0; apb.PENABLE #= false }
+    io.ethClk #= false
+    fork { while (true) { sleep(5); io.ethClk #= !io.ethClk.toBoolean } }
     io.onuDs #= 0
     ds.fallingEdge(); us.fallingEdge()
     ds.assertReset(); us.assertReset()
@@ -133,7 +189,7 @@ object OnuMacTest extends App {
     var benOn = false
     var leak = 0 // line bits set with the laser off
     val bursts = mutable.ArrayBuffer[(Int, Boolean, Int, Int, Long)]() // frame, found, allocId, onuId, delayBits
-    val dbrus = mutable.ArrayBuffer[(Int, Boolean)]()
+    val dbrus = mutable.ArrayBuffer[(Int, Boolean, Int)]() // allocId, CRC good, mode 0 report
     us.onSamplings {
       val line = io.onuUs.toInt
       val ben = io.onuBen.toInt
@@ -147,7 +203,7 @@ object OnuMacTest extends App {
       val b = dut.olt.us.receiver.io.burst
       if (b.valid.toBoolean) bursts += ((frames, b.found.toBoolean, b.allocId.toInt, b.onuId.toInt, b.delayBits.toLong))
       val d = dut.olt.us.receiver.io.dbru
-      if (d.valid.toBoolean) dbrus += ((d.allocId.toInt, d.crcOk.toBoolean))
+      if (d.valid.toBoolean) dbrus += ((d.allocId.toInt, d.crcOk.toBoolean, d.report.toInt & 0xFF))
       usCycle += 1
       io.oltUs #= byteAt(usBits, usCycle * 8 - oneWay)
     }
@@ -240,7 +296,8 @@ object OnuMacTest extends App {
     check(bursts.filter(x => x._1 > frames - 4).forall(x => x._2 && x._5 == 0), "two-allocation bursts to the bit")
 
     // OMCI over GEM: the ONU CPU's packets upstream in its default allocation, fragmented to fit (50 bytes after the
-    // PLOAMu); downstream only the OMCI Port-ID reaches the ONU CPU
+    // PLOAMu), Ethernet frames through the ONU bridge at the same time in T-CONT 300; downstream only the OMCI Port-ID
+    // reaches the ONU CPU (the bridge drops other Port-IDs by default)
     val usFragments = mutable.ArrayBuffer[(Int, Int, Boolean, List[Int])]() // allocId, Port-ID, end, bytes
     val open = mutable.ArrayBuffer[Int]()
     us.onSamplings {
@@ -256,17 +313,48 @@ object OnuMacTest extends App {
     val dsGem = mutable.ArrayBuffer[(Int, Int)]() // Port-ID, byte
     ds.onSamplings { if (io.onuGemRx.valid.toBoolean) dsGem += ((io.onuGemRx.gem.portId.toInt, io.onuGemRx.gem.data.toInt)) }
     val omci = Seq.tabulate(2)(k => List.tabulate(48)(i => (i * 7 + k * 101) & 0xFF))
+    val data = Seq.tabulate(2)(k => List.tabulate(150)(i => (i * 13 + k * 31) & 0xFF)) // untagged frames
+    def withFcs(frame: List[Int]): List[Int] = { val fcs = Crc32.model(frame); frame ++ (0 until 4).map(k => (fcs >> (8 * k)).toInt & 0xFF) }
+    val oltBridge = Apb3Driver(io.oltBridgeApb, ds)
+    val onuBridge = Apb3Driver(io.onuBridgeApb, ds)
+    val br = dut.onuBridge
+    onuBridge.write(br.UNTAGGED.addr, 0x200 | (1 << 12))
+    onu.writes += ((q.DATA_ALLOC.addr, BigInt(300 | (1 << 12))))
+    us.waitSamplingWhere(!onu.busy)
     onuGem.queue ++= omci.map(0x123 -> _)
+    onuEth.toSend ++= data
+    val dbruBefore = dbrus.length
     val f2 = frames
-    us.waitSamplingWhere(usFragments.count(_._3) == 2 || frames > f2 + 10)
-    val packets = usFragments.foldLeft((List[List[Int]](), List[Int]())) { case ((done, cur), f) =>
-      if (f._3) (done :+ (cur ++ f._4), Nil) else (done, cur ++ f._4) }._1
-    check(packets == omci && usFragments.forall(f => f._1 == onuId && f._2 == 0x123) && usFragments.length > 2,
-      s"ONU OMCI upstream: 2 packets in ${usFragments.length} fragments of the default allocation (${usFragments.map(_._4.length)})")
+    us.waitSamplingWhere(usFragments.count(_._3) == 4 || frames > f2 + 10)
+    def packets(allocId: Int) = usFragments.filter(_._1 == allocId).foldLeft((List[List[Int]](), List[Int]())) {
+      case ((done, cur), f) => if (f._3) (done :+ (cur ++ f._4), Nil) else (done, cur ++ f._4) }._1
+    val omciFragments = usFragments.filter(_._1 == onuId)
+    check(packets(onuId) == omci && omciFragments.forall(_._2 == 0x123) && omciFragments.length > 2,
+      s"ONU OMCI upstream: 2 packets in ${omciFragments.length} fragments of the default allocation (${omciFragments.map(_._4.length)})")
+    val dataFragments = usFragments.filter(_._1 == 300)
+    check(packets(300) == data.map(withFcs) && dataFragments.forall(_._2 == 0x200) && dataFragments.length > 2,
+      s"ONU Ethernet frames upstream meanwhile, FCS appended: ${dataFragments.length} fragments of T-CONT 300 (${dataFragments.map(_._4.length)})")
+    waitFrames(2)
+    val reports = dbrus.drop(dbruBefore).filter(_._1 == 300).map(_._3)
+    check(reports.exists(_ > 0) && reports.forall(_ <= (308 + 47) / 48) && reports.last == 0,
+      s"T-CONT 300 DBRu follows the backlog, 48-byte blocks (${reports.mkString(" ")})")
     val omciDown = List.tabulate(48)(i => 255 - i)
     oltGem.queue ++= Seq(0x456 -> List.fill(20)(0x5A), 0x123 -> omciDown)
     waitFrames(3)
-    check(dsGem.map(_._2).toList == omciDown && dsGem.forall(_._1 == 0x123), "downstream: only the OMCI Port-ID to the ONU CPU")
+    check(dsGem.toList == omciDown.map(0x123 -> _), "downstream: only the OMCI Port-ID to the ONU CPU")
+
+    // Ethernet end to end: OLT port -> Port-ID 0x456 -> ONU port, ONU port -> Port-ID 0x200 -> OLT port
+    oltBridge.write(dut.oltBridge.UNTAGGED.addr, 0x456 | (1 << 12))
+    oltBridge.write(dut.oltBridge.PORT_ACTION.addr, 0x200 | (2 << 12))
+    onuBridge.write(br.PORT_ACTION.addr, 0x456 | (2 << 12))
+    val down = List.tabulate(1000)(i => (i * 5 + 1) & 0xFF)
+    val up = List.tabulate(64)(i => (i * 3 + 7) & 0xFF)
+    oltEth.toSend += down
+    onuEth.toSend += up
+    waitFrames(3)
+    check(onuEth.received.toList == List(down) && oltEth.received.toList == List(up),
+      "Ethernet frames end to end: 1000 bytes OLT -> ONU, 64 bytes ONU -> OLT, FCS checked and stripped")
+    check(oltBridge.read(dut.oltBridge.DROPS.addr) == 0 && onuBridge.read(br.DROPS.addr) == 0, "no bridge drop")
 
     var fec = Seq[BigInt]()
     for (reg <- Seq(q.FEC(0), q.FEC(3)) /* codewords, uncorrectable */) onu.reads += ((reg.addr, x => fec :+= x))

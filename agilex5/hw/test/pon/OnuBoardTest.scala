@@ -6,7 +6,8 @@ import spinal.core.sim._
 import pon.gpon.GtcDsTest.check
 
 /** OnuBoardCore management path: OnuMac registers across the clocks or an error while the ONU lane is down, laser
-  * held off until both lanes are up, optics pin events, VCXO pin at the center duty. */
+  * held off until both lanes are up, optics pin events, VCXO pin at the center duty; an Ethernet frame through the
+  * bridge to the MAC's upstream data stream. */
 object OnuBoardTest extends App {
   val SN_0 = 0x04 // OnuRegs, read-write
   val BOARD = 0x100
@@ -16,8 +17,9 @@ object OnuBoardTest extends App {
   val IRQ_ENABLE = BOARD + 0x1C
   val VCXO_CTRL = BOARD + 0x20
   val QUEUES_STATUS = 0x200 + 0x14 // GemCpuQueues STATUS: txFree
+  val BRIDGE_UNTAGGED = 0x308
 
-  SimConfig.compile(OnuBoardCore()).doSim { dut =>
+  SimConfig.compile { val c = OnuBoardCore(); c.pon.mac.io.dataTx.simPublic(); c }.doSim { dut =>
     val io = dut.io
     val mgmt = dut.clockDomain
     mgmt.forkStimulus(10)
@@ -35,6 +37,13 @@ object OnuBoardTest extends App {
            lane.txPllLocked, lane.rxLockedToData, lane.rxLockedToRef)) b #= false
     for (b <- Seq(io.pins.rxSd, io.pins.burstCut, io.pins.scl.read, io.pins.sda.read, io.pins.benIo.read)) b #= false
     io.rxWord #= 0
+    io.ethDown #= true
+    io.eth.tx.ready #= true
+    io.eth.rx.valid #= false
+    io.eth.rxBad #= false
+    io.ethTxClk #= false
+    io.ethRxClk #= false
+    fork { while (true) { sleep(4); io.ethTxClk #= !io.ethTxClk.toBoolean; io.ethRxClk #= !io.ethRxClk.toBoolean } }
     val hps = new HpsAxi(io.axi, mgmt)
     import hps._
     mgmt.waitSampling(20)
@@ -54,6 +63,22 @@ object OnuBoardTest extends App {
     check(write(SN_0, 0x47504F4EL) == 0 && read(SN_0) == (0x47504F4EL, 0), "MAC register across the clocks once up")
     val (queues, queuesResp) = read(QUEUES_STATUS)
     check(queuesResp == 0 && (queues & 0xFFFF) == 512, s"GEM queues once up: TX queue empty (${queues & 0xFFFF} words free)")
+    check(read(BRIDGE_UNTAGGED)._2 == SLVERR, "bridge while the Ethernet lane is down: error")
+    io.ethDown #= false
+    mgmt.waitSampling(20)
+    check(write(BRIDGE_UNTAGGED, 0x200 | (1 << 12)) == 0, "bridge: untagged frames to Port-ID 0x200")
+    for (i <- 0 until 100) {
+      waitUntil(io.ethRxClk.toBoolean); waitUntil(!io.ethRxClk.toBoolean)
+      io.eth.rx.valid #= true
+      io.eth.rx.fragment #= (if (i == 12) 0x08 else i)
+      io.eth.rx.last #= i == 99
+    }
+    waitUntil(io.ethRxClk.toBoolean); waitUntil(!io.ethRxClk.toBoolean)
+    io.eth.rx.valid #= false
+    mgmt.waitSampling(500)
+    val data = dut.pon.mac.io.dataTx // no allocation yet: the packet waits at the MAC
+    check(data.valid.toBoolean && data.fragment.portId.toInt == 0x200 && data.fragment.length.toInt == 104,
+      s"Ethernet frame -> bridge -> ONU MAC data stream: Port-ID 0x200, 100 bytes + FCS")
     write(OPTICS, 0)
     mgmt.waitSampling(4)
     check(io.pins.laserDisable.toBoolean, "laser still off while the burst enable lane is not ready")

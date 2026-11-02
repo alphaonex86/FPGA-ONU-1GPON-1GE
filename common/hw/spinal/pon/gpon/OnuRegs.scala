@@ -103,7 +103,7 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
     "jobLost" -> (io.errors(1), "allocation queue full"),
     "allocFull" -> (io.errors(2), "Assign_Alloc-ID beyond the table"),
     "late" -> (io.errors(3), "an allocation was dropped, its burst start had passed"),
-    "gem" -> (io.errors(4), "the CPU GEM stream broke a packet (gap, wrong last, zero length)"),
+    "gem" -> (io.errors(4), "an upstream GEM stream broke a packet (gap, wrong last, zero length)"),
     "encryptedFull" -> (io.errors(5), "Encrypted_Port-ID beyond the table"),
     "keyLate" -> (io.errors(6), "a decrypted fragment dropped, its keystream late"))
   val errorBits = for (((name, (hit, doc)), k) <- errors.zipWithIndex) yield {
@@ -125,6 +125,12 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
     reg.field(UInt(32 bits), AccessType.RO, 0, "count")(SymbolName("count")) := io.fec(i)
     reg
   }
+
+  val DATA_ALLOC = busif.newReg("Upstream data GEM (the Ethernet bridge): its T-CONT")
+  io.config.dataAlloc.payload := DATA_ALLOC.field(UInt(12 bits), AccessType.RW, 0, "Alloc-ID")(SymbolName("allocId"))
+  io.config.dataAlloc.valid := DATA_ALLOC.field(Bool(), AccessType.RW, 0, "valid, else the data stream waits")(SymbolName("valid"))
+  val DBRU = busif.newReg("DBRu reports: queued bytes in reporting blocks (OMCI ANI-G GEM block length)")
+  io.config.blockBytes := DBRU.field(UInt(16 bits), AccessType.RW, 48, "reporting block, bytes")(SymbolName("blockBytes"))
 
   busif.accept(DocCHeader("onu_regs", "ONU")) // onu_regs.h next to the Verilog
 }

@@ -41,9 +41,10 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val ponRx = slave Flow (Fragment(UsGemByte())) // ponRxCd: GEM from the MAC
     val ponRxCut = in Bool ()
     val cpuPort = slave Flow (UInt(12 bits)) // ponRxCd
-    val toCpu = master Flow (Fragment(UsGemByte())) // ponRxCd: the CPU action, one clock later
+    val toCpu = master Flow (Fragment(UsGemByte())) // ponRxCd: the CPU action, two clocks later
     val toCpuCut = out Bool ()
     val ponTx = master Stream (Fragment(GemTxByte())) // ponTxCd: whole packets, one byte per clock once started
+    val ponTxBacklog = out UInt (16 bits) // ponTxCd: bytes queued
     val eth = master(EthFrames()) // tx in ethTxCd, rx in ethRxCd
   }
   val drop = 0
@@ -75,23 +76,23 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val actions = Mem(UInt(2 bits), 4096) initBigInt (Seq.fill(4096)(BigInt(defaultAction)))
     actions.write(actionWrite.payload(11 downto 0).asUInt, actionWrite.payload(13 downto 12).asUInt, actionWrite.valid)
     val forced = RegNext(io.cpuPort.valid && io.cpuPort.payload === io.ponRx.gem.portId) init (False)
-    val action = forced ? U(cpu, 2 bits) | actions.readSync(io.ponRx.gem.portId)
-    val in = RegNext(io.ponRx) init (io.ponRx.getZero)
-    val cut = RegNext(io.ponRxCut) init (False)
+    val action = RegNext(forced ? U(cpu, 2 bits) | actions.readSync(io.ponRx.gem.portId)) // after the RAM: 311.04 MHz in the ONU
+    val in = Delay(io.ponRx, 2, init = io.ponRx.getZero)
+    val cut = Delay(io.ponRxCut, 2, init = False)
     io.toCpu.valid := in.valid && action === cpu
     io.toCpu.payload := in.payload
     io.toCpuCut := cut
   }
 
-  val ponToEth = new ClockingArea(ponQueueCd) {
-    val in = lookup.in
-    val cut = lookup.cut
+  val ponToEth = new ClockingArea(ponQueueCd) { // one clock behind the lookup (311.04 MHz in the ONU)
+    val in = RegNext(lookup.in)
+    val byte = RegNext(lookup.in.valid && lookup.action === eth) init (False)
+    val cut = RegNext(lookup.cut) init (False)
     // the frame to Ethernet: its fragments in a row up to the end-of-frame PTI; no descriptor room: dropped whole
     val open, bad = RegInit(False)
     val skip = Reg(Bool())
     val bytes = Reg(UInt(12 bits))
     val crc = Reg(Bits(32 bits))
-    val byte = in.valid && lookup.action === eth
     val starting = byte && !open
     val skipNow = starting ? !ethDescs.io.push.ready | skip
     val crcNow = Crc32.step(starting ? B(32 bits, default -> True) | crc, in.gem.data)
@@ -103,7 +104,8 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val badNow = (starting ? False | bad) || take && !ethData.io.push.ready || byte && !take
     ethDescs.io.push.valid := ends && !skipNow
     ethDescs.io.push.bytes := stored + ethData.io.push.fire.asUInt
-    ethDescs.io.push.good := !badNow && !(cut && open) && crcNow === Crc32.residue && ethDescs.io.push.bytes >= 64
+    val long = stored >= 64 || stored === 63 && ethData.io.push.fire // bytes >= 64, off the adder
+    ethDescs.io.push.good := !badNow && !(cut && open) && crcNow === Crc32.residue && long
     when(byte) {
       open := True
       skip := skipNow
@@ -198,6 +200,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     data.ready := left =/= 0 && (send ? out.ready | True)
     when(data.fire)(left := left - 1)
     io.ponTx << out.pipelined(m2s = true, s2m = true)
+    io.ponTxBacklog := ponData.io.popOccupancy.resized
   }
 
   val DROPS = busif.newReg("Frames dropped (bad, queue full, unmapped), counts")

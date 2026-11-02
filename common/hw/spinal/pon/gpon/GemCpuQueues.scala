@@ -19,6 +19,7 @@ case class GemCpuQueues(txDomain: ClockDomain, rxDomain: ClockDomain, txWords: I
   val io = new Bundle {
     val apb = slave(Apb3(Apb3Config(addressWidth = 8, dataWidth = 32)))
     val tx = master Stream (Fragment(GemTxByte())) // txDomain
+    val txBacklog = out UInt (16 bits)             // txDomain: bytes queued (whole words, heads included)
     val rx = slave Flow (Fragment(UsGemByte()))    // rxDomain
     val rxCut = in Bool ()                         // rxDomain, with io.rx: the open fragment was cut
     val irq = out Bool ()
@@ -35,6 +36,7 @@ case class GemCpuQueues(txDomain: ClockDomain, rxDomain: ClockDomain, txWords: I
   val rxDescs = StreamFifoCC(RxDesc(), rxFragments, rxDomain, ClockDomain.current)
 
   val sender = new ClockingArea(txDomain) {
+    io.txBacklog := (txFifo.io.popOccupancy << 2).resized
     val pop = txFifo.io.pop
     val stage = Reg(Bits(32 bits)) // the next word, so the queue read enable only sees registers (311 MHz)
     val staged = RegInit(False)

@@ -93,10 +93,7 @@ case class OltBoardCore() extends Component {
   val queues = queuesDomain(gpon.GemCpuQueues(domains.ds, domains.us))
   io.gemIrq := queues.io.irq
 
-  val bridgeDown = !io.lane.txReady || io.ethDown
-  def bridgeDomain(clk: Bool): ClockDomain = ClockDomain(clk, ClockDomain(clk)(BufferCC(bridgeDown)))
-  val bridge = GemEthBridge(domains.us, bridgeDomain(io.usClk), bridgeDomain(io.dsClk), bridgeDomain(io.ethTxClk),
-    bridgeDomain(io.ethRxClk), defaultAction = 1)
+  val bridge = ethBridge(domains.us, domains.ds, io.ethTxClk, io.ethRxClk, !io.lane.txReady || io.ethDown, defaultAction = 1)
   bridge.io.ponRx << pon.mac.io.usGem
   bridge.io.ponRxCut := pon.mac.io.usGemCut
   bridge.io.cpuPort.setIdle()

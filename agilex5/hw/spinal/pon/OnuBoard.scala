@@ -90,7 +90,9 @@ case class OnuBoardRegs() extends Component {
 }
 
 /** ONU side of the board without the vendor blocks: 0x000 OnuMac registers (across to the upstream domain, an error
-  * answer while the ONU clocks are down), 0x100 board registers, 0x200 GEM CPU queues (OMCI; reset with the clocks). The ONU lane's tx clock (311.04 MHz, from the VCXO)
+  * answer while the ONU clocks are down), 0x100 board registers, 0x200 GEM CPU queues (OMCI; reset with the clocks),
+  * 0x300 Ethernet bridge (also an error while the Ethernet lane is down; by default downstream GEM is dropped, the OMCI
+  * Port-ID goes to the CPU; upstream in the data T-CONT, DATA_ALLOC). The ONU lane's tx clock (311.04 MHz, from the VCXO)
   * and half clock clock everything, the downstream words included (GTS RX phase compensation FIFO); the VCXO loop
   * keeps that clock on the recovered one (rxClk), both sampled by the helper clock (VcxoTracker). */
 case class OnuBoardCore() extends Component {
@@ -104,6 +106,8 @@ case class OnuBoardCore() extends Component {
     val pins = master(OnuPins())
     val vcxoPwm = out Bool ()
     val ponIrq, boardIrq, gemIrq = out Bool ()
+    val ethTxClk, ethRxClk, ethDown = in Bool () // the Ethernet lane: clocks, not ready (asynchronous)
+    val eth = master(EthFrames())
   }
   val board = OnuBoardRegs()
   io.onuLane <> board.io.onuLane
@@ -162,8 +166,19 @@ case class OnuBoardCore() extends Component {
   val queuesDomain = ClockDomain.current.copy(reset = ClockDomain.current.readResetWire || RegNext(!board.io.alive).init(True))
   val queues = queuesDomain(gpon.GemCpuQueues(domains.us, domains.ds))
   pon.mac.io.gemTx << queues.io.tx
-  queues.io.rx << pon.mac.io.gemRx
-  queues.io.rxCut := pon.mac.io.gemRxCut
+  pon.mac.io.gemTxBacklog := queues.io.txBacklog
   io.gemIrq := queues.io.irq
-  HpsBridge(io.axi, Seq(cc.io.input -> board.io.alive, board.io.apb -> True, queues.io.apb -> board.io.alive))
+
+  val bridge = ethBridge(domains.ds, domains.us, io.ethTxClk, io.ethRxClk, !io.onuLane.txReady || io.ethDown, defaultAction = 0)
+  bridge.io.ponRx << pon.mac.io.gemRx
+  bridge.io.ponRxCut := pon.mac.io.gemRxCut
+  bridge.io.cpuPort << pon.mac.io.omciPort
+  queues.io.rx << bridge.io.toCpu
+  queues.io.rxCut := bridge.io.toCpuCut
+  pon.mac.io.dataTx << bridge.io.ponTx
+  pon.mac.io.dataTxBacklog := bridge.io.ponTxBacklog
+  io.eth <> bridge.io.eth
+  val bridgeUp = board.io.alive && !BufferCC(io.ethDown, True)
+  HpsBridge(io.axi, Seq(cc.io.input -> board.io.alive, board.io.apb -> True, queues.io.apb -> board.io.alive,
+    bridge.io.apb -> bridgeUp))
 }
