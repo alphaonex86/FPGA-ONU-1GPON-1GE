@@ -48,13 +48,38 @@ case class EponMacPon(fibres: Seq[(Int, Int)]) extends Component {
   olt.io.rxCode := (0 until n).foldRight(B(0, 10 bits))((k, rest) => lit(k) ? codes(k) | rest)
 }
 
+/** The register setup of the EPON test CPUs: LLIDs from 0x10, a discovery window every 2048 TQ, grants of 160 to
+  * 1500 TQ, laser on/off 16 TQ, sync 24 TQ; the ONUs always report. Test only. */
+object EponCpu {
+  val macs = Seq(BigInt("001122334401", 16), BigInt("001122334402", 16))
+  val (laserOn, laserOff, sync, llidBase) = (16, 16, 24, 0x10)
+  def olt(a: Apb3Driver, r: EponOltRegs): Unit = {
+    a.write(r.MAC_HI.addr, 0x0A0B); a.write(r.MAC_LO.addr, 0x0C0D0E0FL)
+    a.write(r.LLID.addr, llidBase)
+    a.write(r.DISCOVERY.addr, 2 | (600 << 16))
+    a.write(r.RANGE.addr, 700 | (sync << 16))
+    a.write(r.SCHEDULE.addr, 4000 | (1300 << 16))
+    a.write(r.GRANT.addr, 160 | (1500 << 16))
+    a.write(r.OVERHEAD.addr, (laserOn + sync + laserOff + Mpcp.cost(Mpcp.pduBytes)) | (8 << 16))
+    a.write(r.TIMEOUT.addr, 8)
+    a.write(r.IRQ_ENABLE.addr, 3)
+    a.write(r.CTRL.addr, 1)
+  }
+  def onu(a: Apb3Driver, r: EponOnuRegs, mac: BigInt): Unit = {
+    a.write(r.MAC_HI.addr, mac >> 32); a.write(r.MAC_LO.addr, mac & 0xFFFFFFFFL)
+    a.write(r.LASER.addr, laserOn | (laserOff << 8))
+    a.write(r.TIMEOUT.addr, 3052)
+    a.write(r.IRQ_ENABLE.addr, 3)
+    a.write(r.CTRL.addr, 3) // enable, always report
+  }
+}
+
 /** The EPON MACs run by their CPUs through the registers only: two ONUs registered (OLT events with their MACs, ONU
   * STATE with the LLID, both interrupts), data each way, frame counters, deregistration of an ONU by the OLT's CPU
   * (DEREGISTER: event, the ONU's EVENTS) and its registration again, no ERRORS bit. */
 object EponMacRegsTest extends App {
+  import EponCpu.macs
   val rnd = new scala.util.Random(11)
-  val macs = Seq(BigInt("001122334401", 16), BigInt("001122334402", 16))
-  val (laserOn, laserOff, sync) = (16, 16, 24)
   SimConfig.compile(EponMacPon(Seq((37, 41), (530, 520)))).doSim { dut =>
     val io = dut.io
     val cd = dut.clockDomain
@@ -65,23 +90,8 @@ object EponMacRegsTest extends App {
     val onu = io.onuApb.map(Apb3Driver(_, cd))
     val (r, ro) = (dut.olt.regs, dut.onus.map(_.mac.regs).head)
 
-    olt.write(r.MAC_HI.addr, 0x0A0B); olt.write(r.MAC_LO.addr, 0x0C0D0E0FL)
-    olt.write(r.LLID.addr, 0x10)
-    olt.write(r.DISCOVERY.addr, 2 | (600 << 16))
-    olt.write(r.RANGE.addr, 700 | (sync << 16))
-    olt.write(r.SCHEDULE.addr, 4000 | (1300 << 16))
-    olt.write(r.GRANT.addr, 160 | (1500 << 16))
-    olt.write(r.OVERHEAD.addr, (laserOn + sync + laserOff + Mpcp.cost(Mpcp.pduBytes)) | (8 << 16))
-    olt.write(r.TIMEOUT.addr, 8)
-    olt.write(r.IRQ_ENABLE.addr, 3)
-    olt.write(r.CTRL.addr, 1)
-    for ((a, k) <- onu.zipWithIndex) {
-      a.write(ro.MAC_HI.addr, macs(k) >> 32); a.write(ro.MAC_LO.addr, macs(k) & 0xFFFFFFFFL)
-      a.write(ro.LASER.addr, laserOn | (laserOff << 8))
-      a.write(ro.TIMEOUT.addr, 3052)
-      a.write(ro.IRQ_ENABLE.addr, 3)
-      a.write(ro.CTRL.addr, 3) // enable, always report
-    }
+    EponCpu.olt(olt, r)
+    for ((a, k) <- onu.zipWithIndex) EponCpu.onu(a, ro, macs(k))
 
     val events = mutable.ArrayBuffer[(Int, Int, BigInt)]()
     def popEvents(): Unit = while (olt.read(r.STATUS.addr).testBit(0)) {

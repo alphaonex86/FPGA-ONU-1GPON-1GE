@@ -44,7 +44,7 @@ case class EponOltRegs(onus: Int) extends Component {
   io.config.lead := field(SCHEDULE, 16, "lead", "a GATE's grant at least this far ahead, TQ")
   val GRANT = busif.newReg("Grant length: last REPORT + overhead, within min and max")
   io.config.minGrant := field(GRANT, 16, "min", "TQ")
-  io.config.maxGrant := field(GRANT, 16, "max", "TQ")
+  io.config.maxGrant := field(GRANT, 16, "max", "TQ, at least overhead + 772 (a 1522-byte frame), else it never fits")
   val OVERHEAD = busif.newReg("Burst overhead")
   io.config.overhead := field(OVERHEAD, 16, "overhead", "added to a REPORT: laser on/off, sync, the REPORT itself, TQ")
   io.config.guard := field(OVERHEAD, 8, "guard", "between bursts, TQ")

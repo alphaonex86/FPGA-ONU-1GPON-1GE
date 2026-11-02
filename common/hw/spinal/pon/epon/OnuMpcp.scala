@@ -12,6 +12,7 @@ object Mpcp {
   val fieldBytes = 27 // the longest: a GATE of 4 grants and a sync time
   val pduBytes = 60   // without the FCS
   def cost(bytes: Int): Int = (bytes + 8 + 4 + Epon.ipg + 2 + 1) / 2 // TQ on the line: preamble, FCS, IPG, alignment
+  def frameCost(length: UInt): UInt = ((length.resize(12) + U(8 + Epon.ipg + 3, 12 bits)) >> 1).resize(16) // FCS included
   val (regRegister, regDeregister) = (1, 3)                      // REGISTER_REQ flags
   val (regReregister, regDeregisterOnu, regAck, regNack) = (1, 2, 3, 4) // REGISTER flags
 }
@@ -230,7 +231,7 @@ case class OnuMpcp() extends Component {
           pdu := Pdu.REPORT; reported := True; reportValue := io.report; burst := Burst.FRAME
         }
       }
-      val dataCost = ((io.data.length.resize(12) + U(8 + Epon.ipg + 3, 12 bits)) >> 1).resize(32)
+      val dataCost = frameCost(io.data.length).resize(32)
       when(!grant.discovery && state === REGISTERED && io.data.valid && fits(dataCost) && !needAck && !needDeregister &&
         (reported || !(grant.force || io.config.alwaysReport)))(burst := Burst.DATA)
     }

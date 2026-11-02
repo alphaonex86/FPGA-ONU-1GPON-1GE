@@ -111,7 +111,9 @@ Both MAC tops (`EponOnu.scala`, `EponOlt.scala`) run from their CPU registers
 (`epon_onu_regs.h`, `epon_olt_regs.h`: configuration, registration state and
 LLID, OLT events, frame counters, interrupts), checked through them alone;
 on the DE25-Standard FPGA at 125 MHz: ONU 1.3K ALMs (211 MHz), OLT 2.4K ALMs
-(142 MHz).
+(142 MHz). With the same Ethernet bridges as GPON (`EponGem.scala`: the LLID is
+the Port-ID, Port-ID 0xFFF the broadcast LLID; the ONU's REPORT from its queues),
+Ethernet frames cross OLT port -> ONU port and back in simulation.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane
