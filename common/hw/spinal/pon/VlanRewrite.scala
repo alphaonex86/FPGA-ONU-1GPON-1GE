@@ -15,9 +15,10 @@ object VlanRewriteState extends SpinalEnum { val HEAD, TAG, BODY, FCS = newEleme
 
 /** Rewrites the outer VLAN tag of each frame (push, pop, translate), the treatment read at its first byte; frames of
   * at least 17 bytes (a removed tag must not hold the last byte). appendFcs: the Ethernet FCS of the rewritten frame
-  * follows it. A frame leaves once 4 of its bytes and the buffer latency are buffered: a continuous input gives a continuous output frame
-  * (the 4-byte hole of a removed tag absorbed; the GEM framers and the Ethernet MAC need it). */
-case class VlanRewrite(appendFcs: Boolean) extends Component {
+  * follows it. A frame leaves once reserve of its bytes and the buffer latency are buffered: an input with holes of at
+  * most reserve - 4 bytes in all gives a continuous output frame (the 4-byte hole of a removed tag absorbed too; the
+  * GEM framers and the Ethernet MAC need it). */
+case class VlanRewrite(appendFcs: Boolean, reserve: Int = 4) extends Component {
   val io = new Bundle {
     val input = slave Stream (Fragment(Bits(8 bits)))
     val treatment = in(VlanTreatment()) // held from the frame's first byte
@@ -75,12 +76,12 @@ case class VlanRewrite(appendFcs: Boolean) extends Component {
   }
   val first = state === HEAD && index === 0
   val fifoLatency = 1
-  val buffer = StreamFifo(Fragment(Bits(8 bits)), 8, latency = fifoLatency)
+  val buffer = StreamFifo(Fragment(Bits(8 bits)), 2 * reserve, latency = fifoLatency)
   buffer.io.push << core
   val lasts = Reg(UInt(4 bits)) init (0) // frame ends in the buffer
   lasts := lasts + (buffer.io.push.fire && core.last).asUInt - (io.output.fire && io.output.last).asUInt
   val sending = RegInit(False)
-  io.output << buffer.io.pop.continueWhen(sending || buffer.io.occupancy >= 4 + fifoLatency || lasts =/= 0) // the hole covered
+  io.output << buffer.io.pop.continueWhen(sending || buffer.io.occupancy >= reserve + fifoLatency || lasts =/= 0) // the hole covered
   when(io.output.fire)(sending := !io.output.last)
   io.idle := first && buffer.io.occupancy === 0
   when(core.fire && state =/= FCS)(crc := Crc32.step(first ? B(32 bits, default -> True) | crc, core.fragment))
