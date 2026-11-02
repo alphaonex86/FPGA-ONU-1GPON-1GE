@@ -12,7 +12,8 @@ import pon.gpon.GtcDsTest.check
   * Ethernet -> PON by VLAN ID (802.1Q, 802.1ad, untagged, unmapped, bad frame) and PCP mapper, FCS checked, stripped,
   * appended; two queues by Port-ID, a full one dropping while the other flows; VLAN treatments each way (translate,
   * pop, S-tag push); table writes back to back across the clocks; offloaded flows each way (NAPT, PPPoE added and
-  * stripped, VLAN pushed and popped, own Port-ID and queue), a port or a TTL of 1 missing them. */
+  * stripped, VLAN pushed and popped, own Port-ID and queue), a port or a TTL of 1 missing them; in flows mode the
+  * misses to the CPU each way, the CPU's own frames out of both sides. */
 object GemEthBridgeTest extends App {
   val PORT_ACTION = 0x00
   val VLAN_MAP = 0x04
@@ -82,6 +83,8 @@ object GemEthBridgeTest extends App {
     io.eth.rx.valid #= false
     io.eth.rxBad #= false
     for (q <- io.ponTx) q.ready #= true
+    io.cpuToLan.valid #= false
+    io.cpuToWan.valid #= false
     io.eth.tx.ready #= true
     val apb = Apb3Driver(io.apb, mgmt)
     mgmt.waitSampling(20)
@@ -262,6 +265,52 @@ object GemEthBridgeTest extends App {
       "Ethernet -> PON miss (other port): the L2 rules, unchanged")
     check(ethOut.drop(ethBefore).toSeq == Seq(dsOut, dsTtl1) && ethGaps == 0,
       "PON -> Ethernet flow: NAPT destination, VLAN and PPPoE stripped, no gap; TTL 1 missed: unchanged")
+
+    // flows mode: misses to the CPU
+    val lanCpu, wanCpu = mutable.ArrayBuffer[(Int, Seq[Int])]()
+    def collect(cd: ClockDomain, f: Flow[Fragment[pon.gpon.UsGemByte]], to: mutable.ArrayBuffer[(Int, Seq[Int])]): Unit = {
+      val cur = mutable.ArrayBuffer[Int]()
+      cd.onSamplings {
+        if (f.valid.toBoolean) {
+          cur += f.gem.data.toInt
+          if (f.last.toBoolean) { to += ((f.gem.portId.toInt, cur.toList)); cur.clear() }
+        }
+      }
+    }
+    collect(ponTx, io.lanToCpu, lanCpu)
+    collect(ethTx, io.wanToCpu, wanCpu)
+    apb.write(UNTAGGED, 0x201 | (1 << 12) | (1 << 21))
+    apb.write(PORT_ACTION, 0x110 | (3 << 12))
+    mgmt.waitSampling(50)
+    val (ponBefore2, ethBefore2) = (ponOut.map(_.length), ethOut.length)
+    send(usIn); send(usMiss)
+    gem(0x110, Seq(withFcs(dsIn))); gem(0x110, Seq(withFcs(dsTtl1)))
+    mgmt.waitSampling(3000)
+    check(ponOut(1).drop(ponBefore2(1)).toSeq == Seq((0x230, usOut.length + 4, withFcs(usOut))) &&
+      ponOut(0).length == ponBefore2(0) && lanCpu.toSeq == Seq((0, usMiss)),
+      "flows mode, Ethernet -> PON: the hit to its egress, the miss to the CPU")
+    check(ethOut.drop(ethBefore2).toSeq == Seq(dsOut) && wanCpu.toSeq == Seq((0x110, dsTtl1)),
+      "flows mode, PON -> Ethernet (Port-ID action 3): the hit to Ethernet, the miss to the CPU with its Port-ID")
+
+    // the CPU's own frames
+    def inject(cd: ClockDomain, port: Stream[Fragment[pon.gpon.GemTxByte]], portId: Int, bytes: Seq[Int]): Unit = {
+      for ((b, i) <- bytes.zipWithIndex) {
+        port.valid #= true
+        port.fragment.portId #= portId
+        port.fragment.length #= bytes.length
+        port.fragment.data #= b
+        port.last #= i == bytes.length - 1
+        cd.waitSamplingWhere(port.ready.toBoolean)
+      }
+      port.valid #= false
+    }
+    val lanFrame = frame(80)
+    val wanPacket = withFcs(frame(90))
+    inject(ethTx, io.cpuToLan, 0, lanFrame)
+    inject(ponTx, io.cpuToWan, 0x205, wanPacket)
+    mgmt.waitSampling(500)
+    check(ethOut.last == lanFrame && ponOut(1).last == ((0x205, wanPacket.length, wanPacket)),
+      "CPU frames: to Ethernet, and to the PON in the queue of their Port-ID (0x205: queue 1)")
   }
   println("PASS GemEthBridgeTest")
 }

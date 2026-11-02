@@ -84,12 +84,27 @@ object BoardFields {
     def domain(clk: Bool): ClockDomain = ClockDomain(clk, ClockDomain(clk)(BufferCC(down)))
     GemEthBridge(ponRx, domain(ponRx.clock), domain(ponTx.clock), domain(ethTxClk), domain(ethRxClk), defaultAction, ponQueues)
   }
+
+  /** The bridge's frame queues for the CPU (GemCpuQueues): LAN (Ethernet frames in and out, Port-ID 0) and WAN (PON
+    * frames in, with their Port-ID, and out), on the bridge's clocks, reset while `down`. */
+  def bridgeQueues(bridge: GemEthBridge, down: Bool): (gpon.GemCpuQueues, gpon.GemCpuQueues) = {
+    val cd = ClockDomain.current.copy(reset = ClockDomain.current.readResetWire || RegNext(down).init(True))
+    val lan = cd(gpon.GemCpuQueues(bridge.ethTxCd, bridge.ponTxCd))
+    val wan = cd(gpon.GemCpuQueues(bridge.ponTxCd, bridge.ethTxCd))
+    lan.io.rx << bridge.io.lanToCpu
+    lan.io.rxCut := False
+    bridge.io.cpuToLan << lan.io.tx
+    wan.io.rx << bridge.io.wanToCpu
+    wan.io.rxCut := False
+    bridge.io.cpuToWan << wan.io.tx
+    (lan, wan)
+  }
 }
 
 /** HPS lightweight bridge (AXI4, single 32-bit accesses: readl/writel) -> APB3 slaves of 256 bytes each, slave k at
   * 0x100 * k; a slave whose `up` is low, or no slave, answers an error at once, so the CPU never hangs. */
 object HpsBridge {
-  val addressWidth = 10
+  val addressWidth = 11
   def axiConfig: Axi4Config = Axi4SharedToApb3Bridge.getConfigs(addressWidth, 32, 4)._1
 
   def apply(axi: Axi4, slaves: Seq[(Apb3, Bool)]): Unit = {

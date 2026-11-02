@@ -45,7 +45,7 @@ case class OltBoardRegs() extends Component {
 }
 
 /** OLT side of the board without the vendor blocks: 0x000 OltMac registers (across to the upstream domain), 0x100
-  * board registers, 0x200 GEM CPU queues (OMCI), 0x300 Ethernet bridge. MAC and queues answer an error while the PON
+  * board registers, 0x200 GEM CPU queues (OMCI), 0x300 Ethernet bridge, 0x400 / 0x500 its LAN / WAN frame queues. MAC and queues answer an error while the PON
   * clocks are down, the bridge also while the Ethernet lane is. The lane's tx clock (311.04 MHz) and half clock clock
   * the MAC, reset until the lane is ready; the queues reset with it, the bridge queues while either lane is down.
   * Upstream GEM goes through the bridge's Port-ID lookup (by default to the CPU, also while the Ethernet lane is down);
@@ -59,7 +59,7 @@ case class OltBoardCore() extends Component {
     val rxWord = in Bits (8 bits)
     val refclkFail = in Bits (8 bits)
     val sfp = master(SfpPins())
-    val ponIrq, boardIrq, gemIrq = out Bool ()
+    val ponIrq, boardIrq, gemIrq, lanIrq, wanIrq = out Bool ()
     val ethTxClk, ethRxClk, ethDown = in Bool () // the Ethernet lane: clocks, not ready (asynchronous)
     val eth = master(EthFrames())
   }
@@ -104,9 +104,12 @@ case class OltBoardCore() extends Component {
   }.ds
   io.eth <> bridge.io.eth
   val bridgeUp = board.io.alive && !BufferCC(io.ethDown, True)
+  val (lanQueues, wanQueues) = bridgeQueues(bridge, !bridgeUp)
+  io.lanIrq := lanQueues.io.irq
+  io.wanIrq := wanQueues.io.irq
 
   val cc = Apb3CC(pon.mac.io.apb.config, ClockDomain.current, domains.us)
   pon.mac.io.apb <> cc.io.output
   HpsBridge(io.axi, Seq(cc.io.input -> board.io.alive, board.io.apb -> True, queues.io.apb -> board.io.alive,
-    bridge.io.apb -> bridgeUp))
+    bridge.io.apb -> bridgeUp, lanQueues.io.apb -> bridgeUp, wanQueues.io.apb -> bridgeUp))
 }

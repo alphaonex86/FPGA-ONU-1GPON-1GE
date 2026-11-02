@@ -25,7 +25,8 @@ case class PonBoard() extends Component {
     val sfp, ethSfp = master(SfpPins())
     val onuPins = master(OnuPins())
     val vcxoPwm = out Bool ()
-    val oltPonIrq, oltBoardIrq, oltGemIrq, onuPonIrq, onuBoardIrq, onuGemIrq, ethBoardIrq, ethFrameIrq = out Bool ()
+    val oltPonIrq, oltBoardIrq, oltGemIrq, oltLanIrq, oltWanIrq = out Bool ()
+    val onuPonIrq, onuBoardIrq, onuGemIrq, onuLanIrq, onuWanIrq, ethBoardIrq, ethFrameIrq = out Bool ()
   }
   noIoPrefix()
   olt.io.axi <> io.lwOlt
@@ -36,9 +37,13 @@ case class PonBoard() extends Component {
   io.oltPonIrq := olt.io.ponIrq
   io.oltBoardIrq := olt.io.boardIrq
   io.oltGemIrq := olt.io.gemIrq
+  io.oltLanIrq := olt.io.lanIrq
+  io.oltWanIrq := olt.io.wanIrq
   io.onuPonIrq := onu.io.ponIrq
   io.onuBoardIrq := onu.io.boardIrq
   io.onuGemIrq := onu.io.gemIrq
+  io.onuLanIrq := onu.io.lanIrq
+  io.onuWanIrq := onu.io.wanIrq
   eth.io.axi <> io.lwEth
   io.ethSfp <> eth.io.sfp
   io.ethBoardIrq := eth.io.boardIrq

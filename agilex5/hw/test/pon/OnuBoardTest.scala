@@ -7,7 +7,8 @@ import pon.gpon.GtcDsTest.check
 
 /** OnuBoardCore management path: OnuMac registers across the clocks or an error while the ONU lane is down, laser
   * held off until both lanes are up, optics pin events, VCXO pin at the center duty; an Ethernet frame through the
-  * bridge to the MAC's upstream data stream. */
+  * bridge to the MAC's upstream data stream; in flows mode a miss to the LAN frame queue, a CPU frame out of the
+  * Ethernet port. */
 object OnuBoardTest extends App {
   val SN_0 = 0x04 // OnuRegs, read-write
   val BOARD = 0x100
@@ -19,6 +20,11 @@ object OnuBoardTest extends App {
   val QUEUES_STATUS = 0x200 + 0x14 // GemCpuQueues STATUS: txFree
   val BRIDGE_VLAN_MAP = 0x304
   val BRIDGE_UNTAGGED = 0x308
+  val LAN = 0x400 // GemCpuQueues
+  val TX_HEAD = 0x00
+  val TX_DATA = 0x04
+  val RX_DESC_0 = 0x08
+  val RX_DESC_1 = 0x0C
 
   SimConfig.compile { val c = OnuBoardCore(); c.pon.mac.io.dataTx.simPublic(); c }.doSim { dut =>
     val io = dut.io
@@ -82,6 +88,33 @@ object OnuBoardTest extends App {
     val data = dut.pon.mac.io.dataTx(0) // no allocation yet: the packet waits at the MAC
     check(data.valid.toBoolean && data.fragment.portId.toInt == 0x200 && data.fragment.length.toInt == 104,
       s"Ethernet frame -> bridge -> ONU MAC data stream: Port-ID 0x200, 100 bytes + FCS")
+    def ethFrame(n: Int): Unit = {
+      for (i <- 0 until n) {
+        waitUntil(io.ethRxClk.toBoolean); waitUntil(!io.ethRxClk.toBoolean)
+        io.eth.rx.valid #= true
+        io.eth.rx.fragment #= i
+        io.eth.rx.last #= i == n - 1
+      }
+      waitUntil(io.ethRxClk.toBoolean); waitUntil(!io.ethRxClk.toBoolean)
+      io.eth.rx.valid #= false
+    }
+    write(BRIDGE_UNTAGGED, 0x200 | (1 << 12) | (1 << 21))
+    ethFrame(90) // not IPv4: a miss
+    mgmt.waitSampling(500)
+    check((read(LAN + RX_DESC_0)._1 >> 31) == 1 && (read(LAN + RX_DESC_1)._1 & 0xFFF) == 90,
+      "flows mode: the missed Ethernet frame in the LAN frame queue, 90 bytes")
+    val sent = scala.collection.mutable.ArrayBuffer[Int]()
+    fork {
+      while (true) {
+        waitUntil(io.ethTxClk.toBoolean)
+        if (io.eth.tx.valid.toBoolean) sent += io.eth.tx.fragment.toInt
+        waitUntil(!io.ethTxClk.toBoolean)
+      }
+    }
+    write(LAN + TX_HEAD, 64L << 16)
+    for (w <- 0 until 16) write(LAN + TX_DATA, (0 until 4).map(k => (4 * w + k).toLong << (24 - 8 * k)).sum)
+    mgmt.waitSampling(500)
+    check(sent.toSeq == (0 until 64), s"CPU frame from the LAN queue out of the Ethernet port (${sent.length} bytes)")
     write(OPTICS, 0)
     mgmt.waitSampling(4)
     check(io.pins.laserDisable.toBoolean, "laser still off while the burst enable lane is not ready")

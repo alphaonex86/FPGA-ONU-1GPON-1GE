@@ -92,7 +92,8 @@ case class OnuBoardRegs() extends Component {
 /** ONU side of the board without the vendor blocks: 0x000 OnuMac registers (across to the upstream domain, an error
   * answer while the ONU clocks are down), 0x100 board registers, 0x200 GEM CPU queues (OMCI; reset with the clocks),
   * 0x300 Ethernet bridge (also an error while the Ethernet lane is down; by default downstream GEM is dropped, the OMCI
-  * Port-ID goes to the CPU; upstream one queue per data T-CONT, DATA_ALLOC_k). The ONU lane's tx clock (311.04 MHz, from the VCXO)
+  * Port-ID goes to the CPU; upstream one queue per data T-CONT, DATA_ALLOC_k), 0x400 and 0x500 the bridge's LAN and
+  * WAN frame queues (as the bridge: flows-mode misses and the CPU's frames). The ONU lane's tx clock (311.04 MHz, from the VCXO)
   * and half clock clock everything, the downstream words included (GTS RX phase compensation FIFO); the VCXO loop
   * keeps that clock on the recovered one (rxClk), both sampled by the helper clock (VcxoTracker). */
 case class OnuBoardCore() extends Component {
@@ -105,7 +106,7 @@ case class OnuBoardCore() extends Component {
     val rxWord = in Bits (8 bits)
     val pins = master(OnuPins())
     val vcxoPwm = out Bool ()
-    val ponIrq, boardIrq, gemIrq = out Bool ()
+    val ponIrq, boardIrq, gemIrq, lanIrq, wanIrq = out Bool ()
     val ethTxClk, ethRxClk, ethDown = in Bool () // the Ethernet lane: clocks, not ready (asynchronous)
     val eth = master(EthFrames())
   }
@@ -180,6 +181,9 @@ case class OnuBoardCore() extends Component {
   pon.mac.io.dataTxBacklog := bridge.io.ponTxBacklog
   io.eth <> bridge.io.eth
   val bridgeUp = board.io.alive && !BufferCC(io.ethDown, True)
+  val (lanQueues, wanQueues) = bridgeQueues(bridge, !bridgeUp)
+  io.lanIrq := lanQueues.io.irq
+  io.wanIrq := wanQueues.io.irq
   HpsBridge(io.axi, Seq(cc.io.input -> board.io.alive, board.io.apb -> True, queues.io.apb -> board.io.alive,
-    bridge.io.apb -> bridgeUp))
+    bridge.io.apb -> bridgeUp, lanQueues.io.apb -> bridgeUp, wanQueues.io.apb -> bridgeUp))
 }
