@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
-"""Netlists: the two DE25-Nano SerDes bridge boards (ONU on GPIO_0, OLT on GPIO_1) and the DE25-Standard HSMC card."""
+"""Netlists: the two DE25-Nano SerDes bridge boards (ONU on GPIO_0, OLT on GPIO_1), the DE25-Standard HSMC card and the GPON sniffer."""
 import os, re
 from kisch import Board
 from hsmcpins import pinout as hsmc_pinout
@@ -28,7 +28,7 @@ def ball_xy(b):
 
 def assign_balls(signals, clock):
     """signals: {net: header pin}; header order west->east mapped onto rows A/B west->east.
-    The forwarded clock lands on the nearest PCLKT ball."""
+    The forwarded clock, if any, lands on the nearest PCLKT ball."""
     io = [b for b, f in ECP5_BALLS.items() if re.match(r'P[TL]\d+[A-D]', f) and b[0] in 'AB']
     io.sort(key=lambda b: (ball_xy(b)[0], ball_xy(b)[1]))
     nets = sorted(signals, key=lambda n: (hdr_x(signals[n]), signals[n] % 2))
@@ -38,7 +38,7 @@ def assign_balls(signals, clock):
     chosen = [io[int(i * step)] for i in range(len(nets))]
     out = dict(zip(nets, chosen))
     pclk = [b for b in io if 'PCLKT' in ECP5_BALLS[b]]
-    if out[clock] not in pclk:
+    if clock and out[clock] not in pclk:
         free = [b for b in pclk if b not in chosen]
         target = min(free or pclk, key=lambda b: abs(ball_xy(b)[0] - ball_xy(out[clock])[0]))
         if target in chosen:  # swap with the net sitting there
@@ -92,7 +92,7 @@ class Bridge(Board):
         """bus: {net: header pin} on rows A/B, outputs: nets driven by the ECP5 (series R pack),
         misc: {net: ball}, serdes: {ball function: net}, spi: (sn, cclk, mosi, miso)."""
         self.block = 'ecp5'
-        clock = next(n for n in bus if n.endswith('_CLK') and n not in outputs)
+        clock = next((n for n in bus if n.endswith('_CLK') and n not in outputs), None)
         balls = assign_balls(bus, clock)
         conn = {}
         for b, f in ECP5_BALLS.items():
@@ -197,32 +197,36 @@ def optics(b, tx='TX0', rx='RX0', ben='BEN'):
           {'LD_A': '+3V3_OPT', 'LD_K': 'LD_K', 'MPD_A': 'LD_MD', 'MPD_K': '+3V3_OPT',
            'VAPD': 'HV_APD', 'VCC': '+3V3_RX', 'OUT+': 'TIA_P', 'OUT-': 'TIA_N', 'GND': 'GND'},
           MPN='desoldered from an X100DG; pad order to measure')
-    b.block = 'apd'   # Vout = 1.2 V * (1 + 300k/10k) + (1.2 V - APD_ADJ) * 300k/20k: 55 V .. 18 V, 37 V with the DAC off
-    b.fb('+3V3', '+3V3_APD'); b.decouple('+3V3_APD', 1, 1)
-    b.add('U', LIB, 'TPS61391', 'TPS61391RTER', 'Package_DFN_QFN:WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm_ThermalVias',
-          {'VIN': '+3V3_APD', 'EN': '+3V3_APD', '14': '+3V3_APDA', '15': '+3V3_APDA', 'AGND': 'GND', 'GND': 'GND', 'EP': 'GND',
-           'FB': 'APD_FB', 'ISHORT': 'APD_ISHORT', 'CAP': 'APD_CAP', 'SW': 'HV_SW', 'MONIN': 'HV_MONIN', 'APD': 'HV_APD',
-           'MON1': 'APD_MON', 'MON2': 'APD_MON2'}, MPN='TPS61391RTER')
-    b.add('L', 'Device', 'L', '4.7u', 'Inductor_SMD:L_Cenker_CKCS252012', {'1': '+3V3_APD', '2': 'HV_SW'}, MPN='4.7 uH, Isat >= 1 A, 2520')
-    b.add('D', 'Device', 'D_Schottky', 'BAT46WJ', 'Diode_SMD:D_SOD-323F', {'K': 'HV_OUT', 'A': 'HV_SW'}, MPN='BAT46WJ (100 V)')
-    hv = dict(MPN='100 V X7R')
-    b.c('100n', 'HV_OUT', fp=C0603, **hv)
-    b.r('100', 'HV_OUT', 'HV_FILT'); b.c('100n', 'HV_FILT', fp=C0603, **hv)
-    b.r('1k', 'HV_FILT', 'HV_MONIN')
-    b.c('220p', 'HV_APD', fp=C0603, **hv)
-    b.r('300k', 'HV_OUT', 'APD_FB', fp='Resistor_SMD:R_0603_1608Metric')   # 0603: 55 V across it
-    b.r('10k', 'APD_FB', 'GND'); b.r('20k', 'APD_FB', 'APD_ADJ')
-    b.r('33k', 'APD_ISHORT', 'GND')   # 3 mA short limit
-    b.c('47n', 'APD_CAP')
-    b.r('10', '+3V3_APD', '+3V3_APDA'); b.c('2.2u', '+3V3_APDA')
-    b.r('1.5k', 'APD_MON', 'GND'); b.c('10p', 'APD_MON')     # 4:5 mirror: 2 mA APD -> 2.4 V
-    b.r('3.01k', 'APD_MON2', 'GND'); b.c('10p', 'APD_MON2')
+    apd_bias(b)
     b.block = 'ddm'
     b.add('U', 'Analog', 'AD5593R', 'AD5593RBRUZ', 'Package_SO:TSSOP-16_4.4x5mm_P0.65mm',
           {'~{RESET}': 'DDM_RESET', 'A0': 'GND', 'V_{DD}': '+3V3', 'V_{LOGIC}': '+3V3', 'V_{REF}': 'DDM_VREF', 'GND': 'GND',
            'SDA': 'ONU_SDA', 'SCL': 'ONU_SCL', 'IO0': 'APC_ADJ', 'IO1': 'MOD_ADJ', 'IO2': 'APD_ADJ', 'IO3': 'BIASMON',
            'IO4': 'MODMON', 'IO5': 'APD_MON', 'IO6': 'RSSI', 'IO7': 'APCFAULT_N'}, MPN='AD5593RBRUZ')
     b.r('10k', 'DDM_RESET', '+3V3'); b.c('100n', 'DDM_VREF'); b.decouple('+3V3', 1)
+
+def apd_bias(b, p='', r_top='300k'):
+    """TPS61391 APD bias; p prefixes every net (a second receiver). DAC on <p>APD_ADJ, APD current on <p>APD_MON."""
+    b.block = 'apd' + p   # Vout = 1.2 V * (1 + 300k/10k) + (1.2 V - APD_ADJ) * 300k/20k: 55 V .. 18 V, 37 V with the DAC off
+    b.fb('+3V3', f'+3V3_{p}APD'); b.decouple(f'+3V3_{p}APD', 1, 1)
+    b.add('U', LIB, 'TPS61391', 'TPS61391RTER', 'Package_DFN_QFN:WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm_ThermalVias',
+          {'VIN': f'+3V3_{p}APD', 'EN': f'+3V3_{p}APD', '14': f'+3V3_{p}APDA', '15': f'+3V3_{p}APDA', 'AGND': 'GND', 'GND': 'GND', 'EP': 'GND',
+           'FB': f'{p}APD_FB', 'ISHORT': f'{p}APD_ISHORT', 'CAP': f'{p}APD_CAP', 'SW': f'{p}HV_SW', 'MONIN': f'{p}HV_MONIN', 'APD': f'{p}HV_APD',
+           'MON1': f'{p}APD_MON', 'MON2': f'{p}APD_MON2'}, MPN='TPS61391RTER')
+    b.add('L', 'Device', 'L', '4.7u', 'Inductor_SMD:L_Cenker_CKCS252012', {'1': f'+3V3_{p}APD', '2': f'{p}HV_SW'}, MPN='4.7 uH, Isat >= 1 A, 2520')
+    b.add('D', 'Device', 'D_Schottky', 'BAT46WJ', 'Diode_SMD:D_SOD-323F', {'K': f'{p}HV_OUT', 'A': f'{p}HV_SW'}, MPN='BAT46WJ (100 V)')
+    hv = dict(MPN='100 V X7R')
+    b.c('100n', f'{p}HV_OUT', fp=C0603, **hv)
+    b.r('100', f'{p}HV_OUT', f'{p}HV_FILT'); b.c('100n', f'{p}HV_FILT', fp=C0603, **hv)
+    b.r('1k', f'{p}HV_FILT', f'{p}HV_MONIN')
+    b.c('220p', f'{p}HV_APD', fp=C0603, **hv)
+    b.r(r_top, f'{p}HV_OUT', f'{p}APD_FB', fp='Resistor_SMD:R_0603_1608Metric')   # 0603: 55 V across it
+    b.r('10k', f'{p}APD_FB', 'GND'); b.r('20k', f'{p}APD_FB', f'{p}APD_ADJ')
+    b.r('33k', f'{p}APD_ISHORT', 'GND')   # 3 mA short limit
+    b.c('47n', f'{p}APD_CAP')
+    b.r('10', f'+3V3_{p}APD', f'+3V3_{p}APDA'); b.c('2.2u', f'+3V3_{p}APDA')
+    b.r('1.5k', f'{p}APD_MON', 'GND'); b.c('10p', f'{p}APD_MON')     # 4:5 mirror: 2 mA APD -> 2.4 V
+    b.r('3.01k', f'{p}APD_MON2', 'GND'); b.c('10p', f'{p}APD_MON2')
 
 def onu():
     b = Bridge('onu')
@@ -331,6 +335,69 @@ def sfp_cage(b, name, td, rd, vcc='+3V3'):
     b.decouple(vcc, 0, 0, 1)
     for n in ('TX_FAULT', 'TX_DIS', 'LOS', 'MOD_ABS', 'SCL', 'SDA'):
         b.r('4.7k', f'{name}_{n}', vcc)
+
+def receiver(b, p, bosa, coupling):
+    """BOSA receive can -> SY88349NDL -> ECP5 SerDes RX <p>RX_P/N; the laser is never connected.
+    SD mode, auto reset, JAM = SD (squelched between bursts); SD to the ECP5 as the burst envelope."""
+    b.block = f'rx:{p}'
+    vcc = f'+3V3_{p}OPT'
+    b.fb('+3V3', vcc); b.decouple(vcc, 3, 1)
+    b.add('U', LIB, *bosa, {'VCC': vcc, 'VAPD': f'{p}HV_APD', 'OUT+': f'{p}TIA_P', 'OUT-': f'{p}TIA_N', 'GND': 'GND'})
+    for t, i in (('P', 'DIN_P'), ('N', 'DIN_N')):   # AC coupled, each input 50 ohm to VREF (datasheet pin 1/4)
+        b.c(coupling, f'{p}TIA_{t}', f'{p}{i}')
+        b.r('49.9', f'{p}{i}', f'{p}VREF')
+    b.c('100n', f'{p}VREF')
+    b.add('U', LIB, 'SY88349NDL', 'SY88349NDLMG', 'Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias',
+          {'1': f'{p}DIN_P', '4': f'{p}DIN_N', '2': f'{p}VREF', '6': 'GND', '10': 'GND', '13': vcc, '14': f'{p}SDLVL',
+           '15': f'{p}SD', '7': f'{p}SD', '12': f'{p}LA_P', '9': f'{p}LA_N', '5': vcc, '16': vcc,
+           '3': 'GND', '8': 'GND', '11': 'GND', '17': 'GND'}, MPN='SY88349NDLMG')
+    b.r('5.1k', f'{p}SDLVL', vcc)     # SD level: starting value, trimmed on the bench
+    b.r('4.7k', f'{p}SD', '+3V3')     # LVTTL SD needs its pull-up
+    for t in 'PN':
+        b.c('100n', f'{p}LA_{t}', f'{p}RX_{t}')
+
+def sniffer():
+    """GPON sniffer (../../../sniffer/README.md): two BOSA receive cans behind a passive tap, DS 1490 nm into
+    ECP5 RX0 (CDR, 2.48832 Gb/s), US 1310 nm bursts into RX1 (2x oversampled at 2.48832 Gb/s off the VCXO, which
+    the ECP5 locks to the downstream). To the DE25-Nano GPIO_0: 16 DS + 8 US bits DDR at 155.52 Mb/s per pin on a
+    77.76 MHz forwarded clock (HVIO 3.3 V: 100 MHz SDR / 200 Mb/s DDR max). Config over slave SPI, trims over I2C."""
+    b = Bridge('sniffer')
+    c6 = [10, 11, 13, 15, 20, 22, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
+    bus = {'FWD_CLK': hdr(0)}
+    bus.update(lanes([i for i in c6 if i != 22], [f'DS{i}' for i in range(16)]))
+    bus.update(lanes([1, 3, 4, 5, 6, 7, 8, 9], [f'US{i}' for i in range(8)]))
+    slow = lanes([12, 14, 16, 35, 17, 18, 19], ['CCLK', 'MOSI', 'MISO', 'SN', 'PROGRAMN', 'SCL', 'SDA'])
+    b.header(dict(bus, **slow))
+    b.power()
+    serdes = {'HDRXP0_D0CH0': 'DS_RX_P', 'HDRXN0_D0CH0': 'DS_RX_N', 'HDRXP0_D0CH1': 'US_RX_P', 'HDRXN0_D0CH1': 'US_RX_N',
+              'REFCLKP_D0': 'REFCLK_P', 'REFCLKN_D0': 'REFCLK_N',
+              'VCCHRX0_D0CH0': '+1V1_HRX', 'VCCHRX1_D0CH1': '+1V1_HRX'}   # both TX open (TN-02038 3.8)
+    b.ecp5(bus, set(bus), {'VCXO_PWM': 'U16', 'DS_SD': 'U17', 'US_SD': 'T17'}, serdes, 'PROGRAMN',
+           ('SN', 'CCLK', 'MOSI', 'MISO'))
+    b.block = 'clock'
+    b.add('Y', LIB, 'VCXO_LVDS_3225', 'SiT3821 155.52 MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
+          {'VIN': 'VCXO_VC', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'REFCLK_P', 'OUT-': 'REFCLK_N'},
+          MPN='SiT3821AI-2B2-33EB155.520000 (LVDS, +-50 ppm pull; check code)')
+    b.fb('+3V3', '+3V3_XO'); b.decouple('+3V3_XO', 1, 1)
+    b.r('10k', 'VCXO_PWM', 'VCXO_RC'); b.c('1u', 'VCXO_RC')
+    b.r('10k', 'VCXO_RC', 'VCXO_VC'); b.c('1u', 'VCXO_VC')
+    # DS: continuous, 100 nF. US: bursts, 220 pF: tau = 50 ohm * 220 pF = 11 ns settles within the GPON preamble
+    # and stays far above the scrambler's 7-bit runs (5.6 ns at 1.24416 Gb/s).
+    receiver(b, 'DS_', ('BOSA_GPON', 'BOSA GPON (X100DG), RX can only', 'bridge:BOSA_GPON'), '100n')
+    receiver(b, 'US_', ('BOSA_RX', 'XL-BCB2111-LS-02, RX can only', 'bridge:BOSA_RX_TO46'), '220p')
+    apd_bias(b, 'DS_')
+    apd_bias(b, 'US_', '330k')   # XL-BCB2111 Vbr up to 60 V: 330k gives 19..61 V over the DAC range
+    b.block = 'ddm'
+    b.add('U', 'Analog', 'AD5593R', 'AD5593RBRUZ', 'Package_SO:TSSOP-16_4.4x5mm_P0.65mm',
+          {'~{RESET}': 'DDM_RESET', 'A0': 'GND', 'V_{DD}': '+3V3', 'V_{LOGIC}': '+3V3', 'V_{REF}': 'DDM_VREF', 'GND': 'GND',
+           'SDA': 'SDA', 'SCL': 'SCL', 'IO0': 'DS_APD_ADJ', 'IO1': 'US_APD_ADJ', 'IO2': 'DS_APD_MON', 'IO3': 'US_APD_MON'},
+          MPN='AD5593RBRUZ')
+    b.r('10k', 'DDM_RESET', '+3V3'); b.c('100n', 'DDM_VREF'); b.decouple('+3V3', 1)
+    for net in ('SCL', 'SDA'):
+        b.r('2.2k', net, '+3V3')
+    b.r('10k', 'MISO', '+3V3')
+    b.holes()
+    return b
 
 # HSMC GTS lanes (DE25-Standard: 4, lanes 0-3) and the even-row single-ended pins (bank 2 north, bank 3 south)
 HSMC_LANES = {3: ('OLT_TD', 'OLT_RD'), 2: ('ETH_TD', 'ETH_RD'), 1: ('ONU_TX', 'ONU_RX'), 0: ('ONU_BEN', None)}

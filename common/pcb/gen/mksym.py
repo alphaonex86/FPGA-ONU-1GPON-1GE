@@ -82,6 +82,18 @@ syms.append(box_symbol('BOSA_GPON', [([('T1', 'LD_A', 'passive'), ('T2', 'LD_K',
                                        [('R1', 'VAPD', 'passive'), ('R2', 'VCC', 'power_in'), ('R3', 'OUT+', 'output'), ('R4', 'OUT-', 'output'),
                                         ('R5', 'GND', 'power_in')])],
                        'U', 'BOSA GPON', 'bridge:BOSA_GPON', 'GPON ONU BOSA (1310 nm DFB TX, 1490 nm APD-TIA RX) from the X100DG; pad order to measure'))
+syms.append(box_symbol('SY88349NDL', [([('1', 'DIN', 'input'), ('4', '/DIN', 'input'), ('2', 'VREF', 'output'), ('6', 'RESET', 'input'),
+                                         ('10', '/AUTO_RESET', 'input'), ('13', 'LOS/SD_SEL', 'input'), ('14', 'LOS/SDLVL', 'passive'),
+                                         ('15', 'JAM', 'input')],
+                                        [('12', 'DOUT', 'output'), ('9', '/DOUT', 'output'), ('7', 'SD/LOS', 'open_collector'),
+                                         ('5', 'VCC', 'power_in'), ('16', 'VCC', 'passive'), ('3', 'GND', 'power_in'),
+                                         ('8', 'GND', 'passive'), ('11', 'GND', 'passive'), ('17', 'EP', 'passive')])],
+                       'U', 'SY88349NDLMG', 'Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias',
+                       'Microchip SY88349NDL 2.5 Gb/s burst-mode limiting amp, CML out, 3x3 QFN-16'))
+# Receive can of a GPON BOSA (TO-46 APD-TIA), leads per the XL-BCB2111-LS-02 drawing; the TX can is not soldered
+syms.append(box_symbol('BOSA_RX', [([('1', 'VCC', 'power_in'), ('2', 'VAPD', 'passive'), ('4', 'GND', 'power_in')],
+                                     [('5', 'OUT+', 'output'), ('3', 'OUT-', 'output')])],
+                       'U', 'BOSA RX', 'bridge:BOSA_RX_TO46', 'GPON BOSA receive can only (APD-TIA): the laser can stays unconnected'))
 def hsmc_symbol():
     fn = hsmc_pinout()
     first = {f: min(p for p in fn if fn[p] == f) for f in ('3.3V', '12V', 'GND')}   # one typed power pin each, the rest passive (ERC)
@@ -161,5 +173,16 @@ def hsmc_footprint():
     write_footprint('HSMC_ASP-122952-01', 'HSMC card connector, Samtec ASP-122952-01, 160 contacts 0.5 mm + 12 ground bars, '
                     'mounted on the card bottom', 'smd', body + [rect(-30.25, -4.6, 30.25, 4.07, 'F.CrtYd', 0.05)] + pads, (0, 5.5))
 
+# XL-BCB2111-LS-02 RX can: 5 leads 0.45 mm on a 2.54 mm circle, 72 degrees apart, clockwise from VCC at the top:
+# VCC, Isource (APD), Dout-, GND, Dout+. The BOSA body and its TX can lie beside the pads, TX leads cut.
+def bosa_rx_footprint():
+    pads = [[S('pad'), str(k + 1), S('thru_hole'), S('circle'), [S('at'), *polar(0, RX_PCD, -90 + 72 * k)], [S('size'), 0.9, 0.9],
+             [S('drill'), 0.6], [S('layers'), '*.Cu', '*.Mask']] for k in range(5)]
+    can = [[S('fp_circle'), [S('center'), 0, 0], [S('end'), 2.7, 0], [S('stroke'), [S('width'), w], [S('type'), S('solid')]],
+            [S('fill'), S('no')], [S('layer'), layer]] for layer, w in (('F.SilkS', 0.12), ('F.Fab', 0.1), ('F.CrtYd', 0.05))]
+    write_footprint('BOSA_RX_TO46', 'GPON BOSA receive can (TO-46 APD-TIA), 5 leads on a 2.54 mm circle (XL-BCB2111-LS-02 drawing); '
+                    'pad 1 VCC, 2 Isource, 3 Dout-, 4 GND, 5 Dout+', 'through_hole', can + pads, (0, -3.8))
+
 bosa_footprint()
+bosa_rx_footprint()
 hsmc_footprint()

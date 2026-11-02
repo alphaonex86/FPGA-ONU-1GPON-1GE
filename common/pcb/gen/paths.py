@@ -4,7 +4,7 @@ import os, sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
 LIB = os.path.join(REPO, 'common', 'pcb', 'lib')
-BOARD_HOME = {'olt': 'de25-nano', 'onu': 'de25-nano', 'hsmc': 'de25-standard'}
+BOARD_HOME = {'olt': 'de25-nano', 'onu': 'de25-nano', 'hsmc': 'de25-standard', 'sniffer': 'sniffer'}
 KI_LIB = '${KIPRJMOD}/../../../common/pcb/lib'   # LIB seen from any <dev board>/pcb/<board> folder
 
 def board_dir(name):

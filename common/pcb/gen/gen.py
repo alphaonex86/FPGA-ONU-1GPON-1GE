@@ -2,12 +2,12 @@
 """Generate <dev board>/pcb/<board>/<board>.kicad_sch (+ project files) for every board."""
 import os, sys
 sys.path.insert(0, os.path.dirname(__file__))
-from boards import onu, olt, hsmc
+from boards import onu, olt, hsmc, sniffer
 from kisch import write_schematic
 from pcbgen import write_project
 from paths import KI_LIB, board_dir
 
-for board in (onu(), olt(), hsmc()):
+for board in (onu(), olt(), hsmc(), sniffer()):
     d = board_dir(board.name)
     os.makedirs(d, exist_ok=True)
     nets = board.nets()

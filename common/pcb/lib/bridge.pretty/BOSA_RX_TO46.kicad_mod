@@ -1,0 +1,33 @@
+(footprint
+  "BOSA_RX_TO46"
+  (version 20260206)
+  (generator "mksym.py")
+  (layer "F.Cu")
+  (descr
+    "GPON BOSA receive can (TO-46 APD-TIA), 5 leads on a 2.54 mm circle (XL-BCB2111-LS-02 drawing); pad 1 VCC, 2 Isource, 3 Dout-, 4 GND, 5 Dout+")
+  (property
+    "Reference"
+    "REF**"
+    (at 0 -3.8)
+    (layer "F.Fab")
+    (effects (font (size 1 1) (thickness 0.15))))
+  (property
+    "Value"
+    "BOSA_RX_TO46"
+    (at 0 -2)
+    (layer "F.Fab")
+    (effects (font (size 1 1) (thickness 0.15))))
+  (attr through_hole)
+  (fp_circle (center 0 0) (end 2.7 0) (stroke (width 0.12) (type solid)) (fill no) (layer "F.SilkS"))
+  (fp_circle (center 0 0) (end 2.7 0) (stroke (width 0.1) (type solid)) (fill no) (layer "F.Fab"))
+  (fp_circle (center 0 0) (end 2.7 0) (stroke (width 0.05) (type solid)) (fill no) (layer "F.CrtYd"))
+  (pad "1" thru_hole circle (at 0 -1.27) (size 0.9 0.9) (drill 0.6) (layers "*.Cu" "*.Mask"))
+  (pad "2" thru_hole circle (at 1.208 -0.392) (size 0.9 0.9) (drill 0.6) (layers "*.Cu" "*.Mask"))
+  (pad "3" thru_hole circle (at 0.746 1.027) (size 0.9 0.9) (drill 0.6) (layers "*.Cu" "*.Mask"))
+  (pad "4" thru_hole circle (at -0.746 1.027) (size 0.9 0.9) (drill 0.6) (layers "*.Cu" "*.Mask"))
+  (pad "5" thru_hole circle (at -1.208 -0.392) (size 0.9 0.9) (drill 0.6) (layers "*.Cu" "*.Mask"))
+  (model
+    "${KIPRJMOD}/../../../common/pcb/lib/3d/BOSA_RX_TO46.step"
+    (offset (xyz 0 0 0))
+    (scale (xyz 1 1 1))
+    (rotate (xyz 0 0 0))))

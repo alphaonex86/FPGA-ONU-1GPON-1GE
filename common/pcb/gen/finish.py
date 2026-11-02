@@ -52,8 +52,14 @@ def drop_dangling(path):
     for _ in range(5):
         if not dangling or errors or open_items:
             break
+        before = open(path).read()
         drop_items(path, dangling)
-        errors, open_items, dangling = drc(path)
+        after = drc(path)
+        if after[0] or after[1]:   # a "dangling" piece joined two others: keep it
+            open(path, 'w').write(before)
+            print(f'{path}: dropping {len(dangling)} dangling item(s) opened the board, kept them')
+            break
+        errors, open_items, dangling = after
     return errors, open_items
 
 def drop_items(path, uuids):

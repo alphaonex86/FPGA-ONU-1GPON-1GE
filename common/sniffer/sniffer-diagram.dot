@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// GPON sniffer block diagram (sniffer/README.md). Render: dot -Tsvg sniffer-diagram.dot -o sniffer-diagram.svg
+digraph sniffer {
+    graph [rankdir=LR, fontname="Helvetica", fontsize=20, labelloc=t, nodesep=0.35, ranksep=0.55, pad=0.3,
+           label="GPON sniffer, customer side: our ONU, both directions, passive tap\n "];
+    node  [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, fillcolor="#ffffff", color="#555555"];
+    edge  [fontname="Helvetica", fontsize=9, color="#1f5fa8"];
+
+    OLT  [label="ISP OLT\n(provider, remote,\nnot ours)", shape=cylinder, fillcolor="#eeeeee", style="filled,dashed"];
+
+    subgraph cluster_fiber {
+        label="Customer premises fibre (two 1x2 couplers back to back)"; style="rounded,dashed"; color="#d9822b"; fontsize=12;
+        WALL [label="Wall fibre outlet\n(drop from the ISP)", fillcolor="#fde3c8"];
+        C1   [label="1x2 50:50 #1\n(common port to wall)", fillcolor="#fff1e0"];
+        C2   [label="1x2 90:10 #2\n(common port to ONU)", fillcolor="#fff1e0"];
+        ONU  [label="Our ONU", shape=cylinder, fillcolor="#fde3c8"];
+        ATT  [label="SC attenuator\n5 dB", fillcolor="#fff1e0"];
+    }
+
+    subgraph cluster_card {
+        label="Sniffer card on DE25-Nano GPIO_0 (sniffer/pcb/sniffer)"; style=rounded; color="#1f5fa8"; fontsize=12;
+        subgraph cluster_ds {
+            label="Downstream 1490 nm, 2.48832 Gb/s continuous"; style="rounded,filled"; fillcolor="#eef4fb"; color="#9db8d9";
+            BDS  [label="ONU BOSA (X100DG)\nRX can only: APD-TIA\nlaser not soldered"];
+            LDS  [label="SY88349NDL\nlimiting amp\n100 nF coupling"];
+        }
+        subgraph cluster_us {
+            label="Upstream 1310 nm, 1.24416 Gb/s bursts"; style="rounded,filled"; fillcolor="#eef4fb"; color="#9db8d9";
+            BUS  [label="OLT BOSA XL-BCB2111\nRX can only: APD-TIA\nlaser not soldered"];
+            LUS  [label="SY88349NDL\nburst limiting amp\n220 pF (tau 11 ns), auto reset"];
+        }
+        APD  [label="2x TPS61391\nAPD bias 18-61 V", fillcolor="#e6f4e6", color="#3c8d3c"];
+        DDM  [label="AD5593R (I2C)\nAPD trim + optical power", fillcolor="#f2f2f2"];
+        ECP5 [label="ECP5 LFE5UM-25F\nSerDes RX only\nCH0: CDR (downstream)\nCH1: 2x oversample + phase pick\nDDR out, 155.52 Mb/s per pin", fillcolor="#dce9f7"];
+        VCXO [label="VCXO 155.52 MHz\nlocked to the downstream", fillcolor="#f2f2f2"];
+    }
+
+    subgraph cluster_nano {
+        label="Terasic DE25-Nano (Agilex 5 A5EB013 + HPS)"; style=rounded; color="#6a3fa0"; fontsize=12;
+        FAB  [label="FPGA fabric\nGTC deframers DS + US\nFEC RS(255,239), AES-128\nfilter: serial -> ONU-ID,\nAlloc-IDs, GEM Port-IDs", fillcolor="#efe6f8"];
+        HPS  [label="HPS Linux\npcapng writer\nif 0 = downstream\nif 1 = upstream\nhardware timestamps", fillcolor="#efe6f8"];
+    }
+    OUT  [label="GbE -> PC (Wireshark)\nor microSD", shape=note, fillcolor="#f7f7f7"];
+
+    OLT -> WALL [dir=both, color="#d9822b", penwidth=2, style=dashed, label="ISP network,\n5 km to us"];
+    WALL -> C1 [dir=both, color="#d9822b", penwidth=2, label="1490 / 1310"];
+    C1 -> C2 [dir=both, color="#d9822b", penwidth=2, label="50 % leg / 90 % leg"];
+    C2 -> ONU [dir=both, color="#d9822b", penwidth=2, label="ONU: about -4 dB from the tap\n(fits homes at -23 dBm or better)"];
+    C1 -> BDS [color="#d9822b", penwidth=2, label="50 %: downstream copy"];
+    C2 -> ATT [color="#d9822b", penwidth=2, label="10 %: upstream copy"];
+    ATT -> BUS [color="#d9822b", penwidth=2];
+
+    BDS -> LDS; LDS -> ECP5 [label="CML"];
+    BUS -> LUS; LUS -> ECP5 [label="CML + SD envelope"];
+    APD -> BDS [color="#3c8d3c", style=dashed]; APD -> BUS [color="#3c8d3c", style=dashed];
+    DDM -> APD [color="#777777", style=dashed, label="DAC"];
+    VCXO -> ECP5 [color="#777777", label="refclk"]; ECP5 -> VCXO [color="#777777", style=dashed, label="PWM"];
+
+    ECP5 -> FAB [penwidth=2, label="GPIO_0 3.3 V HVIO\n16 DS + 8 US bits DDR\n77.76 MHz forwarded clock"];
+    FAB -> ECP5 [color="#777777", style=dashed, label="slave SPI config, I2C"];
+    FAB -> HPS [penwidth=2, label="filtered records"];
+    HPS -> OUT [penwidth=2, label="pcapng"];
+}

@@ -5,7 +5,7 @@ import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
 from pcbgen import Layout, BGA_C, ball_xy, P, V, plane_vias, PLANE_NETS
 from paths import board_dir
-from boards import onu, olt, hsmc
+from boards import onu, olt, hsmc, sniffer
 
 PASSIVE = ('R', 'C', 'FB', 'L', 'RN', 'TP')
 def is_passive(ref):
@@ -33,7 +33,8 @@ def common(lay, h):
         lay.place(u, 47.5, y, 180, True)
         buck_cell(lay, u)
     lay.place(refs(lay, 'TLV75525PDBV')[0], 54.0, 31.0, 0, True)
-    lay.place(refs(lay, 'Conn_01x08')[0], 3.0, 10.0)    # OLT-ONU link, under the header's SPI/I2C pins
+    for link in refs(lay, 'Conn_01x08'):                 # OLT-ONU link, under the header's SPI/I2C pins
+        lay.place(link, 3.0, 10.0)
     lay.place(refs(lay, 'Conn_01x06')[0], 8.0, 38.0)    # JTAG
 
 def buck_cell(lay, u):
@@ -153,6 +154,40 @@ def onu_layout():
     lay.place(refs(lay, 'AD5593R')[0], 30.0, 58.0)
     return lay
 
+def sniffer_layout():
+    """Each BOSA at the east edge with its fibre (and the body of the XL-BCB2111) over the edge, its limiting
+    amp beside it; the CML pairs come back to the SerDes balls south of the BGA."""
+    bd = sniffer()
+    lay = Layout(bd, 64, 72)
+    common(lay, lay.h)
+    lay.place(refs(lay, 'VCXO_LVDS_3225')[0], 42.0, 37.5)       # at the REFCLK balls Y11/Y12, as on the ONU board
+    la = {lay.parts[r].conns['1'][:3]: r for r in refs(lay, 'SY88349NDL')}
+    # each limiting amp right at its RX can: the TIA's millivolts stay short, the CML pairs run to the BGA
+    lay.place(refs(lay, 'BOSA_GPON')[0], 49.0, 57.0)             # downstream: body to the east edge, fiber over it
+    lay.place(refs(lay, 'BOSA_RX')[0], 59.0, 43.0)               # upstream: RX can 5 mm from the east edge
+    lay.place(la['DS_'], 56.5, 50.0)                             # north of the X100DG RX can (57.5, 57)
+    lay.place(la['US_'], 51.0, 43.0)
+    tps = {lay.parts[r].conns['5'][:3]: r for r in refs(lay, 'TPS61391')}   # pin 5 = APD output
+    diodes = {lay.parts[r].conns['1'][:3]: r for r in refs(lay, 'D_Schottky')}
+    for p, (x, y) in (('DS_', (38.0, 63.0)), ('US_', (60.5, 33.0))):   # each next to its BOSA
+        lay.place(tps[p], x, y)
+        lay.place(diodes[p], x, y + 3.6)
+    lay.place(refs(lay, 'AD5593R')[0], 22.0, 64.0)
+    return lay
+
+def sniffer_serdes(lay):
+    """RX0 (Y5/Y6, downstream) and RX1 (Y7/Y8, upstream) straight south to their AC caps; TX balls stay open."""
+    ybot = bga_xy('Y1')[1] + 1.0
+    caps = []
+    for ball, net, dx in (('Y5', 'DS_RX_P', 0.2), ('Y6', 'DS_RX_N', 0.4), ('Y7', 'US_RX_P', 0.6), ('Y8', 'US_RX_N', 0.8)):
+        xy = bga_xy(ball)
+        caps.append((part_on(lay, net, 'C'), xy[0] + dx, ybot + 2.4))
+    put_pair(lay, caps, 90)
+    for ball, net in (('Y5', 'DS_RX_P'), ('Y6', 'DS_RX_N'), ('Y7', 'US_RX_P'), ('Y8', 'US_RX_N')):
+        xy = bga_xy(ball)
+        lay.track(net, [xy, (xy[0], ybot - 0.6)], NECK_W)
+        lay.track(net, [(xy[0], ybot - 0.6), pad_of_net(lay, part_on(lay, net, 'C'), net)], SERDES_W)
+    return {'Y5', 'Y6', 'Y7', 'Y8'}
 
 HSMC_W, HSMC_H = 80.0, 78.0
 
@@ -465,8 +500,8 @@ def planes(lay):
 
 if __name__ == '__main__':
     force = '--force' in sys.argv
-    names = [a for a in sys.argv[1:] if not a.startswith('-')] or ['olt', 'onu', 'hsmc']
-    for make in (olt_layout, onu_layout, hsmc_layout):
+    names = [a for a in sys.argv[1:] if not a.startswith('-')] or ['olt', 'onu', 'hsmc', 'sniffer']
+    for make in (olt_layout, onu_layout, hsmc_layout, sniffer_layout):
         if make.__name__.split('_')[0] not in names:
             continue
         lay = make()
@@ -482,7 +517,7 @@ if __name__ == '__main__':
             print(lay.bd.name, 'placed', len(lay.placed_refs()), 'of', len(lay.parts))
             print(lay.save())
             continue
-        hand = serdes(lay, lay.bd.name == 'olt')   # its exact-placed pair parts first, the passives fill around
+        hand = sniffer_serdes(lay) if lay.bd.name == 'sniffer' else serdes(lay, lay.bd.name == 'olt')   # exact pairs first
         passives(lay, 13.0)
         lay.fanout(hand | {'Y11', 'Y12'} | {b for b in lay.bus_balls() if b[0] == 'A'}, PLANE_NETS)
         for net in ('CCLK', 'MISO'):  # row channels U/V, V/W west on top (U1-2, V1, W1 unused), out to x = centre - 9
