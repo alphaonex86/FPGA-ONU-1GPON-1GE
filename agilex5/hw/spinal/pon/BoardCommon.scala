@@ -85,19 +85,26 @@ object BoardFields {
     GemEthBridge(ponRx, domain(ponRx.clock), domain(ponTx.clock), domain(ethTxClk), domain(ethRxClk), defaultAction, ponQueues)
   }
 
-  /** The bridge's frame queues for the CPU (GemCpuQueues): LAN (Ethernet frames in and out, Port-ID 0) and WAN (PON
-    * frames in, with their Port-ID, and out), on the bridge's clocks, reset while `down`. */
-  def bridgeQueues(bridge: GemEthBridge, down: Bool): (gpon.GemCpuQueues, gpon.GemCpuQueues) = {
+  /** The bridge's frame queues for the CPU (GemCpuQueues), on the bridge's clocks, reset while `down`: LAN (Ethernet
+    * frames in and out, Port-ID 0), WAN (PON frames in, with their Port-ID, and out), then the control frames of each
+    * side (rate limited by the bridge; receive only, their TX refuses every packet). */
+  case class BridgeQueues(bridge: GemEthBridge, down: Bool) extends Area {
     val cd = ClockDomain.current.copy(reset = ClockDomain.current.readResetWire || RegNext(down).init(True))
     val lan = cd(gpon.GemCpuQueues(bridge.ethTxCd, bridge.ponTxCd))
     val wan = cd(gpon.GemCpuQueues(bridge.ponTxCd, bridge.ethTxCd))
+    val lanControl = cd(gpon.GemCpuQueues(bridge.ethTxCd, bridge.ponTxCd, txWords = 4, rxWords = 512))
+    val wanControl = cd(gpon.GemCpuQueues(bridge.ponTxCd, bridge.ethTxCd, txWords = 4, rxWords = 512))
     lan.io.rx << bridge.io.lanToCpu
-    lan.io.rxCut := False
     bridge.io.cpuToLan << lan.io.tx
     wan.io.rx << bridge.io.wanToCpu
-    wan.io.rxCut := False
     bridge.io.cpuToWan << wan.io.tx
-    (lan, wan)
+    lanControl.io.rx << bridge.io.lanControlToCpu
+    wanControl.io.rx << bridge.io.wanControlToCpu
+    val all = Seq(lan, wan, lanControl, wanControl)
+    for (q <- all) q.io.rxCut := False
+    for (q <- Seq(lanControl, wanControl)) q.io.tx.ready := False
+    def slaves(up: Bool): Seq[(Apb3, Bool)] = all.map(_.io.apb -> up)
+    def irqs: Bits = Vec(all.map(_.io.irq)).asBits
   }
 }
 

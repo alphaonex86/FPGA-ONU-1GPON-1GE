@@ -22,6 +22,7 @@ case class EgressWrite() extends Bundle {
 
 case class FlowDecision() extends Bundle {
   val hit = Bool()
+  val control = Bool() // a control protocol frame (FrameHeader.control)
   val job = RewriteJob() // enabled on a hit
   val vlan = VlanTreatment()
   val portId = UInt(12 bits)
@@ -53,8 +54,6 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
   table.io.write << io.flowWrite
   val table6 = FlowTable(bucketBits6, 128)
   table6.io.write << io.flowWrite6
-  val egresses = Mem(FlowEgress(), 64)
-  egresses.write(io.egressWrite.index, io.egressWrite.egress, io.egressWrite.valid)
 
   val ended = RegNext(io.input.valid && io.input.last) init (False) // the parser's header complete
   val p = parser.io.header
@@ -69,6 +68,12 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
   }
 
   val looked = Delay(ended, 5, init = False) // with the table's result
+  val egresses = Mem(FlowEgress(), 64) addTag (ReadDuringWriteFree)
+  // a CPU write waits out the clock of a read (frames are >= 64 clocks apart)
+  val egressWrite = RegNextWhen(io.egressWrite.payload, io.egressWrite.valid)
+  val egressPending = RegInit(False)
+  when(io.egressWrite.valid)(egressPending := True) elsewhen (!looked)(egressPending := False)
+  egresses.write(egressWrite.index, egressWrite.egress, egressPending && !looked)
   val (result, result6) = (table.io.result, table6.io.result)
   val found = result.valid && result.hit || result6.valid && result6.hit
   val hit = RegNextWhen(found, looked)
@@ -99,6 +104,7 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
   io.decision.valid := Delay(ended, FlowClassifier.latency - 1, init = False)
   val d = io.decision.payload
   d.hit := hit
+  d.control := h.control
   d.vlan := VlanTreatment.resolve(e.vlan, h.vlans =/= 0, h.outerPcp)
   d.portId := e.portId
   d.queue := e.queue

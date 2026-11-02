@@ -25,8 +25,9 @@ case class PonBoard() extends Component {
     val sfp, ethSfp = master(SfpPins())
     val onuPins = master(OnuPins())
     val vcxoPwm = out Bool ()
-    val oltPonIrq, oltBoardIrq, oltGemIrq, oltLanIrq, oltWanIrq = out Bool ()
-    val onuPonIrq, onuBoardIrq, onuGemIrq, onuLanIrq, onuWanIrq, ethBoardIrq, ethFrameIrq = out Bool ()
+    val oltPonIrq, oltBoardIrq, oltGemIrq = out Bool ()
+    val onuPonIrq, onuBoardIrq, onuGemIrq, ethBoardIrq, ethFrameIrq = out Bool ()
+    val oltBridgeIrq, onuBridgeIrq = out Bits (4 bits) // LAN, WAN, LAN control, WAN control frame queues
   }
   noIoPrefix()
   olt.io.axi <> io.lwOlt
@@ -37,13 +38,11 @@ case class PonBoard() extends Component {
   io.oltPonIrq := olt.io.ponIrq
   io.oltBoardIrq := olt.io.boardIrq
   io.oltGemIrq := olt.io.gemIrq
-  io.oltLanIrq := olt.io.lanIrq
-  io.oltWanIrq := olt.io.wanIrq
+  io.oltBridgeIrq := olt.io.bridgeIrq
   io.onuPonIrq := onu.io.ponIrq
   io.onuBoardIrq := onu.io.boardIrq
   io.onuGemIrq := onu.io.gemIrq
-  io.onuLanIrq := onu.io.lanIrq
-  io.onuWanIrq := onu.io.wanIrq
+  io.onuBridgeIrq := onu.io.bridgeIrq
   eth.io.axi <> io.lwEth
   io.ethSfp <> eth.io.sfp
   io.ethBoardIrq := eth.io.boardIrq
@@ -143,7 +142,11 @@ case class PonBoard() extends Component {
 }
 
 object PonBoardVerilog extends App {
-  val report = SpinalConfig(targetDirectory = "out/rtl").generateVerilog(InOutWrapper(PonBoard())) // TriState -> inout pins
+  val report = SpinalConfig(targetDirectory = "out/rtl").generateVerilog {
+    val top = InOutWrapper(PonBoard()) // TriState -> inout pins
+    vendor.Quartus.ramStyles(top)
+    top
+  }
   val sources = new java.io.PrintWriter("out/rtl/PonBoard.sources") // black box RTL, for fit.sh
   report.blackboxesSourcesPaths.foreach(sources.println)
   sources.close()

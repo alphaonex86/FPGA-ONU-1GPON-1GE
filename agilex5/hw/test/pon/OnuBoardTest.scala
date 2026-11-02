@@ -7,8 +7,8 @@ import pon.gpon.GtcDsTest.check
 
 /** OnuBoardCore management path: OnuMac registers across the clocks or an error while the ONU lane is down, laser
   * held off until both lanes are up, optics pin events, VCXO pin at the center duty; an Ethernet frame through the
-  * bridge to the MAC's upstream data stream; in flows mode a miss to the LAN frame queue, a CPU frame out of the
-  * Ethernet port. */
+  * bridge to the MAC's upstream data stream; in flows mode a miss to the LAN frame queue, an ARP to the LAN control
+  * queue, a CPU frame out of the Ethernet port. */
 object OnuBoardTest extends App {
   val SN_0 = 0x04 // OnuRegs, read-write
   val BOARD = 0x100
@@ -21,6 +21,7 @@ object OnuBoardTest extends App {
   val BRIDGE_VLAN_MAP = 0x304
   val BRIDGE_UNTAGGED = 0x308
   val LAN = 0x400 // GemCpuQueues
+  val LAN_CONTROL = 0x600
   val TX_HEAD = 0x00
   val TX_DATA = 0x04
   val RX_DESC_0 = 0x08
@@ -88,11 +89,11 @@ object OnuBoardTest extends App {
     val data = dut.pon.mac.io.dataTx(0) // no allocation yet: the packet waits at the MAC
     check(data.valid.toBoolean && data.fragment.portId.toInt == 0x200 && data.fragment.length.toInt == 104,
       s"Ethernet frame -> bridge -> ONU MAC data stream: Port-ID 0x200, 100 bytes + FCS")
-    def ethFrame(n: Int): Unit = {
+    def ethFrame(n: Int, byte: Int => Int = i => i): Unit = {
       for (i <- 0 until n) {
         waitUntil(io.ethRxClk.toBoolean); waitUntil(!io.ethRxClk.toBoolean)
         io.eth.rx.valid #= true
-        io.eth.rx.fragment #= i
+        io.eth.rx.fragment #= byte(i)
         io.eth.rx.last #= i == n - 1
       }
       waitUntil(io.ethRxClk.toBoolean); waitUntil(!io.ethRxClk.toBoolean)
@@ -103,6 +104,10 @@ object OnuBoardTest extends App {
     mgmt.waitSampling(500)
     check((read(LAN + RX_DESC_0)._1 >> 31) == 1 && (read(LAN + RX_DESC_1)._1 & 0xFFF) == 90,
       "flows mode: the missed Ethernet frame in the LAN frame queue, 90 bytes")
+    ethFrame(64, i => if (i == 12) 0x08 else if (i == 13) 0x06 else i) // ARP
+    mgmt.waitSampling(500)
+    check((read(LAN_CONTROL + RX_DESC_0)._1 >> 31) == 1 && (read(LAN_CONTROL + RX_DESC_1)._1 & 0xFFF) == 64,
+      "ARP: in the LAN control frame queue, 64 bytes")
     val sent = scala.collection.mutable.ArrayBuffer[Int]()
     fork {
       while (true) {

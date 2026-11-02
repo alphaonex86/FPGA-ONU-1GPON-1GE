@@ -40,6 +40,8 @@ object GemEthBridgeTest extends App {
   val FLOW_HIT_QUERY = 0x58
   val FLOW_HIT = 0x5C
   val FLOW_DST_1 = 0x60 // _2, _3 follow, then FLOW_SRC_1-3
+  val CONTROL_RATE = 0x78
+  val CONTROL_DROPS = 0x7C
   import FlowRewriteTest.{be, l4Sum, sum, words}
   /** An IPv4 TCP frame with valid checksums. */
   def ipFrame(macs: (Long, Long), tags: Seq[Int], session: Option[Int], src: Long, dst: Long, sport: Int, dport: Int,
@@ -295,6 +297,23 @@ object GemEthBridgeTest extends App {
     check(ethOut.drop(ethBefore2).toSeq == Seq(dsOut) && wanCpu.toSeq == Seq((0x110, dsTtl1)),
       "flows mode, PON -> Ethernet (Port-ID action 3): the hit to Ethernet, the miss to the CPU with its Port-ID")
 
+    // control frames: their own queues, rate-limited
+    val lanControl, wanControl = mutable.ArrayBuffer[(Int, Seq[Int])]()
+    collect(ponTx, io.lanControlToCpu, lanControl)
+    collect(ethTx, io.wanControlToCpu, wanControl)
+    apb.write(CONTROL_RATE, 0 | (2 << 8) | (1 << 16) | (32 << 24)) // LAN: no refill, burst 2
+    ponTx.waitSampling(70000) // a refill tick: the LAN bucket clamped to 2
+    val arps = Seq.fill(3)(be(0xFFFFFFFFFFFFL, 6) ++ be(host, 6) ++ Seq(0x08, 0x06) ++ Seq.fill(46)(rnd.nextInt(256)))
+    val lcp = be(wan, 6) ++ be(gw, 6) ++ vlan35 ++ Seq(0x88, 0x64, 0x11, 0x00, 0x12, 0x34, 0x00, 0x0A, 0xC0, 0x21) ++
+      Seq(0x09, 0x01, 0x00, 0x08) ++ Seq.fill(40)(rnd.nextInt(256)) // LCP echo request
+    arps.foreach(send(_))
+    gem(0x110, Seq(withFcs(lcp)))
+    mgmt.waitSampling(3000)
+    val controlDrops = apb.read(CONTROL_DROPS).toLong
+    check(lanControl.toSeq == arps.take(2).map((0, _)) && wanControl.toSeq == Seq((0x110, lcp)) &&
+      lanCpu.length == 1 && wanCpu.length == 1 && controlDrops == 1,
+      s"control frames (ARP, LCP) to their own queues, the LAN bucket of 2 dropping the third ARP (drops $controlDrops)")
+
     // the CPU's own frames
     def inject(cd: ClockDomain, port: Stream[Fragment[pon.gpon.GemTxByte]], portId: Int, bytes: Seq[Int]): Unit = {
       for ((b, i) <- bytes.zipWithIndex) {
@@ -329,7 +348,8 @@ object GemEthBridgeTest extends App {
     check(answers == Seq(true, false, true, false, false), s"flow hit bits: set by the traffic, cleared by a query $answers")
 
     // IPv6, routed: LAN 2001:db8:1::10 port 5000 -> 2001:4860::8888 port 443 into PPPoE session 0x1234 in VLAN 35
-    val tcp = be(5000, 2) ++ be(443, 2) ++ Seq.fill(16)(rnd.nextInt(256)) ++ payload // unchanged: no NAT
+    val tcp = be(5000, 2) ++ be(443, 2) ++ Seq.fill(9)(rnd.nextInt(256)) ++ Seq(0x10) ++ Seq.fill(6)(rnd.nextInt(256)) ++
+      payload // ACK; unchanged: no NAT
     def ip6Frame(macs: (Long, Long), tags: Seq[Int], session: Option[Int], src: BigInt, dst: BigInt, hop: Int): Seq[Int] = {
       val ip = Seq(0x60, 0, 0, 0) ++ be(tcp.length, 2) ++ Seq(6, hop) ++ (0 until 32).map(k =>
         ((if (k < 16) src else dst) >> (8 * (15 - k % 16)) & 0xFF).toInt)

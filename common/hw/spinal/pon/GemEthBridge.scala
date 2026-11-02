@@ -37,7 +37,9 @@ case class EthFrames() extends Bundle with IMasterSlave {
   * Flows (FlowClassifier, per direction): an offloadable frame whose flow hits is rewritten (MACs, PPPoE, NAPT, TTL)
   * and leaves by its egress (VLAN treatment, toward the PON its Port-ID and queue) instead of the L2 rules; a miss
   * follows them, or in flows mode (Port-ID action 3, VLAN entry flows bit) goes to the CPU: lanToCpu (frames from
-  * Ethernet), wanToCpu (from the PON, with their Port-ID). The CPU's own frames: cpuToLan before the bridged ones to
+  * Ethernet), wanToCpu (from the PON, with their Port-ID), control protocol frames (FrameHeader.control) instead to
+  * lanControlToCpu / wanControlToCpu through a token bucket each (CONTROL_RATE), so a flood of misses cannot delay
+  * them nor a control flood load the CPU. The CPU's own frames: cpuToLan before the bridged ones to
   * Ethernet, cpuToWan before them in the queue of their Port-ID. Tables written by the CPU.
   * Clocks: the Port-ID lookup and the CPU stream on ponRxCd (reset with the PON side only: the CPU keeps its GEM
   * while the Ethernet lane is down); the queues on ponQueueCd (ponRxCd's clock), ponTxCd, ethTxCd and ethRxCd, all
@@ -59,6 +61,8 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val eth = master(EthFrames()) // tx in ethTxCd, rx in ethRxCd
     val lanToCpu = master Flow (Fragment(UsGemByte())) // ponTxCd
     val wanToCpu = master Flow (Fragment(UsGemByte())) // ethTxCd
+    val lanControlToCpu = master Flow (Fragment(UsGemByte())) // ponTxCd
+    val wanControlToCpu = master Flow (Fragment(UsGemByte())) // ethTxCd
     val cpuToLan = slave Stream (Fragment(GemTxByte())) // ethTxCd: whole frames, a byte per clock once started
     val cpuToWan = slave Stream (Fragment(GemTxByte())) // ponTxCd: whole packets, a byte per clock once started
   }
@@ -183,6 +187,13 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   }.reduce((low, high) => high ## low)
   val flowDstHigh = addressHigh("FLOW_DST", "destination")
   val flowSrcHigh = addressHigh("FLOW_SRC", "source")
+  val CONTROL_RATE = busif.newReg("Control frames to the CPU: token buckets, frames per 65536 clocks of the side")
+  val controlRates = for (side <- Seq("lan", "wan")) yield {
+    val rate = CONTROL_RATE.field(UInt(8 bits), AccessType.RW, 1, s"$side rate")(SymbolName(s"${side}Rate"))
+    val burst = CONTROL_RATE.field(UInt(8 bits), AccessType.RW, 32, s"$side burst")(SymbolName(s"${side}Burst"))
+    burst ## rate
+  }
+  val CONTROL_DROPS = busif.newReg("Control frames over their rate, dropped: counts")
   /** The register's writes into the table's domain, one in flight (busy); the sending side resets with the table's
     * domain, so a domain going down does not hold the bus. */
   val busies = scala.collection.mutable.ArrayBuffer[Bool]()
@@ -252,14 +263,14 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
 
   case class EthDesc() extends Bundle {
     val bytes, portId = UInt(12 bits)
-    val good, cpu = Bool()
+    val good, cpu, control = Bool()
     val vlan = VlanTreatment()
     val job = RewriteJob()
   }
   case class PonDesc() extends Bundle {
     val bytes, portId = UInt(12 bits)
     val queue = UInt(queueBits bits)
-    val good, cpu = Bool()
+    val good, cpu, control = Bool()
     val vlan = VlanTreatment()
     val job = RewriteJob()
   }
@@ -332,6 +343,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     push.vlan := treatment
     push.portId := in.gem.portId
     push.cpu := flowsFrame
+    push.control.assignDontCare()
     push.job.assignDontCare()
     val flows = FlowClassifier(flowBucketBits, flowBucketBits6)
     flows.io.input.valid := byte || cut && open
@@ -343,6 +355,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     ethDescs.io.push.portId := later.portId
     ethDescs.io.push.good := later.good
     ethDescs.io.push.cpu := later.cpu && !decision.hit
+    ethDescs.io.push.control := decision.control
     ethDescs.io.push.vlan := decision.hit ? decision.vlan | later.vlan
     ethDescs.io.push.job := decision.job
     when(byte) {
@@ -368,6 +381,30 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     f
   }
 
+  /** CPU frames split by `control` (held over each frame): control frames through a token bucket (`config`: burst ##
+    * rate, frames per 65536 clocks), the others as they come. */
+  case class ControlSplit(frames: Flow[Fragment[UsGemByte]], isControl: Bool, config: Bits) extends Area {
+    val setting = BufferCC(config) // static
+    val (rate, burst) = (setting(7 downto 0).asUInt, setting(15 downto 8).asUInt)
+    val tokens = Reg(UInt(8 bits)) init (255) // clamped to the burst at the first refill
+    val tick = CounterFreeRun(1 << 16).willOverflow
+    val first = RegInit(True)
+    val admitted = Reg(Bool())
+    when(frames.valid)(first := frames.last)
+    val starting = frames.valid && first && isControl
+    val pass = first ? (tokens =/= 0) | admitted
+    when(starting)(admitted := tokens =/= 0)
+    val sum = tokens +^ rate
+    val refilled = tick ? ((sum > burst) ? burst | sum.resize(8)) | tokens
+    tokens := refilled - (starting && tokens =/= 0).asUInt
+    val data, control = cloneOf(frames)
+    data.valid := frames.valid && !isControl
+    control.valid := frames.valid && isControl && pass
+    data.payload := frames.payload
+    control.payload := frames.payload
+    val dropped = starting && tokens === 0
+  }
+
   val ethSender = new ClockingArea(ethTxCd) {
     val desc = ethDescs.io.pop
     val left = Reg(UInt(12 bits)) init (0)
@@ -377,10 +414,17 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val toCpu = Reg(Bool())
     val portId = Reg(UInt(12 bits))
     desc.ready := left === 0
-    when(desc.fire) { left := desc.bytes; send := desc.good; vlan := desc.vlan; job := desc.job; toCpu := desc.cpu; portId := desc.portId }
+    val control = Reg(Bool())
+    when(desc.fire) {
+      left := desc.bytes; send := desc.good; vlan := desc.vlan; job := desc.job; toCpu := desc.cpu; portId := desc.portId
+      control := desc.control
+    }
     val data = ethData.io.pop.m2sPipe()
     val payload = send && left > 4 // the FCS (last 4 bytes) is the MAC's
-    io.wanToCpu << cpuFrame(data.fire && payload && toCpu, left === 5, data.payload, portId)
+    val split = ControlSplit(cpuFrame(data.fire && payload && toCpu, left === 5, data.payload, portId), control,
+      controlRates(1))
+    io.wanToCpu << split.data
+    io.wanControlToCpu << split.control
     val flow = FlowRewrite()
     flow.io.input.valid := left =/= 0 && payload && !toCpu && data.valid
     flow.io.input.fragment := data.payload
@@ -457,6 +501,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val frameOk = !badNow && position >= 18
     push.good := frameOk && entry(12)
     push.cpu := entry(18)
+    push.control.assignDontCare()
     push.vlan := treatment
     push.job.assignDontCare()
     val flows = FlowClassifier(flowBucketBits, flowBucketBits6)
@@ -472,6 +517,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     ponDescs.io.push.payload.queue := hit ? decision.queue.resize(queueBits) | later.payload.queue
     ponDescs.io.push.good := (hit || later.cpu) ? laterOk | later.good
     ponDescs.io.push.cpu := later.cpu && !hit
+    ponDescs.io.push.control := decision.control
     ponDescs.io.push.vlan := hit ? decision.vlan | later.vlan
     ponDescs.io.push.job := decision.job
     val dropped = frameEnd && skipNow || ponDescs.io.push.valid && !ponDescs.io.push.good
@@ -495,6 +541,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     rewrite.io.treatment := head.vlan
     data.ready := left =/= 0 && (sending ? flow.io.input.ready | True)
     val cpu = cpuFrame(data.fire && head.good && head.cpu, left === 1, data.payload)
+    val cpuControl = head.control
     when(data.fire)(left := left - 1)
     val pppoe = head.job.enable ? (head.job.add ? U(8, 12 bits) | (head.job.strip ? U(4096 - 8, 12 bits) | U(0, 12 bits))) | U(0, 12 bits)
     val length = head.bytes + 4 - (head.vlan.remove ? U(4) | U(0)) + (head.vlan.add ? U(4) | U(0)) + pppoe
@@ -510,6 +557,8 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
 
   val ponSide = new ClockingArea(ponTxCd) {
     val dropped = Bool()
+    val lanCpu = Flow(Fragment(UsGemByte()))
+    val lanCpuControl = Bool()
     // the CPU's packets, each into the queue of its Port-ID, before the bridged ones
     val cpuQueues = Mem(UInt(queueBits bits), 4096) initBigInt (Seq.fill(4096)(BigInt(0)))
     cpuQueues.write(cpuQueueWrite.payload(11 downto 0).asUInt, cpuQueueWrite.payload(12 + queueBits - 1 downto 12).asUInt,
@@ -527,7 +576,8 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
       dropped := False
       val sender = Sender(ponDescs.io.pop, ponData.io.pop)
       output(0, sender.out, ponData.io.popOccupancy)
-      io.lanToCpu << sender.cpu
+      lanCpu << sender.cpu
+      lanCpuControl := sender.cpuControl
     } else {
       // each frame into its queue if it fits there (room reserved by its descriptor), else dropped
       val queues = Seq.fill(ponQueues)(new Area {
@@ -544,7 +594,8 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
       dropped := desc.fire && desc.good && !desc.cpu && !room(desc.payload.queue)
       val data = ponData.io.pop
       data.ready := left =/= 0
-      io.lanToCpu << cpuFrame(data.fire && head.good && head.cpu, left === 1, data.payload)
+      lanCpu << cpuFrame(data.fire && head.good && head.cpu, left === 1, data.payload)
+      lanCpuControl := head.control
       when(data.fire)(left := left - 1)
       for ((q, k) <- queues.zipWithIndex) {
         val mine = keep && head.queue === k
@@ -555,6 +606,9 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
         output(k, Sender(q.descs.io.pop, q.data.io.pop).out, q.data.io.occupancy)
       }
     }
+    val split = ControlSplit(lanCpu, lanCpuControl, controlRates(0))
+    io.lanToCpu << split.data
+    io.lanControlToCpu << split.control
   }
 
   connectFlows(ponToEth.flows, ponToEth = true, ponQueueCd)
@@ -577,5 +631,10 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     PulseCCByToggle(ponSide.dropped, ponTxCd, ClockDomain.current).asUInt
   DROPS.field(UInt(16 bits), AccessType.RO, 0, "PON -> Ethernet")(SymbolName("ponToEth")) := ponDrops
   DROPS.field(UInt(16 bits), AccessType.RO, 0, "Ethernet -> PON")(SymbolName("ethToPon")) := ethDrops
+  for ((split, cd, side) <- Seq((ponSide.split, ponTxCd, "lan"), (ethSender.split, ethTxCd, "wan"))) {
+    val count = Reg(UInt(16 bits)) init (0)
+    when(PulseCCByToggle(split.dropped, cd, ClockDomain.current))(count := count + 1)
+    CONTROL_DROPS.field(UInt(16 bits), AccessType.RO, 0, side)(SymbolName(side)) := count
+  }
   busif.accept(DocCHeader("bridge_regs", "BRIDGE"))
 }
