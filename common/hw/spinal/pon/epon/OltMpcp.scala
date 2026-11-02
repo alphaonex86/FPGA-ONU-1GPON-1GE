@@ -178,8 +178,14 @@ case class OltMpcp(onus: Int = 8) extends Component {
   val wanted = (next.report +^ io.config.overhead).resize(17)
   val length = (wanted < io.config.minGrant) ? io.config.minGrant | ((wanted > io.config.maxGrant) ? io.config.maxGrant | wanted.resize(16))
   val earliest = RegNext(time + io.config.lead) // half a TQ stale: within the lead
-  val from = (cursor - earliest).msb ? earliest | cursor // the OLT time a burst may arrive from
-  val gateArrival = (from - (earliest + next.rtt)).msb ? (earliest + next.rtt) | from
+  // planned from registers: a decision waits a clock after it moves the cursor or the pointer
+  val settled = RegInit(False)
+  settled := True
+  val from = RegNext((cursor - earliest).msb ? earliest | cursor) // the OLT time a burst may arrive from
+  val nextRtt = RegNext(next.rtt)
+  val nearest = RegNext(earliest + next.rtt)
+  val grant = RegNext(length)
+  val gateArrival = (from - nearest).msb ? nearest | from
   val arrivals = StreamFifo(UInt(32 bits), 16) // planned, in order (after the cursor): one per ONU, discovery windows
   arrivals.io.push.valid := False
   arrivals.io.push.payload := gateArrival
@@ -191,7 +197,8 @@ case class OltMpcp(onus: Int = 8) extends Component {
       target := OHToUInt(OHMasking.first(leaving)); pdu := Pdu.DEREGISTER; sending := True
     } elsewhen (offered.orR) {
       target := OHToUInt(OHMasking.first(offered)); pdu := Pdu.REGISTER; sending := True
-    } elsewhen (discoveryDue && roomAhead) {
+    } elsewhen (discoveryDue && roomAhead && settled) {
+      settled := False
       discoveryDue := False
       pdu := Pdu.DISCOVERY; sending := True
       arrivals.io.push.valid := True
@@ -199,16 +206,17 @@ case class OltMpcp(onus: Int = 8) extends Component {
       grantStart := from
       grantLength := io.config.discoveryLength
       cursor := from + io.config.discoveryLength + io.config.maxRtt + io.config.guard
-    } elsewhen (roomAhead) {
+    } elsewhen (roomAhead && settled) {
+      settled := False
       pointer := pointer + 1
       when(ready(pointer)) {
         target := pointer; pdu := Pdu.GATE; sending := True
         arrivals.io.push.valid := True
-        grantStart := gateArrival - next.rtt
-        grantLength := length
-        cursor := gateArrival + length + io.config.guard
+        grantStart := gateArrival - nextRtt
+        grantLength := grant
+        cursor := gateArrival + grant + io.config.guard
         next.outstanding := True
-        next.grantEnd := gateArrival + length
+        next.grantEnd := gateArrival + grant
       }
     }
   }

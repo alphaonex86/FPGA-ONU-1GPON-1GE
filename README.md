@@ -86,8 +86,8 @@ the rewrite; store-and-forward queues across the four clocks, drops counted.
 Flow offload in the bridge, each way (`FlowClassifier.scala`, mtk_ppe model):
 frame parser (0-2 VLAN tags, PPPoE session, IPv4/IPv6 TCP/UDP), flow caches
 keyed by the 5-tuple, outer VID and PPPoE session (2-way hash in block RAM,
-written by the CPU, a hit bit per flow for the driver's stats: IPv4 2K flows,
-IPv6 512, routed only, per direction), 64 egress entries (next hop and own MAC, PPPoE
+written by the CPU, a hit bit per flow for the driver's stats: IPv4 2K flows
+(1K on the board), IPv6 512, routed only, per direction), 64 egress entries (next hop and own MAC, PPPoE
 session, VLAN treatment, Port-ID and queue); a hit is rewritten on its way out
 (`FlowRewrite.scala`: MACs, PPPoE add/strip, NAPT, TTL or hop limit,
 incremental IP and TCP/UDP checksums), a miss follows the L2 rules or, in flows mode (router: per
@@ -119,7 +119,10 @@ HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`). The OLT cage lane can
 switch at run time between GPON and 1.25 Gb/s (EPON OLT or 1000BASE-X module),
 each on its own refclk, by the GTS dynamic reconfiguration controller: fit and
-timing clean (`fit.sh DIR dr_lane`), not yet in the board top.
+timing clean (`fit.sh DIR dr_lane`). In the board top the EPON OLT MAC runs on
+that profile, with the same bridge and CPU queues, its registers and the DR
+controller's on the OLT bridge slave (0x800, 0x900); the received words cross
+from each profile's rx clock; checked in simulation in both profiles.
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane
 (2x oversampled upstream), HPS lightweight bridge to the MAC and board registers
 (GTS reset/status, SFP cage pins, module I2C; `olt_board_regs.h`, `onu_board_regs.h`) and GEM CPU
@@ -130,7 +133,7 @@ detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
 optics pins with the laser held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed, flow engine included: 32.7K ALMs (69 %), 333 of 358 M20K, setup slack +0.019 ns
+HSMC card pins placed, flow engine and EPON OLT included: 36.3K ALMs (77 %), 331 of 358 M20K, setup slack +0.22 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 
 ## License

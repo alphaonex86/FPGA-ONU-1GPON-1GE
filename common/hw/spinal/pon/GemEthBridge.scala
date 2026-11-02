@@ -317,9 +317,10 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val skipNow = starting ? !room | skip
     val crcNow = Crc32.step(starting ? B(32 bits, default -> True) | crc, in.gem.data)
     val stored = starting ? U(0, 12 bits) | bytes
-    val take = byte && !skipNow && stored =/= 2047 // longer frames: bad, the rest not stored
-    ethData.io.push.valid := take
-    ethData.io.push.payload := in.gem.data
+    val roomy = RegNext(ethData.io.pushOccupancy < queueBytes - 4) init (False) // registered: a byte a clock later fits
+    val take = byte && !skipNow && stored =/= 2047 && roomy // longer frames: bad, the rest not stored
+    ethData.io.push.valid := RegNext(take) init (False) // off the FIFO's full logic (311.04 MHz)
+    ethData.io.push.payload := RegNext(in.gem.data)
     // outer tag: VID entry read at byte 15, the treatment at 17, both registered (311.04 MHz)
     val tpid = Reg(Bits(8 bits))
     val vid = Reg(Bits(4 bits))
@@ -336,10 +337,10 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val treatments = Treatments(dsTreatmentWrite)
     val treatment = RegNext(treatments.resolve(treatments.table.readSync(treatmentIndex, byte && stored === 17), tagged, pcp))
     val ends = byte && in.last && in.gem.pti(0) || cut && open
-    val badNow = (starting ? False | bad) || take && !ethData.io.push.ready || byte && !take
+    val badNow = (starting ? False | bad) || byte && !take
     push.valid := ends && !skipNow
-    push.bytes := stored + ethData.io.push.fire.asUInt
-    val long = stored >= 64 || stored === 63 && ethData.io.push.fire // bytes >= 64, off the adder
+    push.bytes := stored + take.asUInt
+    val long = stored >= 64 || stored === 63 && take // bytes >= 64, off the adder
     push.good := !badNow && !(cut && open) && crcNow === Crc32.residue && long
     push.vlan := treatment
     push.portId := in.gem.portId

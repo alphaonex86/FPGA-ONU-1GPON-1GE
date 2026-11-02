@@ -6,7 +6,9 @@ import spinal.core.sim._
 import pon.gpon.GtcDsTest.check
 
 /** OltBoardCore management path: HPS bridge -> board registers and, across to the PON clocks, the OltMac registers;
-  * an error answer while the lane is down, pins and pin events; an Ethernet frame through the bridge to the MAC. */
+  * an error answer while the lane is down, pins and pin events; an Ethernet frame through the bridge to the MAC.
+  * Then the lane in its 1.25 Gb/s profile (125 MHz): the EponOltMac registers instead of the OltMac's, an Ethernet
+  * frame to its LLID, received back through the RX clock crossing (lane looped back); the DR controller window. */
 object OltBoardTest extends App {
   val BOARD = 0x100
   val GTS_STATUS = BOARD + 4
@@ -17,21 +19,49 @@ object OltBoardTest extends App {
   val UO_0 = 0x04 // OltRegs, read-write
   val GEMQ_STATUS = 0x214
   val BRIDGE_UNTAGGED = 0x308
+  val PROFILE = BOARD + 28
+  val EPON = 0x800
+  val DR = 0x900
 
-  SimConfig.compile { val c = OltBoardCore(); c.pon.mac.io.gem.simPublic(); c }.doSim { dut =>
+  SimConfig.compile { val c = OltBoardCore(); c.pon.mac.io.gem.simPublic(); c.epon.mac.io.dataTx.simPublic(); c }.doSim { dut =>
     val io = dut.io
     val mgmt = dut.clockDomain
     mgmt.forkStimulus(10)
     io.dsClk #= false
     io.usClk #= false
-    fork { // 311.04 and 155.52 MHz, same source
+    var dsHalf = 2
+    fork { // 311.04 and 155.52 MHz (GPON) or 125 MHz (EPON), same source
       var n = 0
-      while (true) { sleep(2); io.dsClk #= !io.dsClk.toBoolean; if (n % 2 == 0) io.usClk #= !io.usClk.toBoolean; n += 1 }
+      while (true) { sleep(dsHalf); io.dsClk #= !io.dsClk.toBoolean; if (n % 2 == 0) io.usClk #= !io.usClk.toBoolean; n += 1 }
+    }
+    io.epon #= false
+    io.gponRxClk #= false
+    io.eponRxClk #= false
+    fork { sleep(1); while (true) { sleep(2); io.gponRxClk #= !io.gponRxClk.toBoolean } }
+    fork { // looped back: the lane's own word, on another phase
+      sleep(3)
+      while (true) {
+        sleep(4)
+        io.eponRxClk #= !io.eponRxClk.toBoolean
+        if (io.eponRxClk.toBoolean) io.eponRxWord #= io.txWord.toInt
+      }
+    }
+    io.gponRxWord #= 0
+    io.eponRxWord #= 0
+    var drWrites = Seq[(Int, Long)]()
+    io.dr.waitRequest #= false
+    io.dr.readDataValid #= false
+    fork { // DR controller CSRs: a read answers 0xD000 + address one clock later
+      while (true) {
+        mgmt.waitSampling()
+        io.dr.readDataValid #= io.dr.read.toBoolean
+        io.dr.readData #= 0xD000 + io.dr.address.toInt
+        if (io.dr.write.toBoolean) drWrites :+= ((io.dr.address.toInt, io.dr.writeData.toLong))
+      }
     }
     for (b <- Seq(io.lane.txResetAck, io.lane.rxResetAck, io.lane.txReady, io.lane.rxReady, io.lane.txPllLocked,
            io.lane.rxLockedToData, io.lane.rxLockedToRef, io.sfp.modAbs, io.sfp.los, io.sfp.txFault,
            io.sfp.scl.read, io.sfp.sda.read)) b #= false
-    io.rxWord #= 0
     io.refclkFail #= 0
     io.ethDown #= true
     io.eth.tx.ready #= true
@@ -54,6 +84,7 @@ object OltBoardTest extends App {
     check((read(STATUS)._1 & 8) != 0, "STATUS.alive once the lane is ready")
     check((read(GTS_STATUS)._1 & 4) != 0, "GTS_STATUS.txReady")
     check(write(UO_0, 0x12345678L) == 0 && read(UO_0) == (0x12345678L, 0), "MAC register written and read across the clocks")
+    check(read(EPON)._2 == SLVERR && read(PROFILE)._1 == 0, "GPON profile: EPON MAC registers answer an error")
     check(read(GEMQ_STATUS) == (512L, 0), "GEM queues: TX queue empty, 512 words")
     check(read(BRIDGE_UNTAGGED)._2 == SLVERR, "bridge while the Ethernet lane is down: error")
     io.ethDown #= false
@@ -98,6 +129,46 @@ object OltBoardTest extends App {
     io.lane.txReady #= false
     mgmt.waitSampling(20)
     check(read(UO_0)._2 == SLVERR && io.sfp.txDisable.toBoolean, "lane down again: error answer, laser forced off")
+
+    check(write(DR + 0x10, 0xABCL) == 0 && drWrites == Seq((0x10, 0xABCL)) && read(DR + 0x14) == (0xD014L, 0),
+      "DR controller CSRs written and read")
+    io.epon #= true // the DR switch, lane reset
+    dsHalf = 4
+    mgmt.waitSampling(20)
+    io.lane.txReady #= true
+    io.lane.rxReady #= true
+    mgmt.waitSampling(20)
+    val r = dut.epon.mac.regs
+    check(read(PROFILE)._1 == 1 && read(UO_0)._2 == SLVERR, "1.25 Gb/s profile: PROFILE.epon, OltMac registers answer an error")
+    check(write(EPON + r.MAC_LO.addr.toInt, 0x0C0D0E0FL) == 0 && read(EPON + r.MAC_LO.addr.toInt) == (0x0C0D0E0FL, 0),
+      "EPON MAC register written and read across the clocks")
+    mgmt.waitSampling(200)
+    check((read(EPON + r.STATE.addr.toInt)._1 & 1) == 1, "EPON receiver synced on the looped-back lane")
+    val epon = dut.epon.mac.io.dataTx
+    var frames = Seq[(Int, Boolean, Int)]() // LLID, broadcast mode, length
+    fork {
+      var (first, length) = (true, 0)
+      while (true) {
+        waitUntil(!io.dsClk.toBoolean); waitUntil(io.dsClk.toBoolean)
+        if (epon.valid.toBoolean && epon.ready.toBoolean) {
+          if (first) { frames :+= ((epon.fragment.llid.toInt, epon.fragment.mode.toBoolean, 0)); length = 0 }
+          length += 1
+          first = epon.last.toBoolean
+          if (first) frames = frames.init :+ frames.last.copy(_3 = length)
+        }
+      }
+    }
+    for (i <- 0 until 100) {
+      waitUntil(io.ethRxClk.toBoolean); waitUntil(!io.ethRxClk.toBoolean)
+      io.eth.rx.valid #= true
+      io.eth.rx.fragment #= (if (i == 12) 0x08 else i)
+      io.eth.rx.last #= i == 99
+    }
+    waitUntil(io.ethRxClk.toBoolean); waitUntil(!io.ethRxClk.toBoolean)
+    io.eth.rx.valid #= false
+    mgmt.waitSampling(500)
+    check(frames == Seq((0x123, false, 104)), s"Ethernet frame -> bridge -> EPON OLT MAC: LLID 0x123, 100 bytes + FCS ($frames)")
+    check(read(EPON + r.COUNTS(0).addr.toInt)._1 == 1, "the frame received back (RX_GOOD; no registered ONU: not forwarded)")
   }
   println("PASS OltBoardTest")
 }

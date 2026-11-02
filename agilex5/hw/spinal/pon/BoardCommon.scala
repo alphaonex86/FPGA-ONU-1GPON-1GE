@@ -78,11 +78,12 @@ object BoardFields {
   }
 
   /** A PON side's Ethernet bridge: the Port-ID lookup in the MAC's GEM receive domain, the queues on the same clocks
-    * reset while `down` (asynchronous: either lane not ready). */
+    * reset while `down` (asynchronous: either lane not ready); 1K IPv4 flows per direction (block RAM budget). */
   def ethBridge(ponRx: ClockDomain, ponTx: ClockDomain, ethTxClk: Bool, ethRxClk: Bool, down: Bool,
                 defaultAction: Int, ponQueues: Int = 1): GemEthBridge = {
     def domain(clk: Bool): ClockDomain = ClockDomain(clk, ClockDomain(clk)(BufferCC(down)))
-    GemEthBridge(ponRx, domain(ponRx.clock), domain(ponTx.clock), domain(ethTxClk), domain(ethRxClk), defaultAction, ponQueues)
+    GemEthBridge(ponRx, domain(ponRx.clock), domain(ponTx.clock), domain(ethTxClk), domain(ethRxClk), defaultAction, ponQueues,
+      flowBucketBits = 9)
   }
 
   /** The bridge's frame queues for the CPU (GemCpuQueues), on the bridge's clocks, reset while `down`: LAN (Ethernet
@@ -94,9 +95,9 @@ object BoardFields {
     val wan = cd(gpon.GemCpuQueues(bridge.ponTxCd, bridge.ethTxCd))
     val lanControl = cd(gpon.GemCpuQueues(bridge.ethTxCd, bridge.ponTxCd, txWords = 4, rxWords = 512))
     val wanControl = cd(gpon.GemCpuQueues(bridge.ponTxCd, bridge.ethTxCd, txWords = 4, rxWords = 512))
-    lan.io.rx << bridge.io.lanToCpu
+    lan.io.rx << bridge.ponTxCd(bridge.io.lanToCpu.stage()) // registered before the queue RAMs (311.04 MHz)
     bridge.io.cpuToLan << lan.io.tx
-    wan.io.rx << bridge.io.wanToCpu
+    wan.io.rx << bridge.ethTxCd(bridge.io.wanToCpu.stage())
     bridge.io.cpuToWan << wan.io.tx
     lanControl.io.rx << bridge.io.lanControlToCpu
     wanControl.io.rx << bridge.io.wanControlToCpu
@@ -111,7 +112,7 @@ object BoardFields {
 /** HPS lightweight bridge (AXI4, single 32-bit accesses: readl/writel) -> APB3 slaves of 256 bytes each, slave k at
   * 0x100 * k; a slave whose `up` is low, or no slave, answers an error at once, so the CPU never hangs. */
 object HpsBridge {
-  val addressWidth = 11
+  val addressWidth = 12
   def axiConfig: Axi4Config = Axi4SharedToApb3Bridge.getConfigs(addressWidth, 32, 4)._1
 
   def apply(axi: Axi4, slaves: Seq[(Apb3, Bool)]): Unit = {
@@ -147,4 +148,12 @@ case class PonDomains(dsClk: Bool, usClk: Bool, down: Bool) {
   val ds = ClockDomain(dsClk, dsReset)
   val us = ClockDomain(usClk, usReset)
   ds.setSynchronousWith(us)
+
+  /** Downstream domain: high on one downstream clock per upstream clock, to take each upstream beat once. */
+  lazy val usBeat: Bool = {
+    val toggle = us(RegInit(False))
+    toggle := !toggle
+    val seen = ds(RegNext(toggle) init (False))
+    seen =/= ds(RegNext(seen) init (False))
+  }
 }

@@ -7,8 +7,9 @@ import spinal.lib.bus.amba4.axi._
 import spinal.lib.io.InOutWrapper
 
 /** DE25-Standard + HSMC card top: OLT (SFP cage lane), ONU (BOSA lanes: data + burst enable) and Ethernet (SFP cage
-  * lane) side by side, each on its own HPS lightweight bridge slave. Every PON lane runs from the VCXO; each PON side's
+  * lane) side by side, each on its own HPS lightweight bridge slave. Every GPON lane runs from the VCXO; each PON side's
   * core clocks come from its lane's tx clock through a clock network divider (aligned 311.04 / 155.52 MHz); the
+  * OLT lane switches by DR to 1.25 Gb/s from the XO (EPON OLT, 125 MHz core clock through the same divider). The
   * Ethernet lane runs from the XO, its tx and rx clocks fed back. The default clock domain is the HPS management clock. */
 case class PonBoard() extends Component {
   val olt = OltBoardCore()
@@ -75,16 +76,70 @@ case class PonBoard() extends Component {
     ctrl.rxLockedToRef := gts.o_rx_is_lockedtoref
   }
 
-  val oltLane = vendor.GtsDuplex("olt", lockToRef = true)
+  val oltLane = vendor.GtsDrLane()
+  val drCtrl = vendor.GtsDrCtrl()
+  drCtrl.i_rst_n := !ClockDomain.current.readResetWire
+  drCtrl.i_csr_clk := ClockDomain.current.readClockWire
+  drCtrl.i_cpu_clk := ClockDomain.current.readClockWire
+  drCtrl.i_host_avmm_address := olt.io.dr.address
+  drCtrl.i_host_avmm_read := olt.io.dr.read
+  drCtrl.i_host_avmm_write := olt.io.dr.write
+  drCtrl.i_host_avmm_writedata := olt.io.dr.writeData
+  olt.io.dr.readData := drCtrl.o_host_avmm_readdata
+  olt.io.dr.readDataValid := drCtrl.o_host_avmm_readdatavalid
+  olt.io.dr.waitRequest := drCtrl.o_host_avmm_waitrequest
+  oltLane.one_hot_sel := drCtrl.o_one_hot_sel
+  oltLane.i_src_pause_request_ch0 := drCtrl.o_src_pause_request
+  drCtrl.i_src_pause_grant := oltLane.o_src_pause_grant_ch0
+  oltLane.i_dr_lavmm_clk_ch0 := ClockDomain.current.readClockWire
+  oltLane.i_dr_lavmm_addr_ch0 := drCtrl.o_ch0_lavmm_addr
+  oltLane.i_dr_lavmm_be_ch0 := drCtrl.o_ch0_lavmm_be
+  oltLane.i_dr_lavmm_read_ch0 := drCtrl.o_ch0_lavmm_read
+  oltLane.i_dr_lavmm_write_ch0 := drCtrl.o_ch0_lavmm_write
+  oltLane.i_dr_lavmm_wdata_ch0 := drCtrl.o_ch0_lavmm_wdata
+  oltLane.i_dr_lavmm_rstn_ch0 := drCtrl.o_ch0_lavmm_rstn
+  drCtrl.i_ch0_lavmm_rdata := oltLane.o_dr_lavmm_rdata_ch0
+  drCtrl.i_ch0_lavmm_rdata_valid := oltLane.o_dr_lavmm_rdata_valid_ch0
+  drCtrl.i_ch0_lavmm_waitreq := oltLane.o_dr_lavmm_waitreq_ch0
+  oltLane.i_pma_cu_clk_bank0 := srcss.o_pma_cu_clk
+  val epon = drCtrl.o_one_hot_sel(0)
+  olt.io.epon := epon
+
+  val oltClock = vendor.ClockMux()
+  oltClock.inclk0x := oltLane.gpon.o_tx_clkout
+  oltClock.inclk1x := oltLane.oneG25.o_tx_clkout
+  oltClock.clkselect := epon
   val oltClocks = vendor.PonClocks()
-  oltClocks.inclk := oltLane.o_tx_clkout
-  duplex(oltLane, olt.io.lane, io.pon_refclk, oltClocks.clock_div1x, oltClocks.clock_div1x, olt.io.txWord, olt.io.rxWord)
+  oltClocks.inclk := oltClock.outclk
   olt.io.dsClk := oltClocks.clock_div1x
   olt.io.usClk := oltClocks.clock_div2x
-  io.olt_tx_p := oltLane.o_tx_serial_data
-  io.olt_tx_n := oltLane.o_tx_serial_data_n
-  oltLane.i_rx_serial_data := io.olt_rx_p
-  oltLane.i_rx_serial_data_n := io.olt_rx_n
+  for ((p, refclk) <- Seq(oltLane.gpon -> io.pon_refclk, oltLane.oneG25 -> io.eth_refclk)) {
+    p.i_tx_pll_refclk_p := refclk
+    p.i_rx_cdr_refclk_p := refclk
+    p.i_tx_coreclkin := oltClocks.clock_div1x
+    p.i_rx_coreclkin := p.o_rx_clkout
+    p.i_tx_reset := olt.io.lane.txReset
+    p.i_rx_reset := olt.io.lane.rxReset
+    p.i_rx_set_locktoref := olt.io.lane.rxLockToRef
+  }
+  oltLane.gpon.i_tx_parallel_data := B(0, 72 bits) ## olt.io.txWord(7 downto 0)
+  oltLane.oneG25.i_tx_parallel_data := B(0, 70 bits) ## olt.io.txWord
+  olt.io.gponRxClk := oltLane.gpon.o_rx_clkout
+  olt.io.gponRxWord := oltLane.gpon.o_rx_parallel_data(7 downto 0)
+  olt.io.eponRxClk := oltLane.oneG25.o_rx_clkout
+  olt.io.eponRxWord := oltLane.oneG25.o_rx_parallel_data(9 downto 0)
+  def active(f: oltLane.Profile => Bool): Bool = epon ? f(oltLane.oneG25) | f(oltLane.gpon)
+  olt.io.lane.txResetAck := active(_.o_tx_reset_ack)
+  olt.io.lane.rxResetAck := active(_.o_rx_reset_ack)
+  olt.io.lane.txReady := active(_.o_tx_ready)
+  olt.io.lane.rxReady := active(_.o_rx_ready)
+  olt.io.lane.txPllLocked := active(_.o_tx_pll_locked)
+  olt.io.lane.rxLockedToData := active(_.o_rx_is_lockedtodata)
+  olt.io.lane.rxLockedToRef := active(_.o_rx_is_lockedtoref)
+  io.olt_tx_p := oltLane.o_tx_serial_data_p_ch0
+  io.olt_tx_n := oltLane.o_tx_serial_data_n_ch0
+  oltLane.i_rx_serial_data_p_ch0 := io.olt_rx_p
+  oltLane.i_rx_serial_data_n_ch0 := io.olt_rx_n
 
   val onuLane = vendor.GtsDuplex("onu")
   val onuClocks = vendor.PonClocks()
@@ -134,8 +189,8 @@ case class PonBoard() extends Component {
   ethLane.i_rx_serial_data := io.eth_rx_p
   ethLane.i_rx_serial_data_n := io.eth_rx_n
 
-  srcss.i_src_rs_req := ethLane.o_src_rs_req ## benLane.o_src_rs_req ## onuLane.o_src_rs_req ## oltLane.o_src_rs_req
-  oltLane.i_src_rs_grant := srcss.o_src_rs_grant(0)
+  srcss.i_src_rs_req := ethLane.o_src_rs_req ## benLane.o_src_rs_req ## onuLane.o_src_rs_req ## oltLane.o_rs_request_ch0
+  oltLane.i_rs_grant_ch0 := srcss.o_src_rs_grant(0)
   onuLane.i_src_rs_grant := srcss.o_src_rs_grant(1)
   benLane.i_src_rs_grant := srcss.o_src_rs_grant(2)
   ethLane.i_src_rs_grant := srcss.o_src_rs_grant(3)
