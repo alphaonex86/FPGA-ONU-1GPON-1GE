@@ -107,6 +107,11 @@ sync time, REPORT, deregistration) and OLT MPCP (discovery windows, LLID
 allocation, RTT per ONU, IPACT grants from the REPORTs within min/max, CPU and
 timeout deregistration), checked together over a simulated splitter with two
 ONUs at different distances: no upstream collision, data per LLID each way.
+Both MAC tops (`EponOnu.scala`, `EponOlt.scala`) run from their CPU registers
+(`epon_onu_regs.h`, `epon_olt_regs.h`: configuration, registration state and
+LLID, OLT events, frame counters, interrupts), checked through them alone;
+on the DE25-Standard FPGA at 125 MHz: ONU 1.3K ALMs (211 MHz), OLT 2.4K ALMs
+(142 MHz).
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane

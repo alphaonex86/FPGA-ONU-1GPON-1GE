@@ -12,4 +12,6 @@ object Generate extends App {
   config.generateVerilog(gpon.OltScheduler())
   config.generateVerilog(gpon.OltMac()) // + olt_regs.h
   config.generateVerilog(gpon.OnuMac()) // + onu_regs.h
+  config.generateVerilog(epon.EponOnuMac()) // + epon_onu_regs.h
+  config.generateVerilog(epon.EponOltMac()) // + epon_olt_regs.h
 }

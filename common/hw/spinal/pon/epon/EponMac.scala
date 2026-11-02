@@ -26,8 +26,9 @@ object Epon {
 
 case class EponTxByte() extends Bundle {
   val data = Bits(8 bits)
-  val mode = Bool()      // read with the first byte
+  val mode = Bool()      // mode, llid, fcs: read with the first byte
   val llid = UInt(15 bits)
+  val fcs = Bool()       // append the FCS, else the frame's last 4 bytes are its FCS
 }
 
 case class EponRxByte() extends Bundle {
@@ -36,7 +37,7 @@ case class EponRxByte() extends Bundle {
   val llid = UInt(15 bits)
 }
 
-/** EPON transmit: frames (DA to the payload end, 64 bytes or more with the FCS) get the LLID preamble and the FCS,
+/** EPON transmit: frames (DA to the payload end, 64 bytes or more with the FCS) get the LLID preamble (and the FCS),
   * /T/R/ (and /R/ so IDLE starts even), at least Epon.ipg bytes before the next /S/; IDLE between (/I1/ or /I2/ by
   * the running disparity). Once started a frame must come one byte per clock: a missing byte is sent as /V/ and
   * pulses `underrun` (the frame then fails its FCS). `start` pulses with the frame's /S/. */
@@ -96,7 +97,7 @@ case class EponMacTx() extends Component {
       io.underrun := !io.input.valid
       when(io.input.valid) {
         crc := Crc32.step(crc, io.input.fragment.data)
-        when(io.input.last) { state := FCS; index := 0 }
+        when(io.input.last) { state := header.fcs ? FCS | END; index := 0 }
       }
     }
     is(FCS) {

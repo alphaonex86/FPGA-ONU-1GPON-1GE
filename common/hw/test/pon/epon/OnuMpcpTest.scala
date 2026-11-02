@@ -102,6 +102,7 @@ object OnuMpcpTest extends App {
     def mpcp(da: BigInt, mode: Boolean, llid: Int, opcode: Int, fields: Seq[Int]): Unit = {
       io.dsFrames.fragment.mode #= mode
       io.dsFrames.fragment.llid #= llid
+      io.dsFrames.fragment.fcs #= true
       var stamp = 0L
       for (i <- 0 until 60) {
         val b = i match {
@@ -161,7 +162,7 @@ object OnuMpcpTest extends App {
     check(got.forall(u => (u.at / 2 - u.stamp - rtt).abs <= 1), "round trip constant (+-1 TQ)")
 
     // data frames: those that fit, in order
-    val frames = Seq.fill(6)(Seq.fill(100 + rnd.nextInt(100))(rnd.nextInt(256)))
+    val frames = Seq.fill(6)(EponFrames.withFcs(Seq.fill(100 + rnd.nextInt(100))(rnd.nextInt(256))))
     fork {
       for (f <- frames) {
         for ((b, i) <- f.zipWithIndex) {
@@ -179,7 +180,7 @@ object OnuMpcpTest extends App {
     got = waitUs(2500)
     val datas = got.filter(_.bytes.length > 64)
     check(got.count(_.opcode == Mpcp.report) == 2 && got.forall(_.good) && datas.length >= 3 &&
-      datas.map(_.bytes.dropRight(4)) == frames.take(datas.length), s"two grants: a REPORT each, then ${datas.length} data frames in order")
+      datas.map(_.bytes) == frames.take(datas.length), s"two grants: a REPORT each, then ${datas.length} data frames in order")
     check(bursts.takeRight(2) == Seq((start, start + 300 - laserOff), (start + 400, start + 1000 - laserOff)), "two bursts")
 
     // a late grant, a drift

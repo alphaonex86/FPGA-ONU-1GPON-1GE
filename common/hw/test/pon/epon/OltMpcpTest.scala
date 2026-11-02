@@ -132,7 +132,7 @@ object OltMpcpTest extends App {
 
     // upstream data, reported
     io.reports.foreach(_ #= 600)
-    val sent = Seq.fill(2)(Seq.fill(4)(Seq.fill(80 + rnd.nextInt(200))(rnd.nextInt(256))))
+    val sent = Seq.fill(2)(Seq.fill(4)(EponFrames.withFcs(Seq.fill(80 + rnd.nextInt(200))(rnd.nextInt(256)))))
     for (k <- 0 until 2) fork {
       for (f <- sent(k)) {
         for ((b, i) <- f.zipWithIndex) {
@@ -152,6 +152,7 @@ object OltMpcpTest extends App {
         io.dsData.valid #= true
         io.dsData.fragment.data #= b
         io.dsData.fragment.mode #= false
+        io.dsData.fragment.fcs #= true
         io.dsData.fragment.llid #= llidOf(macs(0))
         io.dsData.last #= i == f.length - 1
         cd.waitSamplingWhere(io.dsData.ready.toBoolean)
@@ -161,7 +162,7 @@ object OltMpcpTest extends App {
     cd.waitSampling(60000)
     for (k <- 0 until 2) {
       val got = usFrames.filter(_.llid == llidOf(macs(k)))
-      check(got.forall(_.good) && got.map(_.bytes.dropRight(4)) == sent(k), s"ONU $k upstream: ${got.length} frames with LLID ${llidOf(macs(k))}")
+      check(got.forall(_.good) && got.map(_.bytes) == sent(k), s"ONU $k upstream: ${got.length} frames with LLID ${llidOf(macs(k))}")
     }
     def dataOf(k: Int) = onuFrames(k).filterNot(f => f(12) == 0x88 && f(13) == 0x08).map(_.dropRight(4)).toSeq
     check(dataOf(0) == ds && dataOf(1).isEmpty, "downstream to ONU 0's LLID: only ONU 0 accepts (MPCPDUs aside)")

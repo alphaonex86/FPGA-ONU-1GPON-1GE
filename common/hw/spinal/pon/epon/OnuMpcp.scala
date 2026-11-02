@@ -26,14 +26,14 @@ case class OnuMpcpConfig() extends Bundle {
 
 case class EponUsByte() extends Bundle {
   val data = Bits(8 bits)
-  val length = UInt(11 bits) // frame bytes without the FCS, with the first byte
+  val length = UInt(11 bits) // frame bytes, FCS included (GEM convention), with the first byte
 }
 
 /** ONU MPCP, one byte per clock: local time (TQ, every 2 clocks) set by each MPCPDU's timestamp, discovery
   * (REGISTER_REQ at a random offset of the discovery window), REGISTER, REGISTER_ACK in the first grant, GATE grants
   * (a FIFO of 8; a grant already started is dropped, `late`), bursts: laser on (`burst`) from the grant start to its
   * end less laserOff, idle for laserOn + syncTime, then REGISTER_ACK, deregistration, REPORT (forced or always: one
-  * queue set, queue 0 = `report` TQ), data frames while they fit, in order. `accept`: a downstream frame is ours
+  * queue set, queue 0 = `report` TQ), data frames (FCS included) while they fit, in order. `accept`: a downstream frame is ours
   * (unicast LLID, or broadcast but not our own LLID; unregistered: broadcast). `drift`: a timestamp more than 12 TQ
   * off while registered (guardThresholdONU). */
 case class OnuMpcp() extends Component {
@@ -43,6 +43,8 @@ case class OnuMpcp() extends Component {
     val rx = slave Flow (Fragment(EponRxByte()))
     val rxGood = in Bool () // with rx.last
     val accept = out Bool () // with each rx byte
+    val dataRx = master Flow (Fragment(EponRxByte())) // accepted frames that are not MAC Control, 14 clocks later
+    val dataRxGood = out Bool ()
     val tx = master Stream (Fragment(EponTxByte()))
     val data = slave Stream (Fragment(EponUsByte()))
     val report = in UInt (16 bits)
@@ -90,6 +92,14 @@ case class OnuMpcp() extends Component {
   val offset = now - time
   io.drift := ended && state === REGISTERED && offset > 12 && offset < U(32 bits, default -> True) - 11
   when(ended) { time := now; half := False }
+
+  val passing = Reg(Bool()) init (False) // once the EtherType told
+  when(io.rx.valid && position === 13)(passing := io.accept && !(header(12) === 0x88 && rx.data === 0x08))
+  when(io.rx.valid && io.rx.last && position < 13)(passing := False)
+  val delayed = Delay(io.rx, 14, init = io.rx.getZero)
+  io.dataRx.valid := delayed.valid && passing
+  io.dataRx.payload := delayed.payload
+  io.dataRxGood := Delay(io.rxGood, 14)
 
   // grants
   case class Grant() extends Bundle {
@@ -153,14 +163,17 @@ case class OnuMpcp() extends Component {
   when(io.timedOut)(toDeregister := True)
 
   // bursts
-  object Burst extends SpinalEnum { val IDLE, WAIT, SYNC, SEND, FRAME, DATA, HOLD = newElement() }
+  object Burst extends SpinalEnum { val IDLE, OFFSET, PLAN, WAIT, SYNC, SEND, FRAME, DATA, HOLD = newElement() }
   val burst = RegInit(Burst.IDLE)
   val grant = Reg(Grant())
   val startAt, dataAt, endAt = Reg(UInt(32 bits))
   def reached(t: UInt): Bool = !(time - t).msb
   val lfsr = Reg(Bits(16 bits)) init (0xACE1)
   lfsr := (lfsr(0) ## lfsr(15 downto 1)) ^ (lfsr(0) ? B(0xB400, 16 bits) | B(0, 16 bits))
-  val head = grants.io.pop
+  val head = grants.io.pop.m2sPipe()
+  val window = Reg(UInt(16 bits)) // where a discovery REGISTER_REQ may start
+  val random = Reg(Bits(16 bits))
+  val requestOffset = Reg(UInt(16 bits)) // its start in the window
   head.ready := False
   io.late := False
   io.burst := burst === Burst.SYNC || burst === Burst.SEND || burst === Burst.FRAME || burst === Burst.DATA ||
@@ -171,7 +184,8 @@ case class OnuMpcp() extends Component {
   val pduIndex = Reg(UInt(6 bits))
   val stampOut = Reg(UInt(32 bits))
   val reportValue = Reg(UInt(16 bits))
-  def left: UInt = endAt - time
+  val timeNext = ended ? now | time + half.asUInt
+  val left = RegNext(endAt - timeNext) // endAt - time: endAt set in PLAN, at least two clocks before a fit
   def fits(tq: UInt): Bool = !left.msb && left >= tq
   val sync = (grant.discovery ? discoverySync | syncTime)
   val pduCost = U(cost(pduBytes), 8 bits)
@@ -180,18 +194,25 @@ case class OnuMpcp() extends Component {
       when(head.valid) {
         head.ready := True
         grant := head.payload
-        val window = (head.length.resize(17) - io.config.laserOn - io.config.laserOff - discoverySync - pduCost).asSInt
-        val random = lfsr ^ io.config.mac(15 downto 0) ^ io.config.mac(31 downto 16) ^ io.config.mac(47 downto 32)
-        val offset = (window.msb ? U(0, 17 bits) | window.asUInt) * random.asUInt >> 16
-        val start = head.start + (head.discovery ? offset.resize(32) | U(0, 32 bits))
-        startAt := start
-        dataAt := start + io.config.laserOn + (head.discovery ? discoverySync | syncTime)
-        endAt := head.discovery ? (start + io.config.laserOn + discoverySync + pduCost) |
-          (head.start + head.length - io.config.laserOff)
-        reported := False
-        requested := False
-        when(reached(head.start)) { io.late := True } otherwise (burst := Burst.WAIT)
+        val room = (head.length.resize(17) - io.config.laserOn - io.config.laserOff - discoverySync - pduCost).asSInt
+        window := (room.msb || !head.discovery) ? U(0, 16 bits) | room.asUInt.resize(16)
+        random := lfsr ^ io.config.mac(15 downto 0) ^ io.config.mac(31 downto 16) ^ io.config.mac(47 downto 32)
+        burst := Burst.OFFSET
       }
+    }
+    is(Burst.OFFSET) {
+      requestOffset := (window * random.asUInt >> 16).resize(16)
+      burst := Burst.PLAN
+    }
+    is(Burst.PLAN) {
+      val start = grant.start + requestOffset
+      startAt := start
+      dataAt := start + io.config.laserOn + (grant.discovery ? discoverySync | syncTime)
+      endAt := grant.discovery ? (start + io.config.laserOn + discoverySync + pduCost) |
+        (grant.start + grant.length - io.config.laserOff)
+      reported := False
+      requested := False
+      when(reached(grant.start)) { io.late := True; burst := Burst.IDLE } otherwise (burst := Burst.WAIT)
     }
     is(Burst.WAIT)(when(reached(startAt))(burst := Burst.SYNC))
     is(Burst.SYNC)(when(reached(dataAt))(burst := Burst.SEND))
@@ -209,7 +230,7 @@ case class OnuMpcp() extends Component {
           pdu := Pdu.REPORT; reported := True; reportValue := io.report; burst := Burst.FRAME
         }
       }
-      val dataCost = ((io.data.length.resize(12) + U(8 + 4 + Epon.ipg + 3, 12 bits)) >> 1).resize(32)
+      val dataCost = ((io.data.length.resize(12) + U(8 + Epon.ipg + 3, 12 bits)) >> 1).resize(32)
       when(!grant.discovery && state === REGISTERED && io.data.valid && fits(dataCost) && !needAck && !needDeregister &&
         (reported || !(grant.force || io.config.alwaysReport)))(burst := Burst.DATA)
     }
@@ -252,6 +273,7 @@ case class OnuMpcp() extends Component {
   io.tx.last := sendingData ? io.data.last | pduIndex === pduBytes - 1
   io.tx.fragment.data := sendingData ? io.data.fragment.data | pduBytesOut(pduIndex)
   io.tx.fragment.mode := False
+  io.tx.fragment.fcs := !sendingData
   io.tx.fragment.llid := llid
   io.data.ready := sendingData && io.tx.ready
 

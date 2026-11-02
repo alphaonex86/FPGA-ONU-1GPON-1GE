@@ -8,6 +8,10 @@ import scala.collection.mutable
 import pon.Crc32
 import pon.gpon.GtcDsTest.check
 
+object EponFrames {
+  def withFcs(bytes: Seq[Int]): Seq[Int] = bytes ++ (0 until 4).map(k => ((Crc32.model(bytes) >> (8 * k)) & 0xFF).toInt)
+}
+
 /** EponMacTx -> line (slipped by `slip` bits, code groups XORed with `corrupt`) -> EponMacRx. */
 case class EponLoop() extends Component {
   val io = new Bundle {
@@ -32,8 +36,8 @@ case class EponLoop() extends Component {
 }
 
 /** EponMacTx and EponMacRx back to back at every bit slip: frames of random length, LLID and mode received whole with
-  * their FCS and `good`; the preamble on the line as the CRC-8 model; IPG; a byte missing in a frame (/V/) and a
-  * corrupted code group fail the frame, a corrupted preamble drops it. */
+  * their FCS and `good`; the preamble on the line as the CRC-8 model; IPG; a frame with its own FCS sent as is; a byte
+  * missing in a frame (/V/) and a corrupted code group fail the frame, a corrupted preamble drops it. */
 object EponMacTest extends App {
   val rnd = new scala.util.Random(8)
   SimConfig.compile(EponLoop()).doSim { dut =>
@@ -68,9 +72,10 @@ object EponMacTest extends App {
       if (io.start.toBoolean) { gaps += cycle - lastEnd - 5; preambles += mutable.ArrayBuffer[Int](); preambleLeft = 7 }
       if (io.input.valid.toBoolean && io.input.ready.toBoolean && io.input.last.toBoolean) lastEnd = cycle
     }
-    def send(f: Frame, holeAt: Int = -1): Unit = {
+    def send(f: Frame, holeAt: Int = -1, fcs: Boolean = true): Unit = {
       io.input.fragment.mode #= f.mode
       io.input.fragment.llid #= f.llid
+      io.input.fragment.fcs #= fcs
       for ((b, i) <- f.bytes.zipWithIndex) {
         if (i == holeAt) { io.input.valid #= false; cd.waitSampling() }
         io.input.valid #= true
@@ -81,7 +86,7 @@ object EponMacTest extends App {
       io.input.valid #= false
     }
     def frame() = Frame(Seq.fill(60 + rnd.nextInt(200))(rnd.nextInt(256)), rnd.nextBoolean(), rnd.nextInt(1 << 15))
-    def withFcs(f: Frame) = f.copy(bytes = f.bytes ++ (0 until 4).map(k => ((Crc32.model(f.bytes) >> (8 * k)) & 0xFF).toInt))
+    def withFcs(f: Frame) = f.copy(bytes = EponFrames.withFcs(f.bytes))
     def expectedPreamble(f: Frame) = {
       val covered = Seq(0xD5, 0x55, 0x55, (if (f.mode) 0x80 else 0) | f.llid >> 8, f.llid & 0xFF)
       0x55 +: covered :+ Epon.crc8Model(covered) // after /S/
@@ -105,6 +110,11 @@ object EponMacTest extends App {
     check(gaps.drop(1).forall(_ >= Epon.ipg), s"IPG >= ${Epon.ipg} bytes (min ${gaps.drop(1).min})")
 
     var before = received.length
+    val own = withFcs(frame())
+    send(own, fcs = false)
+    cd.waitSampling(40)
+    check(received.drop(before).toSeq == Seq((own, true)), "a frame with its FCS, fcs low: sent as is, good")
+    before = received.length
     send(frame(), holeAt = 30)
     cd.waitSampling(40)
     check(underruns == 1 && received.length == before + 1 && !received.last._2, "a missing byte: /V/, underrun, frame not good")

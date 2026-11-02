@@ -174,7 +174,7 @@ case class OltMpcp(onus: Int = 8) extends Component {
   val next = entries(pointer)
   val wanted = (next.report +^ io.config.overhead).resize(17)
   val length = (wanted < io.config.minGrant) ? io.config.minGrant | ((wanted > io.config.maxGrant) ? io.config.maxGrant | wanted.resize(16))
-  val earliest = time + io.config.lead
+  val earliest = RegNext(time + io.config.lead) // half a TQ stale: within the lead
   val from = (cursor - earliest).msb ? earliest | cursor // the OLT time a burst may arrive from
   val inData = RegInit(False)
   val dataFrame = Bool() // the frame on io.tx is a data frame
@@ -257,6 +257,7 @@ case class OltMpcp(onus: Int = 8) extends Component {
   io.tx.last := dataFrame ? io.data.last | pduIndex === pduBytes - 1
   io.tx.fragment.data := dataFrame ? io.data.fragment.data | pduBytesOut(pduIndex)
   io.tx.fragment.mode := dataFrame ? io.data.fragment.mode | !unicast
+  io.tx.fragment.fcs := dataFrame ? io.data.fragment.fcs | True
   io.tx.fragment.llid := dataFrame ? io.data.fragment.llid | (unicast ? (io.config.llidBase + target) | U(Epon.broadcastLlid, 15 bits))
   io.data.ready := dataFrame && io.tx.ready
   when(io.tx.fire && !dataFrame) {
