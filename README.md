@@ -92,7 +92,9 @@ session, VLAN treatment, Port-ID and queue); a hit is rewritten on its way out
 (`FlowRewrite.scala`: MACs, PPPoE add/strip, NAPT, TTL or hop limit,
 incremental IP and TCP/UDP checksums), a miss follows the L2 rules or, in flows mode (router: per
 Port-ID or VLAN entry), goes to the CPU; on each board side the bridge's LAN and
-WAN frame queues carry the misses to the CPU and the CPU's own frames out. On the board the Ethernet port goes to the CPU queues or to the
+WAN frame queues carry the misses to the CPU and the CPU's own frames out; control frames (ARP, PPPoE
+discovery and LCP, DHCP, ICMPv6, IGMP, EAPOL, LLDP, slow protocols) get their own queues and interrupts
+behind a token bucket per side, so a miss flood cannot delay them. On the board the Ethernet port goes to the CPU queues or to the
 OLT or the ONU bridge (`eth_board_regs.h` BRIDGE); a frame from the lane reaches
 the OLT MAC's downstream GEM, or the ONU MAC's upstream data stream, in
 simulation; in the closed OLT <-> ONU loop, Ethernet frames cross both bridges
