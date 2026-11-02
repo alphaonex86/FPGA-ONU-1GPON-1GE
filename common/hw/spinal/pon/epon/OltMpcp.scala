@@ -14,6 +14,7 @@ case class OltMpcpConfig() extends Bundle {
   val guard = UInt(8 bits)        // TQ between bursts
   val overhead, minGrant, maxGrant = UInt(16 bits) // TQ: added to a REPORT; the grant's bounds
   val timeout = UInt(16 bits)     // no MPCPDU from a registered ONU for this many 1024 TQ: deregistered, 0: never
+  val rxResetLead, rxResetWidth = UInt(8 bits) // TQ: the optics' receiver reset ends lead before a burst, 0 width: off
 }
 
 object OltMpcpEvent extends SpinalEnum { val REGISTERED, DEREGISTERED, DRIFT, FULL = newElement() }
@@ -29,7 +30,8 @@ case class OltMpcpEventData(onus: Int) extends Bundle {
   * re-registering MAC keeps its entry), round trip of every MPCPDU (rx time of the first byte - timestamp; a change
   * past 8 TQ: DRIFT), one grant at a time per ONU (IPACT): length = its last REPORT (sum of the first queue set) +
   * overhead within [minGrant, maxGrant], force report set, bursts back to back with `guard`, planned at most `horizon`
-  * ahead; deregistration by the CPU (`deregister`), by the ONU (REGISTER_REQ deregister) or by `timeout`.
+  * ahead; deregistration by the CPU (`deregister`), by the ONU (REGISTER_REQ deregister) or by `timeout`. `rxReset`:
+  * the burst-mode receiver reset of the optics, before each planned burst and each discovery window.
   * Downstream: its MPCPDUs between the data frames (`data`, LLID and mode with the first byte); upstream: non-MPCP
   * frames of registered ONUs on `dataRx` (14 clocks later). */
 case class OltMpcp(onus: Int = 8) extends Component {
@@ -46,6 +48,7 @@ case class OltMpcp(onus: Int = 8) extends Component {
     val events = master Flow (OltMpcpEventData(onus))
     val registered = out Bits (onus bits)
     val time = out UInt (32 bits)
+    val rxReset, resetLost = out Bool ()
   }
   val indexBits = log2Up(onus)
   val time = Reg(UInt(32 bits)) init (0)
@@ -176,6 +179,10 @@ case class OltMpcp(onus: Int = 8) extends Component {
   val length = (wanted < io.config.minGrant) ? io.config.minGrant | ((wanted > io.config.maxGrant) ? io.config.maxGrant | wanted.resize(16))
   val earliest = RegNext(time + io.config.lead) // half a TQ stale: within the lead
   val from = (cursor - earliest).msb ? earliest | cursor // the OLT time a burst may arrive from
+  val gateArrival = (from - (earliest + next.rtt)).msb ? (earliest + next.rtt) | from
+  val arrivals = StreamFifo(UInt(32 bits), 16) // planned, in order (after the cursor): one per ONU, discovery windows
+  arrivals.io.push.valid := False
+  arrivals.io.push.payload := gateArrival
   val inData = RegInit(False)
   val dataFrame = Bool() // the frame on io.tx is a data frame
   val sent = io.tx.fire && io.tx.last && !dataFrame
@@ -187,6 +194,8 @@ case class OltMpcp(onus: Int = 8) extends Component {
     } elsewhen (discoveryDue && roomAhead) {
       discoveryDue := False
       pdu := Pdu.DISCOVERY; sending := True
+      arrivals.io.push.valid := True
+      arrivals.io.push.payload := from
       grantStart := from
       grantLength := io.config.discoveryLength
       cursor := from + io.config.discoveryLength + io.config.maxRtt + io.config.guard
@@ -194,15 +203,21 @@ case class OltMpcp(onus: Int = 8) extends Component {
       pointer := pointer + 1
       when(ready(pointer)) {
         target := pointer; pdu := Pdu.GATE; sending := True
-        val arrival = (from - (earliest + next.rtt)).msb ? (earliest + next.rtt) | from
-        grantStart := arrival - next.rtt
+        arrivals.io.push.valid := True
+        grantStart := gateArrival - next.rtt
         grantLength := length
-        cursor := arrival + length + io.config.guard
+        cursor := gateArrival + length + io.config.guard
         next.outstanding := True
-        next.grantEnd := arrival + length
+        next.grantEnd := gateArrival + length
       }
     }
   }
+  io.resetLost := arrivals.io.push.valid && !arrivals.io.push.ready
+  val coming = arrivals.io.pop
+  val resetEnd = coming.payload - io.config.rxResetLead
+  val resetBegin = resetEnd - io.config.rxResetWidth
+  coming.ready := reached(coming.payload)
+  io.rxReset := RegNext(coming.valid && reached(resetBegin) && !reached(resetEnd) && io.config.rxResetWidth =/= 0) init (False)
   val chosen = entries(target)
   val left = Reg(Flow(OltMpcpEventData(onus))) // DEREGISTERED, out when no upstream event takes the clock
   left.valid init (False)

@@ -18,7 +18,7 @@ case class EponOltRegs(onus: Int) extends Component {
     val synced = in Bool ()
     val registered = in Bits (onus bits)
     val time = in UInt (32 bits)
-    val underrun = in Bool ()
+    val underrun, resetLost = in Bool ()
     val counts = in Vec (UInt(32 bits), 3) // upstream frames good, bad, bad preambles
     val irq = out Bool ()
   }
@@ -50,6 +50,9 @@ case class EponOltRegs(onus: Int) extends Component {
   io.config.guard := field(OVERHEAD, 8, "guard", "between bursts, TQ")
   val TIMEOUT = busif.newReg("A registered ONU without MPCPDU for this many 1024 TQ is deregistered, 0 never")
   io.config.timeout := field(TIMEOUT, 16, "units", "1024 TQ")
+  val RX_RESET = busif.newReg("Burst-mode receiver reset of the OLT optics, before each burst and discovery window")
+  io.config.rxResetLead := field(RX_RESET, 8, "lead", "it ends this many TQ before the burst")
+  io.config.rxResetWidth := field(RX_RESET, 8, "width", "TQ, 0 off")
 
   val DEREGISTER = busif.newReg("Deregister an ONU entry on write")
   io.deregister.valid := RegNext(DEREGISTER.hitDoWrite) init (False)
@@ -89,7 +92,8 @@ case class EponOltRegs(onus: Int) extends Component {
   val clearErrors = ERRORS.hitDoWrite ? busif.writeData | B(0, 32 bits)
   val errorBits = for (((name, hit, doc), k) <- Seq(
     ("eventLost", events.io.push.valid && !events.io.push.ready, "event dropped"),
-    ("underrun", io.underrun, "a downstream data frame paused within itself: sent broken")).zipWithIndex) yield {
+    ("underrun", io.underrun, "a downstream data frame paused within itself: sent broken"),
+    ("resetLost", io.resetLost, "more than 16 bursts planned: a receiver reset skipped")).zipWithIndex) yield {
     val bit = sticky(hit, clearErrors(k))
     ERRORS.field(Bool(), AccessType.RO, 0, s"$name: $doc")(SymbolName(name)) := bit
     bit
@@ -121,6 +125,7 @@ case class EponOltMac(onus: Int = 8) extends Component {
     val dataTx = slave Stream (Fragment(EponTxByte()))
     val dataRx = master Flow (Fragment(EponRxByte()))
     val dataRxGood = out Bool ()
+    val rxReset = out Bool () // to the OLT optics' burst reset pin
     val irq = out Bool ()
   }
   val mpcp = OltMpcp(onus)
@@ -145,6 +150,8 @@ case class EponOltMac(onus: Int = 8) extends Component {
   regs.io.registered := mpcp.io.registered
   regs.io.time := mpcp.io.time
   regs.io.underrun := tx.io.underrun
+  regs.io.resetLost := mpcp.io.resetLost
+  io.rxReset := mpcp.io.rxReset
   val ended = rx.io.frame.valid && rx.io.frame.last
   def counter(hit: Bool): UInt = { val c = Reg(UInt(32 bits)) init (0); when(hit)(c := c + 1); c }
   regs.io.counts := Vec(counter(ended && rx.io.good), counter(ended && !rx.io.good), counter(rx.io.badPreamble))

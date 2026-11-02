@@ -105,17 +105,21 @@ ONU MPCP (discovery with a random offset in the window, REGISTER_REQ/ACK,
 timestamp sync and drift, GATE grants timed to the TQ with laser on/off and
 sync time, REPORT, deregistration) and OLT MPCP (discovery windows, LLID
 allocation, RTT per ONU, IPACT grants from the REPORTs within min/max, CPU and
-timeout deregistration), checked together over a simulated splitter with two
+timeout deregistration, the optics' receiver reset before each burst), checked
+together over a simulated splitter with two
 ONUs at different distances: no upstream collision, data per LLID each way.
 Both MAC tops (`EponOnu.scala`, `EponOlt.scala`) run from their CPU registers
 (`epon_onu_regs.h`, `epon_olt_regs.h`: configuration, registration state and
 LLID, OLT events, frame counters, interrupts), checked through them alone;
-on the DE25-Standard FPGA at 125 MHz: ONU 1.3K ALMs (211 MHz), OLT 2.4K ALMs
-(142 MHz). With the same Ethernet bridges as GPON (`EponGem.scala`: the LLID is
+on the DE25-Standard FPGA at 125 MHz: ONU 1.3K ALMs (211 MHz), OLT 2.5K ALMs
+(141 MHz). With the same Ethernet bridges as GPON (`EponGem.scala`: the LLID is
 the Port-ID, Port-ID 0xFFF the broadcast LLID; the ONU's REPORT from its queues),
 Ethernet frames cross OLT port -> ONU port and back in simulation.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
-line rates from their refclk pins (`agilex5/gts/fit.sh`).
+line rates from their refclk pins (`agilex5/gts/fit.sh`). The OLT cage lane can
+switch at run time between GPON and 1.25 Gb/s (EPON OLT or 1000BASE-X module),
+each on its own refclk, by the GTS dynamic reconfiguration controller: fit and
+timing clean (`fit.sh DIR dr_lane`), not yet in the board top.
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane
 (2x oversampled upstream), HPS lightweight bridge to the MAC and board registers
 (GTS reset/status, SFP cage pins, module I2C; `olt_board_regs.h`, `onu_board_regs.h`) and GEM CPU

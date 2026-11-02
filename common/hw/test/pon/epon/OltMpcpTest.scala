@@ -25,7 +25,7 @@ case class EponPon(fibres: Seq[(Int, Int)]) extends Component {
     val dark = in Bits (n bits)
     val onuRegistered, bursts = out Bits (n bits)
     val onuRx = Vec(master(Flow(Fragment(EponRxByte()))), n) // the frames each ONU accepts
-    val collision = out Bool ()
+    val collision, light, rxReset = out Bool ()
   }
   val olt = OltMpcp()
   olt.io.config := io.olt
@@ -59,6 +59,8 @@ case class EponPon(fibres: Seq[(Int, Int)]) extends Component {
     io.bursts(k) := mpcp.io.burst
   }
   io.collision := CountOne(lit) > 1
+  io.light := lit.orR
+  io.rxReset := olt.io.rxReset
   val oltRx = EponMacRx()
   oltRx.io.raw := (0 until n).foldRight(B(0, 10 bits))((k, rest) => lit(k) ? codes(k) | rest)
   olt.io.rx << oltRx.io.frame
@@ -68,7 +70,8 @@ case class EponPon(fibres: Seq[(Int, Int)]) extends Component {
 /** OltMpcp with two ONUs at different distances: both registered through the discovery windows (LLIDs from the base,
   * REGISTERED events), no upstream collision once registered, upstream data of each ONU with its LLID, downstream
   * data to one LLID accepted only by its ONU, grants from the REPORTs (one at maxGrant, the other at minGrant),
-  * deregistration by the CPU then registration again, by the ONU (enable low) and by the timeout (fibre cut). */
+  * the optics' receiver reset ending `lead` before each burst, never in one; deregistration by the CPU then
+  * registration again, by the ONU (enable low) and by the timeout (fibre cut). */
 object OltMpcpTest extends App {
   val rnd = new scala.util.Random(10)
   val macs = Seq(BigInt("001122334401", 16), BigInt("001122334402", 16))
@@ -82,6 +85,8 @@ object OltMpcpTest extends App {
     o.discoveryLength #= 600; o.maxRtt #= 700; o.syncTime #= sync; o.lead #= 1300; o.horizon #= 4000; o.guard #= 8
     o.overhead #= laserOn + sync + laserOff + Mpcp.cost(Mpcp.pduBytes); o.minGrant #= 160; o.maxGrant #= 1500
     o.timeout #= 0
+    val (resetLead, resetWidth) = (4, 8)
+    o.rxResetLead #= resetLead; o.rxResetWidth #= resetWidth
     for ((c, k) <- io.onus.zipWithIndex) {
       c.enable #= true; c.mac #= macs(k); c.laserOn #= laserOn; c.laserOff #= laserOff; c.alwaysReport #= true; c.timeout #= 0
     }
@@ -97,6 +102,9 @@ object OltMpcpTest extends App {
     val cur = mutable.ArrayBuffer[Int]()
     val onuCur = Seq.fill(2)(mutable.ArrayBuffer[Int]())
     var collisions = 0
+    var (cycle, resetFell, lightWas, resetWas) = (0L, -1L, false, false)
+    val leads = mutable.ArrayBuffer[Long]() // clocks from a reset's end to the next light
+    var resetInLight = 0
     val burstLengths = Seq.fill(2)(mutable.ArrayBuffer[Int]())
     val burstOn = Array(0, 0)
     cd.onSamplings {
@@ -116,6 +124,12 @@ object OltMpcpTest extends App {
         else if (burstOn(k) > 0) { burstLengths(k) += burstOn(k) / 2; burstOn(k) = 0 }
       }
       if (io.collision.toBoolean) collisions += 1
+      cycle += 1
+      val (light, reset) = (io.light.toBoolean, io.rxReset.toBoolean)
+      if (resetWas && !reset) resetFell = cycle
+      if (light && !lightWas && resetFell >= 0) { leads += cycle - resetFell; resetFell = -1 }
+      if (light && reset) resetInLight += 1
+      lightWas = light; resetWas = reset
     }
     def registered = (0 until 2).map(k => ((io.registered.toInt >> k) & 1) == 1 && ((io.onuRegistered.toInt >> k) & 1) == 1)
     def waitFor(what: String, limit: Int)(cond: => Boolean): Unit = {
@@ -129,6 +143,7 @@ object OltMpcpTest extends App {
       s"REGISTERED events for both MACs: ${reg.map(e => (e._2, e._3.toString(16)))}")
     val llidOf = reg.map(e => e._3 -> (0x10 + e._2)).toMap
     collisions = 0
+    leads.clear(); resetInLight = 0 // the discovery windows: one reset each, REGISTER_REQs at random in them
 
     // upstream data, reported
     io.reports.foreach(_ #= 600)
@@ -167,6 +182,9 @@ object OltMpcpTest extends App {
     def dataOf(k: Int) = onuFrames(k).filterNot(f => f(12) == 0x88 && f(13) == 0x08).map(_.dropRight(4)).toSeq
     check(dataOf(0) == ds && dataOf(1).isEmpty, "downstream to ONU 0's LLID: only ONU 0 accepts (MPCPDUs aside)")
     check(collisions == 0, "no upstream collision once registered")
+    check(leads.length > 10 && leads.distinct.length == 1 && leads.head > 0 && leads.head <= 2 * resetLead && resetInLight == 0,
+      s"receiver reset before each of ${leads.length} bursts, ${leads.head} clocks before the light (lead $resetLead TQ " +
+        "less the receive latency in the RTT), never in one")
 
     // grants from the REPORTs
     io.reports(0) #= 0x0800
