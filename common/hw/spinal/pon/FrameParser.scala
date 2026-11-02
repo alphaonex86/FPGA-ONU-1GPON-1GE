@@ -9,15 +9,18 @@ case class FrameHeader() extends Bundle {
   val da = Bits(48 bits)
   val vlans = UInt(2 bits)
   val outerVid, innerVid = UInt(12 bits)
+  val outerPcp = Bits(3 bits)
   val pppoe = Bool()   // PPPoE session data (0x8864, code 0)
   val session = UInt(16 bits)
   val ipv4, ipv6 = Bool()
   val l3Offset = UInt(6 bits) // the IP header's first byte
+  val totalLength = UInt(16 bits)
   val ttl, proto = UInt(8 bits)
+  val ipChecksum, l4Checksum = Bits(16 bits)
   val src, dst = Bits(32 bits)
   val sport, dport = UInt(16 bits)
   val tcpFlags = Bits(8 bits)
-  val offloadable = Bool() // IPv4 TCP/UDP without options or fragmentation, its ports read, TCP without SYN/FIN/RST
+  val offloadable = Bool() // IPv4 TCP/UDP without options or fragmentation, its L4 header read, TCP without SYN/FIN/RST
 }
 
 object ParserState extends SpinalEnum { val MAC, TYPE, VLAN, PPPOE, IPV4, IPV6, L4, DONE = newElement() }
@@ -36,7 +39,7 @@ case class FrameParser() extends Component {
   val index = Reg(UInt(6 bits)) init (0) // byte within the current header
   val position = Reg(UInt(6 bits)) init (0) // of the current byte in the frame, up to 63
   val prev = Reg(Bits(8 bits))
-  val l4Done = Reg(Bool()) // UDP ports, or TCP up to its flags
+  val l4Done = Reg(Bool()) // the UDP or TCP header up to its checksum
   val udp = h.proto === 17
   val b = io.input.fragment
   val word = prev ## b // the 16-bit field ending at this byte
@@ -65,7 +68,8 @@ case class FrameParser() extends Component {
       }
       is(VLAN) {
         when(index === 1) { // the TCI; its EtherType follows
-          when(h.vlans === 0)(h.outerVid := word(11 downto 0).asUInt) otherwise (h.innerVid := word(11 downto 0).asUInt)
+          when(h.vlans === 0) { h.outerVid := word(11 downto 0).asUInt; h.outerPcp := word(15 downto 13) }
+          when(h.vlans =/= 0)(h.innerVid := word(11 downto 0).asUInt)
           h.vlans := h.vlans + 1
           next(TYPE)
         }
@@ -83,7 +87,9 @@ case class FrameParser() extends Component {
       is(IPV4) {
         when(index === 0) { h.l3Offset := position; when(b =/= 0x45)(next(DONE)) } // options: not offloaded
         when(index === 0 && b === 0x45)(h.ipv4 := True)
+        when(index === 3)(h.totalLength := word.asUInt)
         when(index === 7 && (word & 0x3FFF) =/= 0)(h.ipv4 := False) // a fragment
+        when(index === 11)(h.ipChecksum := word)
         when(index === 8)(h.ttl := b.asUInt)
         when(index === 9)(h.proto := b.asUInt)
         when(index >= 12 && index < 16)(h.src := h.src(23 downto 0) ## b)
@@ -97,8 +103,10 @@ case class FrameParser() extends Component {
       }
       is(L4) {
         when(index === 1)(h.sport := word.asUInt)
-        when(index === 3) { h.dport := word.asUInt; when(udp) { l4Done := True; next(DONE) } }
-        when(index === 13) { h.tcpFlags := b; l4Done := True; next(DONE) }
+        when(index === 3)(h.dport := word.asUInt)
+        when(index === 7 && udp) { h.l4Checksum := word; l4Done := True; next(DONE) }
+        when(index === 13)(h.tcpFlags := b)
+        when(index === 17) { h.l4Checksum := word; l4Done := True; next(DONE) }
       }
       is(DONE) {}
     }

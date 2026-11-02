@@ -11,7 +11,8 @@ import pon.gpon.GtcDsTest.check
 /** GemEthBridge, four clocks: PON -> Ethernet by Port-ID action (fragmented frames, bad FCS, CPU, unknown port, cut),
   * Ethernet -> PON by VLAN ID (802.1Q, 802.1ad, untagged, unmapped, bad frame) and PCP mapper, FCS checked, stripped,
   * appended; two queues by Port-ID, a full one dropping while the other flows; VLAN treatments each way (translate,
-  * pop, S-tag push); table writes back to back across the clocks. */
+  * pop, S-tag push); table writes back to back across the clocks; offloaded flows each way (NAPT, PPPoE added and
+  * stripped, VLAN pushed and popped, own Port-ID and queue), a port or a TTL of 1 missing them. */
 object GemEthBridgeTest extends App {
   val PORT_ACTION = 0x00
   val VLAN_MAP = 0x04
@@ -22,6 +23,34 @@ object GemEthBridgeTest extends App {
   val US_TREATMENT = 0x18
   val DS_VLAN = 0x1C
   val DS_TREATMENT = 0x20
+  val FLOW_PORTS = 0x24
+  val FLOW_DST = 0x28
+  val FLOW_SRC = 0x2C
+  val FLOW_L2 = 0x30
+  val FLOW_NAT_IP = 0x34
+  val FLOW_NAT = 0x38
+  val FLOW_WRITE = 0x3C
+  val EGRESS_DA = 0x40
+  val EGRESS_MAC_HI = 0x44
+  val EGRESS_SA = 0x48
+  val EGRESS_VLAN = 0x4C
+  val EGRESS_PORT = 0x50
+  val EGRESS_WRITE = 0x54
+  import FlowRewriteTest.{be, l4Sum, sum, words}
+  /** An IPv4 TCP frame with valid checksums. */
+  def ipFrame(macs: (Long, Long), tags: Seq[Int], session: Option[Int], src: Long, dst: Long, sport: Int, dport: Int,
+              ttl: Int, payload: Seq[Int]): Seq[Int] = {
+    val tcpRaw = be(sport, 2) ++ be(dport, 2) ++ be(0x01020304, 4) ++ be(0, 4) ++ Seq(0x50, 0x10) ++ be(1024, 2) ++
+      be(0, 4) ++ payload
+    val ipRaw = Seq(0x45, 0) ++ be(20 + tcpRaw.length, 2) ++ be(0x1111, 2) ++ be(0x4000, 2) ++ Seq(ttl, 6) ++ be(0, 2) ++
+      be(src, 4) ++ be(dst, 4)
+    val ip = ipRaw.patch(10, be(~sum(words(ipRaw)) & 0xFFFF, 2), 2)
+    val tcp = tcpRaw.patch(16, be(~l4Sum(ip, tcpRaw) & 0xFFFF, 2), 2)
+    be(macs._1, 6) ++ be(macs._2, 6) ++ tags ++ (session match {
+      case Some(id) => Seq(0x88, 0x64, 0x11, 0x00) ++ be(id, 2) ++ be(ip.length + tcp.length + 2, 2) ++ Seq(0x00, 0x21)
+      case None => Seq(0x08, 0x00)
+    }) ++ ip ++ tcp
+  }
   def treatment(index: Int, remove: Boolean, add: Boolean, pcpCopy: Boolean, sTag: Boolean, tci: Int): Int =
     index | (remove.compare(false) << 4) | (add.compare(false) << 5) | (pcpCopy.compare(false) << 6) | (sTag.compare(false) << 7) | (tci << 8)
   def rewritten(f: Seq[Int], remove: Boolean, tag: Seq[Int]): Seq[Int] = f.take(12) ++ tag ++ f.drop(if (remove) 16 else 12)
@@ -186,6 +215,53 @@ object GemEthBridgeTest extends App {
     val drops = apb.read(DROPS).toLong
     check((drops & 0xFFFF) == 3 && (drops >> 16) == 4, s"drops counted: PON -> Ethernet ${drops & 0xFFFF} (bad FCS, cut, " +
       s"runt; not the drop action), Ethernet -> PON ${drops >> 16} (invalid, unmapped, bad, queue full)")
+
+    // offloaded flows: LAN 192.168.1.10:5000 -> 8.8.8.8:443 as WAN 100.64.0.2:40000, PPPoE session 0x1234 in VLAN 35
+    def flow(ponToEth: Boolean, k: FlowTableTest.Key, natSrc: Boolean, ip: Long, port: Int, egress: Int): Unit = {
+      apb.write(FLOW_PORTS, k.dport | (k.sport.toLong << 16))
+      apb.write(FLOW_DST, k.dst)
+      apb.write(FLOW_SRC, k.src)
+      apb.write(FLOW_L2, k.session | (k.vid << 16) | (k.udp.compare(false) << 28) | (k.pppoe.compare(false) << 29) |
+        (k.tagged.compare(false) << 30))
+      apb.write(FLOW_NAT_IP, ip)
+      apb.write(FLOW_NAT, port | (egress << 16) | (natSrc.compare(false) << 24))
+      apb.write(FLOW_WRITE, (FlowTable.model(k.bits) & 1023) | (1 << 17) | (if (ponToEth) 1L << 31 else 0L))
+    }
+    def egress(ponToEth: Boolean, index: Int, da: Long, sa: Long, vlan: Int, portId: Int, queue: Int, session: Option[Int]): Unit = {
+      apb.write(EGRESS_DA, da & 0xFFFFFFFFL)
+      apb.write(EGRESS_MAC_HI, (da >> 32) | ((sa >> 32) << 16))
+      apb.write(EGRESS_SA, sa & 0xFFFFFFFFL)
+      apb.write(EGRESS_VLAN, vlan)
+      apb.write(EGRESS_PORT, portId | (queue << 12) | (session.size << 15) | (session.getOrElse(0).toLong << 16))
+      apb.write(EGRESS_WRITE, index | (if (ponToEth) 1L << 31 else 0L))
+    }
+    val (host, lan, gw, wan) = (0x00AABBCC0010L, 0x020000000001L, 0x00DDEEFF0001L, 0x020000000002L)
+    val (hostIp, server, wanIp) = (0xC0A8010AL, 0x08080808L, 0x64400002L)
+    val vlan35 = Seq(0x81, 0x00, 0x00, 35)
+    egress(ponToEth = false, 3, gw, wan, treatment(0, remove = true, add = true, pcpCopy = false, sTag = false, tci = 35),
+      0x230, 1, Some(0x1234))
+    flow(ponToEth = false, FlowTableTest.Key(443, 5000, server, hostIp, false, 0, false, 0, false), natSrc = true, wanIp, 40000, 3)
+    egress(ponToEth = true, 5, host, lan, treatment(0, remove = true, add = false, pcpCopy = false, sTag = false, tci = 0),
+      0, 0, None)
+    flow(ponToEth = true, FlowTableTest.Key(40000, 443, wanIp, server, false, 0x1234, true, 35, true), natSrc = false, hostIp, 5000, 5)
+    mgmt.waitSampling(50)
+    val payload = Seq.fill(30)(rnd.nextInt(256))
+    val usIn = ipFrame((lan, host), Nil, None, hostIp, server, 5000, 443, 64, payload)
+    val usOut = ipFrame((gw, wan), vlan35, Some(0x1234), wanIp, server, 40000, 443, 63, payload)
+    val usMiss = ipFrame((lan, host), Nil, None, hostIp, server, 5001, 443, 64, payload)
+    val dsIn = ipFrame((wan, gw), vlan35, Some(0x1234), server, wanIp, 443, 40000, 50, payload)
+    val dsOut = ipFrame((host, lan), Nil, None, server, hostIp, 443, 5000, 49, payload)
+    val dsTtl1 = ipFrame((wan, gw), vlan35, Some(0x1234), server, wanIp, 443, 40000, 1, payload)
+    val (ponBefore, ethBefore) = (ponOut.map(_.length), ethOut.length)
+    send(usIn); send(usMiss)
+    gem(0x100, Seq(withFcs(dsIn))); gem(0x100, Seq(withFcs(dsTtl1)))
+    mgmt.waitSampling(3000)
+    check(ponOut(1).drop(ponBefore(1)).toSeq == Seq((0x230, usOut.length + 4, withFcs(usOut))),
+      "Ethernet -> PON flow: NAPT source, TTL, PPPoE session and VLAN 35 added, its Port-ID in queue 1, checksums")
+    check(ponOut(0).drop(ponBefore(0)).toSeq == Seq((0x201, usMiss.length + 4, withFcs(usMiss))),
+      "Ethernet -> PON miss (other port): the L2 rules, unchanged")
+    check(ethOut.drop(ethBefore).toSeq == Seq(dsOut, dsTtl1) && ethGaps == 0,
+      "PON -> Ethernet flow: NAPT destination, VLAN and PPPoE stripped, no gap; TTL 1 missed: unchanged")
   }
   println("PASS GemEthBridgeTest")
 }

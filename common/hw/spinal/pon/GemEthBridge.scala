@@ -34,14 +34,17 @@ case class EthFrames() extends Bundle with IMasterSlave {
   * head-of-line blocking). VLAN treatments (G.988 ME 171 subset: remove and/or add the outer tag, PCP set or kept),
   * upstream by the frame's entry, downstream by its outer VID; treatment 0 is transparent. The FCS is appended after
   * the rewrite. Frames are stored whole (descriptor after the data), dropped when a queue is full or the frame bad.
-  * Tables written by the CPU.
+  * Flows (FlowClassifier, per direction): an offloadable frame whose flow hits is rewritten (MACs, PPPoE, NAPT, TTL)
+  * and leaves by its egress (VLAN treatment, toward the PON its Port-ID and queue) instead of the L2 rules; a miss
+  * follows them. Tables written by the CPU.
   * Clocks: the Port-ID lookup and the CPU stream on ponRxCd (reset with the PON side only: the CPU keeps its GEM
   * while the Ethernet lane is down); the queues on ponQueueCd (ponRxCd's clock), ponTxCd, ethTxCd and ethRxCd, all
   * reset while either side is down. cpuPort (the OMCI Port-ID) always takes the CPU action. */
 case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: ClockDomain, ethTxCd: ClockDomain,
                         ethRxCd: ClockDomain, defaultAction: Int, ponQueues: Int = 1, queueBytes: Int = 16384,
-                        frames: Int = 64) extends Component {
+                        frames: Int = 64, flowBucketBits: Int = 10) extends Component {
   ponQueueCd.setSynchronousWith(ponRxCd)
+  assert(ponQueues <= 4, "flow egress queues have 2 bits")
   val io = new Bundle {
     val apb = slave(Apb3(Apb3Config(addressWidth = 8, dataWidth = 32)))
     val ponRx = slave Flow (Fragment(UsGemByte())) // ponRxCd: GEM from the MAC
@@ -104,47 +107,130 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   DS_VLAN.field(UInt(12 bits), AccessType.WO, 0, "VLAN ID")(SymbolName("vid"))
   DS_VLAN.field(UInt(4 bits), AccessType.WO, 0, "treatment")(SymbolName("treatment"))
   val DS_TREATMENT = treatmentReg("DS_TREATMENT", "PON -> Ethernet")
+  def staged[T <: BaseType](reg: RegInst, value: HardType[T], name: String, doc: String): T =
+    reg.field(value, AccessType.RW, 0, doc)(SymbolName(name))
+  val FLOW_PORTS = busif.newReg("Flow key, staged for FLOW_WRITE: L4 ports")
+  val flowDport = staged(FLOW_PORTS, UInt(16 bits), "dport", "destination port")
+  val flowSport = staged(FLOW_PORTS, UInt(16 bits), "sport", "source port")
+  val FLOW_DST = busif.newReg("Flow key: IPv4 destination")
+  val flowDst = staged(FLOW_DST, Bits(32 bits), "ip", "address")
+  val FLOW_SRC = busif.newReg("Flow key: IPv4 source")
+  val flowSrc = staged(FLOW_SRC, Bits(32 bits), "ip", "address")
+  val FLOW_L2 = busif.newReg("Flow key: protocol, PPPoE session, outer VLAN")
+  val flowSession = staged(FLOW_L2, UInt(16 bits), "session", "PPPoE session, 0 without PPPoE")
+  val flowVid = staged(FLOW_L2, UInt(12 bits), "vid", "outer VID, 0 untagged")
+  val flowUdp = staged(FLOW_L2, Bool(), "udp", "UDP, else TCP")
+  val flowPppoe = staged(FLOW_L2, Bool(), "pppoe", "PPPoE session frame")
+  val flowTagged = staged(FLOW_L2, Bool(), "tagged", "VLAN tagged")
+  val FLOW_NAT_IP = busif.newReg("Flow action: the new address")
+  val flowIp = staged(FLOW_NAT_IP, Bits(32 bits), "ip", "address")
+  val FLOW_NAT = busif.newReg("Flow action: the new port, egress, which side is translated")
+  val flowPort = staged(FLOW_NAT, UInt(16 bits), "port", "port")
+  val flowEgress = staged(FLOW_NAT, UInt(6 bits), "egress", "egress entry")
+  FLOW_NAT.reserved(2 bits)
+  val flowNatSrc = staged(FLOW_NAT, Bool(), "natSrc", "source address and port replaced, else destination")
+  val FLOW_WRITE = busif.newReg("Write: the staged flow into a bucket's way; bucket = low bits of CRC-16-CCITT " +
+    "(0x1021, init 0xFFFF, MSB first) of the key's 16 bytes, key bit 126 (tagged) first, bit 127 zero")
+  FLOW_WRITE.field(UInt(16 bits), AccessType.WO, 0, s"bucket, 0-${(1 << flowBucketBits) - 1}")(SymbolName("bucket"))
+  FLOW_WRITE.field(Bool(), AccessType.WO, 0, "way")(SymbolName("way"))
+  FLOW_WRITE.field(Bool(), AccessType.WO, 0, "valid, else the way is emptied")(SymbolName("valid"))
+  FLOW_WRITE.reserved(13 bits)
+  FLOW_WRITE.field(Bool(), AccessType.WO, 0, "direction: 0 Ethernet -> PON, 1 PON -> Ethernet")(SymbolName("ponToEth"))
+  val EGRESS_DA = busif.newReg("Flow egress, staged for EGRESS_WRITE: next hop MAC bits 31-0")
+  val egressDaLow = staged(EGRESS_DA, Bits(32 bits), "da", "MAC bits 31-0")
+  val EGRESS_MAC_HI = busif.newReg("Flow egress: MACs bits 47-32")
+  val egressDaHigh = staged(EGRESS_MAC_HI, Bits(16 bits), "da", "next hop")
+  val egressSaHigh = staged(EGRESS_MAC_HI, Bits(16 bits), "sa", "own")
+  val EGRESS_SA = busif.newReg("Flow egress: own MAC bits 31-0")
+  val egressSaLow = staged(EGRESS_SA, Bits(32 bits), "sa", "MAC bits 31-0")
+  val EGRESS_VLAN = busif.newReg("Flow egress: outer VLAN treatment")
+  EGRESS_VLAN.reserved(4 bits)
+  val egressVlan = staged(EGRESS_VLAN, Bits(20 bits), "treatment", "as US_TREATMENT bits 23-4 (remove, add, pcpCopy, sTag, TCI)")
+  val EGRESS_PORT = busif.newReg("Flow egress: PON Port-ID and queue, PPPoE session")
+  val egressPortId = staged(EGRESS_PORT, UInt(12 bits), "portId", "toward the PON: Port-ID")
+  val egressQueue = staged(EGRESS_PORT, UInt(2 bits), "queue", "toward the PON: queue")
+  EGRESS_PORT.reserved(1 bits)
+  val egressPppoe = staged(EGRESS_PORT, Bool(), "pppoe", "in a PPPoE session (added if the frame has none), else stripped")
+  val egressSession = staged(EGRESS_PORT, UInt(16 bits), "session", "PPPoE session")
+  val EGRESS_WRITE = busif.newReg("Write: the staged egress into an entry")
+  EGRESS_WRITE.field(UInt(6 bits), AccessType.WO, 0, "entry")(SymbolName("index"))
+  EGRESS_WRITE.reserved(25 bits)
+  EGRESS_WRITE.field(Bool(), AccessType.WO, 0, "direction: 0 Ethernet -> PON, 1 PON -> Ethernet")(SymbolName("ponToEth"))
   /** The register's writes into the table's domain, one in flight (busy); the sending side resets with the table's
     * domain, so a domain going down does not hold the bus. */
   val busies = scala.collection.mutable.ArrayBuffer[Bool]()
-  def tableWrite(reg: RegInst, cd: ClockDomain): Flow[Bits] = {
-    val write = Stream(Bits(32 bits))
-    write.valid := reg.hitDoWrite
-    write.payload := busif.writeData
+  def tableWrite[T <: Data](valid: Bool, payload: T, cd: ClockDomain): Flow[T] = {
+    val write = Stream(cloneOf(payload))
+    write.valid := valid
+    write.payload := payload
     val down = BufferCC(cd.isResetActive, True)
     val crossed = StreamCCByToggle(write, ClockDomain.current.copy(reset = ClockDomain.current.readResetWire || down), cd)
     busies += !write.ready
     crossed.toFlow
   }
-  val actionWrite = tableWrite(PORT_ACTION, ponRxCd)
-  val vlanWrite = tableWrite(VLAN_MAP, ethRxCd)
-  val pcpWrite = tableWrite(PCP_MAP, ethRxCd)
-  val queueWrite = tableWrite(PORT_QUEUE, ethRxCd)
-  val usTreatmentWrite = tableWrite(US_TREATMENT, ethRxCd)
-  val dsVlanWrite = tableWrite(DS_VLAN, ponQueueCd)
-  val dsTreatmentWrite = tableWrite(DS_TREATMENT, ponQueueCd)
+  def regWrite(reg: RegInst, cd: ClockDomain): Flow[Bits] = tableWrite(reg.hitDoWrite, busif.writeData, cd)
+  val actionWrite = regWrite(PORT_ACTION, ponRxCd)
+  val vlanWrite = regWrite(VLAN_MAP, ethRxCd)
+  val pcpWrite = regWrite(PCP_MAP, ethRxCd)
+  val queueWrite = regWrite(PORT_QUEUE, ethRxCd)
+  val usTreatmentWrite = regWrite(US_TREATMENT, ethRxCd)
+  val dsVlanWrite = regWrite(DS_VLAN, ponQueueCd)
+  val dsTreatmentWrite = regWrite(DS_TREATMENT, ponQueueCd)
+  val flow = FlowWrite(flowBucketBits)
+  flow.bucket := busif.writeData(flowBucketBits - 1 downto 0).asUInt
+  flow.way := busif.writeData(16 downto 16).asUInt
+  flow.entry.valid := busif.writeData(17)
+  val key = flow.entry.key
+  key.dport := flowDport; key.sport := flowSport; key.dst := flowDst; key.src := flowSrc; key.udp := flowUdp
+  key.session := flowSession; key.pppoe := flowPppoe; key.vid := flowVid; key.tagged := flowTagged
+  flow.entry.action.natSrc := flowNatSrc
+  flow.entry.action.ip := flowIp
+  flow.entry.action.port := flowPort
+  flow.entry.action.egress := flowEgress
+  val egress = EgressWrite()
+  egress.index := busif.writeData(5 downto 0).asUInt
+  egress.egress.da := egressDaHigh ## egressDaLow
+  egress.egress.sa := egressSaHigh ## egressSaLow
+  egress.egress.pppoe := egressPppoe
+  egress.egress.session := egressSession
+  egress.egress.vlan := egressVlan
+  egress.egress.portId := egressPortId
+  egress.egress.queue := egressQueue
+  def flowWrites(ponToEth: Boolean, cd: ClockDomain) = {
+    val mine = busif.writeData(31) === Bool(ponToEth)
+    (tableWrite(FLOW_WRITE.hitDoWrite && mine, flow, cd), tableWrite(EGRESS_WRITE.hitDoWrite && mine, egress, cd))
+  }
+  val (ponToEthFlowWrite, ponToEthEgressWrite) = flowWrites(ponToEth = true, ponQueueCd)
+  val (ethToPonFlowWrite, ethToPonEgressWrite) = flowWrites(ponToEth = false, ethRxCd)
   tableBusy := busies.orR
 
   /** Treatments 1-15 (written: index 3-0, then remove, add, pcpCopy, sTag, TCI); 0 stays transparent. */
   case class Treatments(write: Flow[Bits]) extends Area {
     val table = Mem(Bits(20 bits), 16) initBigInt (Seq.fill(16)(BigInt(0)))
     table.write(write.payload(3 downto 0).asUInt, write.payload(23 downto 4), write.valid && write.payload(3 downto 0) =/= 0)
-    /** The treatment of the frame: its tag (if tagged) and PCP. */
-    def resolve(entry: Bits, tagged: Bool, pcp: Bits): VlanTreatment = {
-      val t = VlanTreatment()
-      t.remove := entry(0) && tagged
-      t.add := entry(1)
-      t.tag := (entry(3) ? B"16'x88A8" | B"16'x8100") ## (entry(2) ? pcp | entry(19 downto 17)) ## entry(16 downto 4)
-      t
-    }
+    def resolve(entry: Bits, tagged: Bool, pcp: Bits): VlanTreatment = VlanTreatment.resolve(entry, tagged, pcp)
   }
 
-  case class EthDesc() extends Bundle { val bytes = UInt(12 bits); val good = Bool(); val vlan = VlanTreatment() }
+  case class EthDesc() extends Bundle {
+    val bytes = UInt(12 bits)
+    val good = Bool()
+    val vlan = VlanTreatment()
+    val job = RewriteJob()
+  }
   case class PonDesc() extends Bundle {
     val bytes, portId = UInt(12 bits)
     val queue = UInt(queueBits bits)
     val good = Bool()
     val vlan = VlanTreatment()
+    val job = RewriteJob()
+  }
+  /** A descriptor pushed once its flow is decided, FlowClassifier.latency clocks after the frame's end; room: the
+    * queue has a slot for one more besides the descriptor in flight. */
+  def decided[T <: Data](push: Flow[T], descs: StreamFifoCC[T]): (Flow[T], Bool) = {
+    val later = Delay(push, FlowClassifier.latency, init = push.getZero)
+    val inFlight = Reg(UInt(2 bits)) init (0)
+    inFlight := inFlight + push.valid.asUInt - later.valid.asUInt
+    (later, descs.io.pushOccupancy +^ inFlight < frames)
   }
   val ethData = StreamFifoCC(Bits(8 bits), queueBytes, ponQueueCd, ethTxCd)
   val ethDescs = StreamFifoCC(EthDesc(), frames, ponQueueCd, ethTxCd)
@@ -173,7 +259,9 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val bytes = Reg(UInt(12 bits))
     val crc = Reg(Bits(32 bits))
     val starting = byte && !open
-    val skipNow = starting ? !ethDescs.io.push.ready | skip
+    val push = Flow(EthDesc())
+    val (later, room) = decided(push, ethDescs)
+    val skipNow = starting ? !room | skip
     val crcNow = Crc32.step(starting ? B(32 bits, default -> True) | crc, in.gem.data)
     val stored = starting ? U(0, 12 bits) | bytes
     val take = byte && !skipNow && stored =/= 2047 // longer frames: bad, the rest not stored
@@ -196,20 +284,33 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val treatment = RegNext(treatments.resolve(treatments.table.readSync(treatmentIndex, byte && stored === 17), tagged, pcp))
     val ends = byte && in.last && in.gem.pti(0) || cut && open
     val badNow = (starting ? False | bad) || take && !ethData.io.push.ready || byte && !take
-    ethDescs.io.push.valid := ends && !skipNow
-    ethDescs.io.push.bytes := stored + ethData.io.push.fire.asUInt
+    push.valid := ends && !skipNow
+    push.bytes := stored + ethData.io.push.fire.asUInt
     val long = stored >= 64 || stored === 63 && ethData.io.push.fire // bytes >= 64, off the adder
-    ethDescs.io.push.good := !badNow && !(cut && open) && crcNow === Crc32.residue && long
-    ethDescs.io.push.vlan := treatment
+    push.good := !badNow && !(cut && open) && crcNow === Crc32.residue && long
+    push.vlan := treatment
+    push.job.assignDontCare()
+    val flows = FlowClassifier(flowBucketBits)
+    flows.io.input.valid := byte || cut && open
+    flows.io.input.fragment := in.gem.data
+    flows.io.input.last := ends
+    flows.io.flowWrite << ponToEthFlowWrite
+    flows.io.egressWrite << ponToEthEgressWrite
+    val decision = flows.io.decision.payload
+    ethDescs.io.push.valid := later.valid
+    ethDescs.io.push.bytes := later.bytes
+    ethDescs.io.push.good := later.good
+    ethDescs.io.push.vlan := decision.hit ? decision.vlan | later.vlan
+    ethDescs.io.push.job := decision.job
     when(byte) {
       open := True
       skip := skipNow
       bad := badNow
       crc := crcNow
-      bytes := ethDescs.io.push.bytes
+      bytes := push.bytes
     }
     when(ends)(open := False)
-    val dropped = ends && (skipNow || !ethDescs.io.push.good)
+    val dropped = ends && (skipNow || !push.good)
   }
 
   val ethSender = new ClockingArea(ethTxCd) {
@@ -217,17 +318,21 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val left = Reg(UInt(12 bits)) init (0)
     val send = Reg(Bool())
     val vlan = Reg(VlanTreatment())
+    val job = Reg(RewriteJob())
     desc.ready := left === 0
-    when(desc.fire) { left := desc.bytes; send := desc.good; vlan := desc.vlan }
+    when(desc.fire) { left := desc.bytes; send := desc.good; vlan := desc.vlan; job := desc.job }
     val data = ethData.io.pop
     val payload = send && left > 4 // the FCS (last 4 bytes) is the MAC's
-    val rewrite = VlanRewrite(appendFcs = false)
-    rewrite.io.input.valid := left =/= 0 && payload && data.valid
-    rewrite.io.input.fragment := data.payload
-    rewrite.io.input.last := left === 5
+    val flow = FlowRewrite()
+    flow.io.input.valid := left =/= 0 && payload && data.valid
+    flow.io.input.fragment := data.payload
+    flow.io.input.last := left === 5
+    flow.io.job := job
+    val rewrite = VlanRewrite(appendFcs = false, reserve = 12)
+    rewrite.io.input << flow.io.output
     rewrite.io.treatment := vlan
     io.eth.tx << rewrite.io.output
-    data.ready := left =/= 0 && (payload ? rewrite.io.input.ready | True)
+    data.ready := left =/= 0 && (payload ? flow.io.input.ready | True)
     when(data.fire)(left := left - 1)
   }
 
@@ -250,7 +355,9 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val tagged = Reg(Bool())
     val lookup = Reg(Bool())
     val starting = rx.valid && !open
-    val skipNow = starting ? !ponDescs.io.push.ready | skip
+    val push = Flow(PonDesc())
+    val (later, room) = decided(push, ponDescs)
+    val skipNow = starting ? !room | skip
     val position = starting ? U(0, 12 bits) | index // received bytes
     val stored = Reg(UInt(12 bits))                   // bytes in the queue
     val take = rx.valid && !skipNow && position < 2040 // longer frames: bad, the rest not stored (room for the FCS)
@@ -279,12 +386,30 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     ponData.io.push.payload := rx.fragment
     val storedNow = ((starting && !skipNow) ? U(0, 12 bits) | stored) + ponData.io.push.fire.asUInt
     stored := storedNow
-    ponDescs.io.push.valid := frameEnd && !skipNow
-    ponDescs.io.push.bytes := storedNow
-    ponDescs.io.push.portId := portId
-    ponDescs.io.push.payload.queue := queue
-    ponDescs.io.push.good := !badNow && entry(12) && position >= 18
-    ponDescs.io.push.vlan := treatment
+    push.valid := frameEnd && !skipNow
+    push.bytes := storedNow
+    push.portId := portId
+    push.payload.queue := queue
+    val frameOk = !badNow && position >= 18
+    push.good := frameOk && entry(12)
+    push.vlan := treatment
+    push.job.assignDontCare()
+    val flows = FlowClassifier(flowBucketBits)
+    flows.io.input.valid := rx.valid
+    flows.io.input.fragment := rx.fragment
+    flows.io.input.last := rx.last
+    flows.io.flowWrite << ethToPonFlowWrite
+    flows.io.egressWrite << ethToPonEgressWrite
+    val decision = flows.io.decision.payload
+    val laterOk = Delay(frameOk, FlowClassifier.latency)
+    val hit = decision.hit
+    ponDescs.io.push.valid := later.valid
+    ponDescs.io.push.bytes := later.bytes
+    ponDescs.io.push.portId := hit ? decision.portId | later.portId
+    ponDescs.io.push.payload.queue := hit ? decision.queue.resize(queueBits) | later.payload.queue
+    ponDescs.io.push.good := hit ? laterOk | later.good
+    ponDescs.io.push.vlan := hit ? decision.vlan | later.vlan
+    ponDescs.io.push.job := decision.job
     val dropped = frameEnd && skipNow || ponDescs.io.push.valid && !ponDescs.io.push.good
   }
 
@@ -292,16 +417,20 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   def sender(desc: Stream[PonDesc], data: Stream[Bits]): Stream[Fragment[GemTxByte]] = new Area {
     val left = Reg(UInt(12 bits)) init (0)
     val head = Reg(PonDesc())
-    val rewrite = VlanRewrite(appendFcs = true)
+    val rewrite = VlanRewrite(appendFcs = true, reserve = 12)
     desc.ready := left === 0 && rewrite.io.idle // the packet's Port-ID and length held to its FCS
     when(desc.fire) { left := desc.bytes; head := desc.payload }
-    rewrite.io.input.valid := left =/= 0 && head.good && data.valid
-    rewrite.io.input.fragment := data.payload
-    rewrite.io.input.last := left === 1
+    val flow = FlowRewrite()
+    flow.io.input.valid := left =/= 0 && head.good && data.valid
+    flow.io.input.fragment := data.payload
+    flow.io.input.last := left === 1
+    flow.io.job := head.job
+    rewrite.io.input << flow.io.output
     rewrite.io.treatment := head.vlan
-    data.ready := left =/= 0 && (head.good ? rewrite.io.input.ready | True)
+    data.ready := left =/= 0 && (head.good ? flow.io.input.ready | True)
     when(data.fire)(left := left - 1)
-    val length = head.bytes + 4 - (head.vlan.remove ? U(4) | U(0)) + (head.vlan.add ? U(4) | U(0))
+    val pppoe = head.job.enable ? (head.job.add ? U(8, 12 bits) | (head.job.strip ? U(4096 - 8, 12 bits) | U(0, 12 bits))) | U(0, 12 bits)
+    val length = head.bytes + 4 - (head.vlan.remove ? U(4) | U(0)) + (head.vlan.add ? U(4) | U(0)) + pppoe
     val out = rewrite.io.output.translateWith {
       val g = Fragment(GemTxByte())
       g.fragment.data := rewrite.io.output.fragment

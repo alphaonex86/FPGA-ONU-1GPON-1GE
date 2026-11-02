@@ -11,6 +11,17 @@ case class VlanTreatment() extends Bundle {
   val tag = Bits(32 bits) // TPID ## TCI
 }
 
+object VlanTreatment {
+  /** A treatment entry (remove, add, pcpCopy, sTag, TCI from bit 0) for a frame: its tag (if tagged) and PCP. */
+  def resolve(entry: Bits, tagged: Bool, pcp: Bits): VlanTreatment = {
+    val t = VlanTreatment()
+    t.remove := entry(0) && tagged
+    t.add := entry(1)
+    t.tag := (entry(3) ? B"16'x88A8" | B"16'x8100") ## (entry(2) ? pcp | entry(19 downto 17)) ## entry(16 downto 4)
+    t
+  }
+}
+
 object VlanRewriteState extends SpinalEnum { val HEAD, TAG, BODY, FCS = newElement() }
 
 /** Rewrites the outer VLAN tag of each frame (push, pop, translate), the treatment read at its first byte; frames of
