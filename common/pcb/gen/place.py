@@ -186,8 +186,9 @@ def hsmc_layout():
     lay.place(refs(lay, 'TPS61391')[0], bx + 8.5, 48.0)
     lay.place(refs(lay, 'D_Schottky')[0], bx + 8.5, 51.6)
     lay.place(refs(lay, 'AD5593R')[0], 32.0, 70.0)
-    lay.place(refs(lay, 'VCXO_LVDS_3225')[0], 14.0, 9.0)    # at XCVR_RX7 (pins 2/4)
-    lay.place(refs(lay, 'XO_LVDS_3225')[0], 14.0, 15.0)     # at XCVR_RX6 (pins 6/8)
+    vcxo = {'VCXO156_P' in lay.parts[r].conns.values(): r for r in refs(lay, 'VCXO_LVDS_3225')}
+    lay.place(vcxo[False], 14.0, 9.0)    # 155.52 MHz at XCVR_RX7 (pins 2/4)
+    lay.place(vcxo[True], 14.0, 15.0)    # 156.25 MHz at XCVR_RX6 (pins 6/8)
     lay.place(refs(lay, 'TPS563201')[0], 46.0, 40.5)   # 12 V buck for the cages, under the Ethernet cage
     hsmc_pairs(lay)
     # Ethernet cage parts on +3V3_SFP: under the cage, on that plane; beside the cage pins they fall across the ONU RX pair

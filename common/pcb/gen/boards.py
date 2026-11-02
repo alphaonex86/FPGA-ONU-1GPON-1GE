@@ -337,7 +337,7 @@ HSMC_LANES = {3: ('OLT_TD', 'OLT_RD'), 2: ('ETH_TD', 'ETH_RD'), 1: ('ONU_TX', 'O
 HSMC_SWAP = {'OLT_RD', 'ETH_RD', 'ONU_RX', 'ONU_TX'}   # P/N swapped at the connector for a planar route: GTS polarity
                                                       # inversion on these (ONU_TX: undoes the DIN swap, so not inverted)
 HSMC_IO = {'OLT': [42, 44, 48, 50, 54, 56, 60, 62], 'ETH': [66, 68, 72, 74, 78, 80, 84, 86],
-           'ONU': [102, 104, 108, 110, 114, 116, 120]}
+           'ONU': [102, 104, 108, 110, 114, 116, 120, 122]}
 
 def hsmc():
     """DE25-Standard HSMC card: OLT SFP+ cage, Ethernet SFP+ cage (copper 1000BASE-T SFP over SGMII, 10G later),
@@ -360,24 +360,24 @@ def hsmc():
     conn.update({'6': 'GTS_REFCLK_P', '8': 'GTS_REFCLK_N', '2': 'GTS_RXREF_P', '4': 'GTS_RXREF_N'})   # XCVR_RX6 / RX7
     io = {'OLT': [f'OLT_{n}' for n in ('TX_DIS', 'TX_FAULT', 'LOS', 'MOD_ABS', 'SCL', 'SDA', 'RS0', 'RS1')],
           'ETH': [f'ETH_{n}' for n in ('TX_DIS', 'TX_FAULT', 'LOS', 'MOD_ABS', 'SCL', 'SDA', 'RS0', 'RS1')],
-          'ONU': ['LASER_DIS_FPGA', 'RX_SD', 'ONU_SCL', 'ONU_SDA', 'VCXO_PWM', 'BURST_CUT', 'BEN_IO']}
+          'ONU': ['LASER_DIS_FPGA', 'RX_SD', 'ONU_SCL', 'ONU_SDA', 'VCXO_PWM', 'BURST_CUT', 'BEN_IO', 'VCXO156_PWM']}
     for group, nets in io.items():
         conn.update({str(p): n for p, n in zip(HSMC_IO[group], nets)})
     b.block = 'hsmc'
     b.add('J', LIB, 'HSMC_CARD', 'ASP-122952-01', 'bridge:HSMC_ASP-122952-01', conn, MPN='Samtec ASP-122952-01')
     b.decouple('+3V3', 2, 2, 2)
-    b.block = 'clock'   # GTS refclks: XO for Ethernet (1.25 Gb/s needs 156.25), VCXO tuned by the FPGA for every PON lane
-    b.add('Y', LIB, 'XO_LVDS_3225', 'SiT9121 156.25 MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
-          {'OE': 'XO_OE', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'XO_P', 'OUT-': 'XO_N'}, MPN='SiT9121AI-1B3-33E156.250000 (LVPECL; check code)')
-    b.add('Y', LIB, 'VCXO_LVDS_3225', 'SiT3821 155.52 MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
-          {'VIN': 'VCXO_VC', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'VCXO_P', 'OUT-': 'VCXO_N'},
-          MPN='SiT3821AI-1B2-33EB155.520000 (LVPECL, +-50 ppm pull; check code)')
-    for a, z in (('XO_P', 'GTS_REFCLK_P'), ('XO_N', 'GTS_REFCLK_N'), ('VCXO_P', 'GTS_RXREF_P'), ('VCXO_N', 'GTS_RXREF_N')):
-        b.r('150', a, 'GND'); b.c('100n', a, z)   # LVPECL emitter load: ~1.6 Vpp, LVDS falls under the GTS 0.6 Vpp minimum
-    b.r('10k', 'XO_OE', '+3V3_XO')
+    # GTS refclks, both VCXOs tuned by the FPGA: 155.52 MHz for every GPON lane, 156.25 MHz for 1.25 Gb/s (Ethernet, EPON:
+    # the EPON ONU transmits loop-timed like a stock one, operator 2026-11-02)
+    b.block = 'clock'
+    for mhz, v, ref in (('156.25', 'VCXO156', 'GTS_REFCLK'), ('155.52', 'VCXO', 'GTS_RXREF')):
+        b.add('Y', LIB, 'VCXO_LVDS_3225', f'SiT3821 {mhz} MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
+              {'VIN': f'{v}_VC', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': f'{v}_P', 'OUT-': f'{v}_N'},
+              MPN=f'SiT3821AI-1B2-33EB{mhz}0000 (LVPECL, +-50 ppm pull; check code)')
+        for d in 'PN':   # LVPECL emitter load: ~1.6 Vpp, LVDS falls under the GTS 0.6 Vpp minimum
+            b.r('150', f'{v}_{d}', 'GND'); b.c('100n', f'{v}_{d}', f'{ref}_{d}')
+        b.r('10k', f'{v}_PWM', f'{v}_RC'); b.c('1u', f'{v}_RC')
+        b.r('10k', f'{v}_RC', f'{v}_VC'); b.c('1u', f'{v}_VC')
     b.fb('+3V3', '+3V3_XO'); b.decouple('+3V3_XO', 2, 1)
-    b.r('10k', 'VCXO_PWM', 'VCXO_RC'); b.c('1u', 'VCXO_RC')
-    b.r('10k', 'VCXO_RC', 'VCXO_VC'); b.c('1u', 'VCXO_VC')
     b.block = 'power:+3V3_SFP'   # TPS563201: 0.768 V * (1 + 33.2k/10k) = 3.32 V, 3 A
     b.add('U', 'Regulator_Switching', 'TPS563201', 'TPS563201DDCR', 'Package_TO_SOT_SMD:SOT-23-6',
           {'VIN': '+12V', 'EN': '+12V', 'GND': 'GND', 'SW': 'SW_SFP', 'VFB': 'FB_SFP', 'VBST': 'BST_SFP'}, MPN='TPS563201DDCR')
