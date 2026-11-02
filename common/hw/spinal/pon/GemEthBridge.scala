@@ -527,7 +527,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
 
   /** Whole packets of a queue, rewritten, the FCS appended; its bad ones skipped, the CPU's to cpu. */
   case class Sender(desc: Stream[PonDesc], queued: Stream[Bits]) extends Area {
-    val data = queued.m2sPipe() // registered queue RAM output (311.04 MHz in the OLT)
+    val data = queued.pipelined(m2s = true, s2m = true) // queue RAM output and its ready registered (311.04 MHz)
     val left = Reg(UInt(12 bits)) init (0)
     val head = Reg(PonDesc())
     val rewrite = VlanRewrite(appendFcs = true, reserve = 12)
@@ -567,6 +567,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
       cpuQueueWrite.valid)
     val cpuPackets = if (ponQueues == 1) Seq(io.cpuToWan) else {
       val read = cpuQueues.streamReadSync(io.cpuToWan.translateWith(io.cpuToWan.fragment.portId), io.cpuToWan.payload)
+        .pipelined(m2s = true, s2m = true) // 311.04 MHz in the ONU
       StreamDemux(read, read.value, ponQueues).map(q => q.translateWith(q.linked)).toSeq
     }
     def output(k: Int, bridged: Stream[Fragment[GemTxByte]], backlog: UInt): Unit = {
@@ -593,8 +594,8 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
       val room = Vec(queues.map(q => q.data.io.availability >= desc.bytes && q.descs.io.availability =/= 0))
       desc.ready := left === 0
       when(desc.fire) { left := desc.bytes; keep := desc.good && !desc.cpu && room(desc.payload.queue); head := desc.payload }
-      dropped := desc.fire && desc.good && !desc.cpu && !room(desc.payload.queue)
-      val data = ponData.io.pop
+      dropped := RegNext(desc.fire && desc.good && !desc.cpu && !room(desc.payload.queue)) init (False)
+      val data = ponData.io.pop.m2sPipe() // registered queue RAM output (311.04 MHz in the ONU)
       data.ready := left =/= 0
       lanCpu << cpuFrame(data.fire && head.good && head.cpu, left === 1, data.payload)
       lanCpuControl := head.control

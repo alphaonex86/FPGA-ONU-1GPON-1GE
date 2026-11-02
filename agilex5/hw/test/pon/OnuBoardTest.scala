@@ -8,7 +8,9 @@ import pon.gpon.GtcDsTest.check
 /** OnuBoardCore management path: OnuMac registers across the clocks or an error while the ONU lane is down, laser
   * held off until both lanes are up, optics pin events, VCXO pin at the center duty; an Ethernet frame through the
   * bridge to the MAC's upstream data stream; in flows mode a miss to the LAN frame queue, an ARP to the LAN control
-  * queue, a CPU frame out of the Ethernet port. */
+  * queue, a CPU frame out of the Ethernet port. Then the lane in its 1.25 Gb/s profile (125 MHz): the EponOnuMac
+  * registers instead of the OnuMac's, its receiver synced on the looped-back lane, an Ethernet frame to its upstream
+  * stream, the 156.25 MHz VCXO pin on its own center, burst enable low. */
 object OnuBoardTest extends App {
   val SN_0 = 0x04 // OnuRegs, read-write
   val BOARD = 0x100
@@ -17,6 +19,9 @@ object OnuBoardTest extends App {
   val EVENTS = BOARD + 0x18
   val IRQ_ENABLE = BOARD + 0x1C
   val VCXO_CTRL = BOARD + 0x20
+  val VCXO156 = BOARD + 0x2C
+  val PROFILE = BOARD + 0x30
+  val EPON = 0x800
   val QUEUES_STATUS = 0x200 + 0x14 // GemCpuQueues STATUS: txFree
   val BRIDGE_VLAN_MAP = 0x304
   val BRIDGE_UNTAGGED = 0x308
@@ -27,20 +32,25 @@ object OnuBoardTest extends App {
   val RX_DESC_0 = 0x08
   val RX_DESC_1 = 0x0C
 
-  SimConfig.compile { val c = OnuBoardCore(); c.pon.mac.io.dataTx.simPublic(); c }.doSim { dut =>
+  SimConfig.compile { val c = OnuBoardCore(); c.pon.mac.io.dataTx.simPublic(); c.epon.mac.io.dataTx.simPublic(); c }.doSim { dut =>
     val io = dut.io
     val mgmt = dut.clockDomain
     mgmt.forkStimulus(10)
-    for (c <- Seq(io.dsClk, io.usClk, io.rxClk, io.helperClk)) c #= false
+    for (c <- Seq(io.dsClk, io.usClk, io.gponRxClk, io.eponRxClk, io.helperClk, io.eponHelperClk)) c #= false
     io.helperLocked #= true
-    fork {
+    io.epon #= false
+    var dsHalf = 2
+    fork { // 311.04 and 155.52 MHz (GPON) or 125 MHz (EPON), same source; the received word looped back
       var n = 0
       while (true) {
-        sleep(2); io.dsClk #= !io.dsClk.toBoolean; io.rxClk #= io.dsClk.toBoolean; io.helperClk #= !io.helperClk.toBoolean
+        sleep(dsHalf); io.dsClk #= !io.dsClk.toBoolean
+        for (c <- Seq(io.gponRxClk, io.eponRxClk)) c #= io.dsClk.toBoolean
+        if (io.dsClk.toBoolean) io.rxWord #= io.txWord.toInt
         if (n % 2 == 0) io.usClk #= !io.usClk.toBoolean
         n += 1
       }
     }
+    fork { while (true) { sleep(2); for (c <- Seq(io.helperClk, io.eponHelperClk)) c #= !c.toBoolean } }
     for (lane <- Seq(io.onuLane, io.benLane); b <- Seq(lane.txResetAck, lane.rxResetAck, lane.txReady, lane.rxReady,
            lane.txPllLocked, lane.rxLockedToData, lane.rxLockedToRef)) b #= false
     for (b <- Seq(io.pins.rxSd, io.pins.burstCut, io.pins.scl.read, io.pins.sda.read, io.pins.benIo.read)) b #= false
@@ -138,6 +148,33 @@ object OnuBoardTest extends App {
     io.onuLane.txReady #= false
     mgmt.waitSampling(20)
     check(read(SN_0)._2 == SLVERR && io.pins.laserDisable.toBoolean, "ONU lane down: error answer, laser off")
+    check(io.benLane.txReset.toBoolean == false, "burst enable lane out of reset while the ONU lane's is")
+    write(BOARD, 1) // ONU_CTRL.txReset: the DR switch
+    mgmt.waitSampling(4)
+    check(io.benLane.txReset.toBoolean, "ONU lane reset: burst enable lane reset with it (switched together)")
+    io.epon #= true
+    dsHalf = 4
+    mgmt.waitSampling(20)
+    write(BOARD, 0)
+    io.onuLane.txReady #= true
+    mgmt.waitSampling(20)
+    val r = dut.epon.mac.regs
+    check(read(PROFILE)._1 == 1 && read(SN_0)._2 == SLVERR, "1.25 Gb/s profile: PROFILE.epon, OnuMac registers answer an error")
+    check(write(EPON + r.MAC_LO.addr.toInt, 0x0C0D0E0FL) == 0 && read(EPON + r.MAC_LO.addr.toInt) == (0x0C0D0E0FL, 0),
+      "EPON MAC register written and read across the clocks")
+    mgmt.waitSampling(200)
+    check((read(EPON + r.STATE.addr.toInt)._1 & 1) == 1, "EPON receiver synced on the looped-back lane")
+    write(BRIDGE_UNTAGGED, 0x200 | (1 << 12))
+    ethFrame(100, i => if (i == 12) 0x08 else i)
+    mgmt.waitSampling(500)
+    val frame = dut.epon.mac.io.dataTx // not registered, no grant: the frame waits at the MAC
+    check(frame.valid.toBoolean && frame.fragment.length.toInt == 104, "Ethernet frame -> bridge -> EPON ONU MAC upstream: 100 bytes + FCS")
+    write(VCXO156, 0xC000)
+    check(math.abs(pinMean() - 0.25) < 0.01, "155.52 MHz VCXO pin still on its center")
+    var high = 0
+    for (_ <- 0 until 16000) { mgmt.waitSampling(); if (io.vcxo156Pwm.toBoolean) high += 1 }
+    check(math.abs(high / 16000.0 - 0.75) < 0.01, "156.25 MHz VCXO pin follows its own center register")
+    check(io.benWord.toInt == 0, "no grant: burst enable low")
   }
   println("PASS OnuBoardTest")
 }

@@ -1,8 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 # Fit a top on the DE25-Standard GTS pins with the variants of gen_ip.sh (DIR/ip), then print the worst setup and hold
-# slack over the timing corners (fails if negative). TOP: hsmc_lanes (lane check, default), dr_lane (OLT lane with
-# its two DR profiles) or PonBoard (Spinal, needs sbt or SBT=path; its OLT lane is dr_lane's). Every other port but clk is virtual: the HPS side (bridges, interrupts) is not placed yet.
+# slack over the timing corners (fails if negative). TOP: hsmc_lanes (lane check, default) or PonBoard (Spinal, needs
+# sbt or SBT=path; its PON lanes switch profiles by DR). Every other port but clk is virtual: the HPS side (bridges,
+# interrupts) is not placed yet.
 # Usage: fit.sh DIR [TOP]
 set -euo pipefail
 QUARTUS=${QUARTUS:-$HOME/altera_pro/26.1.1/quartus/bin}
@@ -15,18 +16,14 @@ mkdir -p "$1"
 dir=$(cd "$1" && pwd)
 [ "$dir/ip/dr_ctrl.ip" -nt "$src/gen_ip.sh" ] || "$src/gen_ip.sh" "$dir/ip" # variants older than their script: regenerated
 ips="srcss olt onu ben_tx eth pon_clocks helper_pll" # divider after its source
-dr_top=$dir/support_logic/dr_top/synth/dr_top.sv # the OLT lane's DR profiles, from quartus_tlg below
+dr_top=$dir/support_logic/dr_top/synth/dr_top.sv # the PON lanes' DR profiles, from quartus_tlg below
 case $top in
     hsmc_lanes) verilog=$src/hsmc_lanes.sv ;;
-    dr_lane)
-        verilog=$src/dr_lane.sv
-        sources=$dr_top
-        ips="srcss olt olt_1g25 dr_ctrl" ;;
     PonBoard)
         (cd "$repo" && "${SBT:-sbt}" -batch "runMain pon.PonBoardVerilog") > "$dir/sbt.log" 2>&1 || die "sbt, see $dir/sbt.log"
         verilog=$repo/out/rtl/PonBoard.v
         sources="$dr_top $(cat "$repo/out/rtl/PonBoard.sources")" # black box RTL (taxi)
-        ips="srcss olt olt_1g25 dr_ctrl onu ben_tx eth olt_clock_mux pon_clocks helper_pll" ;;
+        ips="srcss olt olt_1g25 onu onu_1g25 ben_tx ben_1g25 dr_ctrl eth clock_mux pon_clocks helper_pll" ;;
     *) die "unknown top $top" ;;
 esac
 # DE25-Standard user manual, HSMC GTS table (P pins; N follows)
@@ -34,7 +31,7 @@ pins="pon_refclk:AT120 eth_refclk:AP120 ben_tx_p:AU129 onu_tx_p:AR129 eth_tx_p:A
       onu_rx_p:AP135 eth_rx_p:AM135 olt_rx_p:AK135"
 # HSMC card IO (common/pcb/gen/boards.py HSMC_IO -> hsmcpins.de25_name -> manual HSMC_D table), 3.3 V by JP5
 io_pins="sfp_txDisable:F34 sfp_txFault:H37 sfp_los:Y34 sfp_modAbs:Y15 sfp_scl:AL32 sfp_sda:AK21 sfp_rs0:AL29
-         sfp_rs1:AJ1 onuPins_laserDisable:AG36 onuPins_rxSd:Y24 onuPins_scl:AB24 onuPins_sda:T8 vcxoPwm:AG21
+         sfp_rs1:AJ1 onuPins_laserDisable:AG36 onuPins_rxSd:Y24 onuPins_scl:AB24 onuPins_sda:T8 vcxoPwm:AG21 vcxo156Pwm:R2
          onuPins_burstCut:T18 onuPins_benIo:AJ2
          ethSfp_txDisable:AK25 ethSfp_txFault:Y8 ethSfp_los:AG13 ethSfp_modAbs:AB4 ethSfp_scl:AH4 ethSfp_sda:AD2
          ethSfp_rs0:T15 ethSfp_rs1:Y4"
@@ -48,13 +45,15 @@ cd "$dir"
     echo "set_global_assignment -name SYSTEMVERILOG_FILE $verilog"
     for f in ${sources:-}; do echo "set_global_assignment -name SYSTEMVERILOG_FILE $f"; done
     for ip in $ips; do echo "set_global_assignment -name IP_FILE ip/$ip.ip"; done
-    if [ $top != hsmc_lanes ]; then # the DR group: GPON profile first at startup
-        for p in olt:1 olt_1g25:2; do
-            i=${p%:*}_inst; n=${p#*:}
-            echo "set_instance_assignment -name DR_IP_INSTANCE -to $i -section_id dr_top ${p%:*}"
-            echo "set_instance_assignment -name DR_GROUP_RECONFIG_ID $n -to $i -section_id dr_top"
-            echo "set_instance_assignment -name DR_COMBINATION_IP_INSTANCE_RELATIVE_LOCATION -to $i -section_id dr_top 0"
-            echo "set_instance_assignment -name DR_COMBINATION -section_id dr_top -to $i $n"
+    if [ $top != hsmc_lanes ]; then # the DR group, profile:id:channel:combinations (the ONU's
+        # burst enable lane switches with it); both sides GPON at startup
+        for p in olt:1:0:1,3 olt_1g25:2:0:2,4 onu:3:1:1,2 onu_1g25:4:1:3,4 ben_tx:5:2:1,2 ben_1g25:6:2:3,4; do
+            IFS=: read -r name id channel combinations <<< "$p"
+            i=${name}_inst
+            echo "set_instance_assignment -name DR_IP_INSTANCE -to $i -section_id dr_top $name"
+            echo "set_instance_assignment -name DR_GROUP_RECONFIG_ID $id -to $i -section_id dr_top"
+            echo "set_instance_assignment -name DR_COMBINATION_IP_INSTANCE_RELATIVE_LOCATION -to $i -section_id dr_top $channel"
+            for c in ${combinations/,/ }; do echo "set_instance_assignment -name DR_COMBINATION -section_id dr_top -to $i $c"; done
         done
         echo "set_global_assignment -name DR_GROUP_STARTUP_COMBINATION -section_id dr_top 1"
         echo "set_global_assignment -name SDC_ENTITY_FILE support_logic/dr_top/synth/dr_top.sdc -entity dr_top" # profiles exclusive
@@ -101,24 +100,29 @@ cd "$dir"
     echo 'if {[get_collection_size $dr_rx] > 0} {'
     echo '  set_clock_groups -asynchronous -group $dr_rx'
     echo '}'
-    echo 'foreach r {tx rx} {' # the 1.25 Gb/s profile's IP takes the GPON clock on the shared node as master, x1: 125 MHz
-    echo '  set c [get_clocks -nowarn "*olt_1g25_inst_period*|${r}_user_clk1_reg*"]'
-    echo '  if {[get_collection_size $c] > 0} {'
-    echo '    create_generated_clock -name [get_clock_info -name $c] -master_clock [get_clock_info -master_clock $c] \'
-    echo '      -source [get_node_info -name [get_clock_info -master_clock_pin $c]] -multiply_by 3125 -divide_by 7776 \'
-    echo '      -add [get_node_info -name [get_clock_info -targets $c]]'
+    echo 'foreach_in_collection c [get_clocks -nowarn {*_1g25_inst_period*|*_user_clk1_reg*}] {' # a 1.25 Gb/s profile's IP
+    echo '  create_generated_clock -name [get_clock_info -name $c] -master_clock [get_clock_info -master_clock $c] \'
+    echo '    -source [get_node_info -name [get_clock_info -master_clock_pin $c]] -multiply_by 3125 -divide_by 7776 \'
+    echo '    -add [get_node_info -name [get_clock_info -targets $c]]' # took the GPON clock on the shared node, x1: 125 MHz
+    echo '}'
+    echo 'foreach side {olt onu} {'
+    echo '  set gpon [get_clocks -nowarn "${side}Side_clocks|*${side}_inst_period*"]' # EPON logic: reset while the core clock is GPON
+    echo '  set epon_logic [get_keepers -nowarn "${side}Core|epon_* ${side}Core|eponCC|*"]'
+    echo '  if {[get_collection_size $gpon] == 0 || [get_collection_size $epon_logic] == 0} {'
+    echo '    post_message -type error "fit.sdc: no GPON clock or EPON logic for $side"'
+    echo '  } else {'
+    echo '    set_false_path -from $gpon -to $epon_logic'
+    echo '    set_false_path -from $epon_logic -to $gpon'
     echo '  }'
     echo '}'
-    echo 'set olt_gpon [get_clocks -nowarn {oltClocks|*olt_inst_period*}]' # EPON logic: reset while the core clock is GPON
-    echo 'set epon_logic [get_keepers -nowarn {olt|epon_* olt|eponCC|*}]'
-    echo 'if {[get_collection_size $olt_gpon] > 0 && [get_collection_size $epon_logic] > 0} {'
-    echo '  set_false_path -from $olt_gpon -to $epon_logic'
-    echo '  set_false_path -from $epon_logic -to $olt_gpon'
-    echo '}'
-    echo 'set dr_gpon [get_clocks -nowarn {*olt_inst_period*}]' # every clock of one DR profile (lane, mux, divider) vs the other's
-    echo 'set dr_1g25 [get_clocks -nowarn {*olt_1g25_inst_period*}]'
-    echo 'if {[get_collection_size $dr_gpon] > 0 && [get_collection_size $dr_1g25] > 0} {'
-    echo '  set_clock_groups -physically_exclusive -group $dr_gpon -group $dr_1g25'
+    echo 'foreach {gpon epon} {olt olt_1g25 onu onu_1g25 ben_tx ben_1g25} {' # every clock of one DR profile (lane, mux, divider) vs the other's
+    echo '  set dr_gpon [get_clocks -nowarn "*${gpon}_inst_period*"]'
+    echo '  set dr_1g25 [get_clocks -nowarn "*${epon}_inst_period*"]'
+    echo '  if {[get_collection_size $dr_gpon] == 0 || [get_collection_size $dr_1g25] == 0} {'
+    echo '    post_message -type error "fit.sdc: no clocks for the DR profiles $gpon / $epon"'
+    echo '  } else {'
+    echo '    set_clock_groups -physically_exclusive -group $dr_gpon -group $dr_1g25'
+    echo '  }'
     echo '}'
     echo 'if {[get_collection_size [get_ports -nowarn altera_reserved_tck]] > 0} {' # JTAG debug of the DR controller
     echo '  create_clock -name altera_reserved_tck -period 100 [get_ports altera_reserved_tck]'

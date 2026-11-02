@@ -36,8 +36,27 @@ case class GtcUsFramer(gemStreams: Int = 1) extends Component {
   import FramerState._
 
   def after(a: UInt, b: UInt): Bool = !(a - b).msb
-  val jobs = io.job.m2sPipe() // io.job: the job after this one, to know the burst's end when an allocation starts
-  val head = jobs.payload
+  def div255(x: UInt): UInt = ((x.resize(17) + (x >> 8) + 1) >> 8).resize(16) // x < 65535
+  // a job's length, as bytes = 255 q + rest and base = bytes - 16 q for its FEC sizing, and its end, a clock ahead
+  case class PreparedJob() extends Bundle {
+    val job = UsJob()
+    val bytes, base = UInt(16 bits)
+    val rest = UInt(8 bits)
+    val endBit = UInt(27 bits)
+  }
+  val next = io.job.m2sPipe().map { j => // the job after the head, to know the burst's end when an allocation starts
+    val p = PreparedJob()
+    val bytes = j.alloc.stop - j.alloc.start + 1
+    val q = div255(bytes)
+    p.job := j
+    p.bytes := bytes
+    p.rest := (bytes - (q << 8).resize(16) + q).resize(8)
+    p.base := bytes - (q << 4).resize(16)
+    p.endBit := j.bit + (bytes << 3).resize(27)
+    p
+  }
+  val jobs = next.m2sPipe()
+  val head = jobs.payload.job
   val burstStart = (head.bit >> 3).resize(24) - 3 - io.overhead.bytes
   jobs.ready := False
   io.ploam.ready := False
@@ -74,25 +93,23 @@ case class GtcUsFramer(gemStreams: Int = 1) extends Component {
   val scrambler = Reg(Bits(7 bits))
   val (keystream, scramblerNext) = scramblerByte(scrambler)
 
-  def div255(x: UInt): UInt = ((x.resize(17) + (x >> 8) + 1) >> 8).resize(16) // x < 65535
   // data bytes of an allocation starting at codeword position `at` (< 239): parity of each codeword started before its
-  // end, or with the burst ending there of all its codewords, the last one 16 or all its bytes (fewer than 17: zeros)
-  def dataBytes(at: UInt, bytes: UInt, last: Bool): UInt = {
-    val end = at.resize(16) + bytes
-    val full = div255(end - 1)
-    val lastLength = end - (full << 8).resize(16) + full
-    val parity = last ? ((full << 4).resize(16) + ((lastLength < 16) ? lastLength | U(16, 16 bits))) |
-      (div255(end + 15) << 4).resize(16)
-    (parity > bytes) ? U(0, 16 bits) | bytes - parity
+  // end, or with the burst ending there of all its codewords, the last one 16 or all its bytes (fewer than 17: zeros).
+  // 16 per 255 bytes (base), plus by the position s of the end in the last 255: one or two more codewords
+  def dataBytes(at: UInt, p: PreparedJob, last: Bool): UInt = {
+    val s = at.resize(9) + p.rest
+    val lastSub = (s === 0) ? U(0, 6 bits) | ((s < 16) ? s.resize(6) | ((s <= 255) ? U(16, 6 bits) |
+      ((s < 271) ? (s - 239).resize(6) | U(32, 6 bits))))
+    val sub = last ? lastSub | ((s <= 239) ? U(0, 6 bits) | ((s <= 494) ? U(16, 6 bits) | U(32, 6 bits)))
+    (p.base < sub) ? U(0, 16 bits) | p.base - sub
   }
-  def startAlloc(j: UsJob, burstFec: Bool): Unit = {
-    val bytes = j.alloc.stop - j.alloc.start + 1
-    val endBit = j.bit + (bytes << 3).resize(27)
-    val last = !(io.job.valid && io.job.payload.bit === endBit)
+  def startAlloc(p: PreparedJob, burstFec: Bool): Unit = {
+    val j = p.job
+    val last = !(next.valid && next.payload.job.bit === p.endBit)
     val at = (codewordPos === 254) ? U(0, 8 bits) | codewordPos + 1
-    encodedLeft := bytes
-    allocLeft := burstFec ? dataBytes(at, bytes, last) | bytes
-    nextBit := endBit
+    encodedLeft := p.bytes
+    allocLeft := burstFec ? dataBytes(at, p, last) | p.bytes
+    nextBit := p.endBit
     val ploamU = j.alloc.flags(10)
     ploamLeft := ploamU ? U(13, 4 bits) | U(0, 4 bits)
     dbruLeft := j.alloc.flags(8 downto 7).mux(1 -> U(2, 2 bits), 2 -> U(3, 2 bits), default -> U(0, 2 bits))
@@ -158,7 +175,7 @@ case class GtcUsFramer(gemStreams: Int = 1) extends Component {
           clear := io.ploam.valid ## burstFec ## B(0, 6 bits) // Ind: PLOAMu waiting, FEC
           fec := burstFec
           jobs.ready := True
-          startAlloc(head, burstFec)
+          startAlloc(jobs.payload, burstFec)
           state := ALLOC
         }
       }
@@ -214,7 +231,7 @@ case class GtcUsFramer(gemStreams: Int = 1) extends Component {
       when(encodedLeft === 1) {
         when(contiguous) {
           jobs.ready := True
-          startAlloc(head, fec)
+          startAlloc(jobs.payload, fec)
         } otherwise (state := IDLE)
       }
     }

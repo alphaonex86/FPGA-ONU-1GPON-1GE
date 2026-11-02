@@ -46,8 +46,9 @@ object EponGem {
       f.last := packets.last
       f
     }
-    val bytes = backlog.map(_.resize(19)).reduce(_ + _)
-    val tq = ((bytes + (bytes >> 3)) >> 1) + (packets.valid ? Mpcp.frameCost(packets.length.resize(11)) | U(0, 16 bits))
+    val bytes = RegNext(backlog.map(_.resize(19)).reduce(_ + _)) // a clock late: the REPORT is sampled later
+    val cost = RegNext(packets.valid ? Mpcp.frameCost(packets.length.resize(11)) | U(0, 16 bits))
+    val tq = ((bytes + (bytes >> 3)) >> 1) + cost
     (frames, RegNext((tq > 0xFFFF) ? U(0xFFFF, 16 bits) | tq.resize(16)))
   }
 }

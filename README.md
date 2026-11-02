@@ -116,13 +116,15 @@ on the DE25-Standard FPGA at 125 MHz: ONU 1.3K ALMs (211 MHz), OLT 2.5K ALMs
 the Port-ID, Port-ID 0xFFF the broadcast LLID; the ONU's REPORT from its queues),
 Ethernet frames cross OLT port -> ONU port and back in simulation.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
-line rates from their refclk pins (`agilex5/gts/fit.sh`). The OLT cage lane can
-switch at run time between GPON and 1.25 Gb/s (EPON OLT or 1000BASE-X module),
-each on its own refclk, by the GTS dynamic reconfiguration controller: fit and
-timing clean (`fit.sh DIR dr_lane`). In the board top the EPON OLT MAC runs on
-that profile, with the same bridge and CPU queues, its registers and the DR
-controller's on the OLT bridge slave (0x800, 0x900); the received words cross
-from each profile's rx clock; checked in simulation in both profiles.
+line rates from their refclk pins (`agilex5/gts/fit.sh`). One GTS dynamic
+reconfiguration controller switches each PON side on its own at run time between
+GPON and 1.25 Gb/s, each profile on its own refclk: the OLT cage lane (EPON OLT
+or 1000BASE-X module) and the ONU BOSA lane with its burst enable lane (EPON
+ONU). In the board top the EPON MACs run on those profiles with the same bridges
+and CPU queues, their registers on each side's bridge slave (0x800, the DR
+controller's at 0x900 on the OLT's); the OLT's received words cross from each
+profile's rx clock; the EPON ONU is loop-timed like the GPON one, by its own
+VCXO loop on the 156.25 MHz VCXO; checked in simulation in both profiles.
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane
 (2x oversampled upstream), HPS lightweight bridge to the MAC and board registers
 (GTS reset/status, SFP cage pins, module I2C; `olt_board_regs.h`, `onu_board_regs.h`) and GEM CPU
@@ -133,7 +135,7 @@ detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
 optics pins with the laser held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed, flow engine and EPON OLT included: 36.3K ALMs (77 %), 331 of 358 M20K, setup slack +0.22 ns
+HSMC card pins placed, flow engine and EPON OLT and ONU included: 39.0K ALMs (83 %), 332 of 358 M20K, setup slack +0.03 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 
 ## License

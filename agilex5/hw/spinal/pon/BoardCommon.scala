@@ -99,8 +99,8 @@ object BoardFields {
     bridge.io.cpuToLan << lan.io.tx
     wan.io.rx << bridge.ethTxCd(bridge.io.wanToCpu.stage())
     bridge.io.cpuToWan << wan.io.tx
-    lanControl.io.rx << bridge.io.lanControlToCpu
-    wanControl.io.rx << bridge.io.wanControlToCpu
+    lanControl.io.rx << bridge.ponTxCd(bridge.io.lanControlToCpu.stage())
+    wanControl.io.rx << bridge.ethTxCd(bridge.io.wanControlToCpu.stage())
     val all = Seq(lan, wan, lanControl, wanControl)
     for (q <- all) q.io.rxCut := False
     for (q <- Seq(lanControl, wanControl)) q.io.tx.ready := False
@@ -155,5 +155,18 @@ case class PonDomains(dsClk: Bool, usClk: Bool, down: Bool) {
     toggle := !toggle
     val seen = ds(RegNext(toggle) init (False))
     seen =/= ds(RegNext(seen) init (False))
+  }
+
+  /** A downstream-domain stream taken at a beat per upstream clock: each beat held in a register through an upstream
+    * clock, so a packet without gaps stays without gaps. */
+  def toUs[T <: Data](input: Stream[T]): Stream[T] = ds {
+    val output = Stream(cloneOf(input.payload))
+    val valid = RegInit(False)
+    input.ready := usBeat && (!valid || output.ready)
+    when(usBeat && output.ready)(valid := False)
+    when(input.fire)(valid := True)
+    output.valid := valid
+    output.payload := RegNextWhen(input.payload, input.fire)
+    output
   }
 }
