@@ -99,6 +99,14 @@ OLT or the ONU bridge (`eth_board_regs.h` BRIDGE); a frame from the lane reaches
 the OLT MAC's downstream GEM, or the ONU MAC's upstream data stream, in
 simulation; in the closed OLT <-> ONU loop, Ethernet frames cross both bridges
 end to end each way, upstream in two T-CONTs granted by our OLT's DBA.
+EPON MAC in simulation (`common/hw/spinal/pon/epon/`): clause 36 PCS (8b/10b,
+comma sync at any bit slip) with the clause 65 LLID preamble and its CRC-8;
+ONU MPCP (discovery with a random offset in the window, REGISTER_REQ/ACK,
+timestamp sync and drift, GATE grants timed to the TQ with laser on/off and
+sync time, REPORT, deregistration) and OLT MPCP (discovery windows, LLID
+allocation, RTT per ONU, IPACT grants from the REPORTs within min/max, CPU and
+timeout deregistration), checked together over a simulated splitter with two
+ONUs at different distances: no upstream collision, data per LLID each way.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane

@@ -181,7 +181,8 @@ case class OnuMpcp() extends Component {
         head.ready := True
         grant := head.payload
         val window = (head.length.resize(17) - io.config.laserOn - io.config.laserOff - discoverySync - pduCost).asSInt
-        val offset = (window.msb ? U(0, 17 bits) | window.asUInt) * lfsr.asUInt >> 16
+        val random = lfsr ^ io.config.mac(15 downto 0) ^ io.config.mac(31 downto 16) ^ io.config.mac(47 downto 32)
+        val offset = (window.msb ? U(0, 17 bits) | window.asUInt) * random.asUInt >> 16
         val start = head.start + (head.discovery ? offset.resize(32) | U(0, 32 bits))
         startAt := start
         dataAt := start + io.config.laserOn + (head.discovery ? discoverySync | syncTime)
