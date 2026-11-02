@@ -80,8 +80,9 @@ L2 bridge GEM <-> Ethernet (`common/hw/spinal/pon/GemEthBridge.scala`,
 whole frames with a good FCS), the outer VLAN ID or the untagged default picks
 the Port-ID towards the PON, directly or by PCP (802.1p mapper), and the
 Port-ID its T-CONT queue (4 on the ONU, each dropping when full without
-blocking the others), store-and-forward queues across the four clocks, drops
-counted. On the board the Ethernet port goes to the CPU queues or to the
+blocking the others); VLAN treatments each way (G.988 ME 171 subset: push,
+pop, translate, PCP set or kept; `VlanRewrite.scala`), the FCS computed after
+the rewrite; store-and-forward queues across the four clocks, drops counted. On the board the Ethernet port goes to the CPU queues or to the
 OLT or the ONU bridge (`eth_board_regs.h` BRIDGE); a frame from the lane reaches
 the OLT MAC's downstream GEM, or the ONU MAC's upstream data stream, in
 simulation; in the closed OLT <-> ONU loop, Ethernet frames cross both bridges

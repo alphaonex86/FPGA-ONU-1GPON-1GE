@@ -17,6 +17,7 @@ object OnuBoardTest extends App {
   val IRQ_ENABLE = BOARD + 0x1C
   val VCXO_CTRL = BOARD + 0x20
   val QUEUES_STATUS = 0x200 + 0x14 // GemCpuQueues STATUS: txFree
+  val BRIDGE_VLAN_MAP = 0x304
   val BRIDGE_UNTAGGED = 0x308
 
   SimConfig.compile { val c = OnuBoardCore(); c.pon.mac.io.dataTx.simPublic(); c }.doSim { dut =>
@@ -67,6 +68,8 @@ object OnuBoardTest extends App {
     io.ethDown #= false
     mgmt.waitSampling(20)
     check(write(BRIDGE_UNTAGGED, 0x200 | (1 << 12)) == 0, "bridge: untagged frames to Port-ID 0x200")
+    check(write(BRIDGE_VLAN_MAP, 7 | (0x207 << 12) | (1 << 24)) == 0 && write(BRIDGE_VLAN_MAP, 8 | (0x208 << 12)) == 0,
+      "bridge table writes back to back once the Ethernet lane is up: answered")
     for (i <- 0 until 100) {
       waitUntil(io.ethRxClk.toBoolean); waitUntil(!io.ethRxClk.toBoolean)
       io.eth.rx.valid #= true

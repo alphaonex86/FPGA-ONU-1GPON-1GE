@@ -10,7 +10,8 @@ import pon.gpon.GtcDsTest.check
 
 /** GemEthBridge, four clocks: PON -> Ethernet by Port-ID action (fragmented frames, bad FCS, CPU, unknown port, cut),
   * Ethernet -> PON by VLAN ID (802.1Q, 802.1ad, untagged, unmapped, bad frame) and PCP mapper, FCS checked, stripped,
-  * appended; two queues by Port-ID, a full one dropping while the other flows. */
+  * appended; two queues by Port-ID, a full one dropping while the other flows; VLAN treatments each way (translate,
+  * pop, S-tag push); table writes back to back across the clocks. */
 object GemEthBridgeTest extends App {
   val PORT_ACTION = 0x00
   val VLAN_MAP = 0x04
@@ -18,6 +19,12 @@ object GemEthBridgeTest extends App {
   val DROPS = 0x0C
   val PCP_MAP = 0x10
   val PORT_QUEUE = 0x14
+  val US_TREATMENT = 0x18
+  val DS_VLAN = 0x1C
+  val DS_TREATMENT = 0x20
+  def treatment(index: Int, remove: Boolean, add: Boolean, pcpCopy: Boolean, sTag: Boolean, tci: Int): Int =
+    index | (remove.compare(false) << 4) | (add.compare(false) << 5) | (pcpCopy.compare(false) << 6) | (sTag.compare(false) << 7) | (tci << 8)
+  def rewritten(f: Seq[Int], remove: Boolean, tag: Seq[Int]): Seq[Int] = f.take(12) ++ tag ++ f.drop(if (remove) 16 else 12)
   case class Bench() extends Component {
     val ponRx, ponTx, ethTx, ethRx = ClockDomain.external("", withReset = false)
     def domain(cd: ClockDomain) = cd.copy(reset = ClockDomain.current.readResetWire, config = ClockDomain.current.config)
@@ -58,17 +65,26 @@ object GemEthBridgeTest extends App {
     apb.write(PCP_MAP, 0x205 | (5 << 12) | (3 << 15))
     apb.write(PCP_MAP, 0x206 | (0 << 12) | (3 << 15))
     apb.write(PORT_QUEUE, 0x205 | (1 << 12))
+    apb.write(US_TREATMENT, treatment(1, remove = true, add = true, pcpCopy = true, sTag = false, tci = 30)) // translate
+    apb.write(US_TREATMENT, treatment(2, remove = true, add = false, pcpCopy = false, sTag = false, tci = 0)) // pop
+    apb.write(US_TREATMENT, treatment(3, remove = false, add = true, pcpCopy = false, sTag = true, tci = (6 << 13) | 500))
+    for (k <- 1 to 3) apb.write(VLAN_MAP, (19 + k) | ((0x21F + k) << 12) | (1 << 24) | (k << 26))
+    apb.write(DS_TREATMENT, treatment(1, remove = true, add = true, pcpCopy = true, sTag = false, tci = 20)) // translate back
+    apb.write(DS_TREATMENT, treatment(2, remove = true, add = false, pcpCopy = false, sTag = false, tci = 0)) // pop
+    apb.write(DS_VLAN, 30 | (1 << 12))
+    apb.write(DS_VLAN, 40 | (2 << 12))
     mgmt.waitSampling(50)
 
     val ethOut = mutable.ArrayBuffer[Seq[Int]]()
     val ponOut = Seq.fill(2)(mutable.ArrayBuffer[(Int, Int, Seq[Int])]()) // per queue
     val cpuOut = mutable.ArrayBuffer[(Int, Int)]()
     var cur = mutable.ArrayBuffer[Int]()
+    var ethGaps = 0
     ethTx.onSamplings {
       if (io.eth.tx.valid.toBoolean && io.eth.tx.ready.toBoolean) {
         cur += io.eth.tx.fragment.toInt
         if (io.eth.tx.last.toBoolean) { ethOut += cur.toSeq; cur = mutable.ArrayBuffer[Int]() }
-      }
+      } else if (cur.nonEmpty) ethGaps += 1
     }
     val pcur = Seq.fill(2)(mutable.ArrayBuffer[Int]())
     var gaps = 0
@@ -112,8 +128,15 @@ object GemEthBridgeTest extends App {
     gem(0x300, Seq(withFcs(frame(70))))
     gem(0x100, Seq(withFcs(frame(90)).take(50)), cutAfter = true)
     gem(0x100, Seq(withFcs(frame(60)).take(40))) // runt
+    val ds30 = frame(100, Some((0x8100, (2 << 13) | 30)))
+    val ds40 = frame(100, Some((0x8100, 40)))
+    gem(0x100, Seq(withFcs(ds30)))
+    gem(0x100, Seq(withFcs(ds40)))
     mgmt.waitSampling(3000)
-    check(ethOut == Seq(good1.dropRight(4), good2.dropRight(4)), s"PON -> Ethernet: ${ethOut.length} frames, fragments joined, FCS stripped")
+    check(ethOut.take(2) == Seq(good1.dropRight(4), good2.dropRight(4)), s"PON -> Ethernet: ${ethOut.length} frames, fragments joined, FCS stripped")
+    check(ethOut.drop(2) == Seq(rewritten(ds30, remove = true, Seq(0x81, 0x00, 2 << 5, 20)), rewritten(ds40, remove = true, Nil)),
+      "PON -> Ethernet VLAN treatments by VID: 30 -> 20 PCP kept, 40 popped, others transparent")
+    check(ethGaps == 0, "no gap inside a frame to the Ethernet MAC")
     check(cpuOut.toSeq == toCpu.map((0x101, _)) ++ toCpu.map((0x0FE, _)), "CPU action and the OMCI Port-ID: to the CPU stream")
 
     // Ethernet -> PON
@@ -136,7 +159,15 @@ object GemEthBridgeTest extends App {
     val pcp0 = frame(100, Some((0x8100, 50)))
     send(q); send(ad); send(untagged); send(frame(80, Some((0x8100, 7)))); send(frame(80, Some((0x8100, 9)))); send(frame(90), bad = true)
     send(pcp5); send(pcp0)
+    val us20 = frame(100, Some((0x8100, (4 << 13) | 20)))
+    val us21 = frame(100, Some((0x8100, 21)))
+    val us22 = frame(100, Some((0x8100, 22)))
+    send(us20); send(us21); send(us22)
     mgmt.waitSampling(3000)
+    check(ponOut(0).drop(4).toSeq == Seq((0x220, 104, withFcs(rewritten(us20, remove = true, Seq(0x81, 0x00, 4 << 5, 30)))),
+      (0x221, 100, withFcs(rewritten(us21, remove = true, Nil))), (0x222, 108, withFcs(rewritten(us22, remove = false, Seq(0x88, 0xA8, 0xC1, 0xF4))))),
+      "Ethernet -> PON VLAN treatments: VID 20 -> 30 PCP kept, 21 popped, 22 S-tag 500 pushed, FCS of the rewritten frame")
+    ponOut(0).remove(4, 3)
     check(ponOut(0).toSeq == Seq((0x200, 204, withFcs(q)), (0x200, 68, withFcs(ad)), (0x201, 1518, withFcs(untagged)),
       (0x206, 104, withFcs(pcp0))) && gaps == 0, s"Ethernet -> PON: ${ponOut(0).length} packets, Port-ID by VLAN or untagged default, FCS appended, no gap")
     check(ponOut(1).toSeq == Seq((0x205, 104, withFcs(pcp5))), "mapper: Port-ID by PCP, Port-ID 0x205 in queue 1")
