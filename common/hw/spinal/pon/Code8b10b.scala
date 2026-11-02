@@ -49,8 +49,10 @@ case class Encoder8b10b() extends Component {
   val io = new Bundle {
     val input = in(Symbol8b10b())
     val code = out Bits (10 bits)
+    val rd = out Bool () // running disparity before io.input (true = RD+)
   }
   val rd = RegInit(False)
+  io.rd := rd
   val table = Vec((0 until 1024).map { i =>
     val (code, rdAfter) = Code8b10b.encode(i & 0xFF, (i >> 8 & 1) == 1, (i >> 9) == 1).getOrElse(Code8b10b.encode(0xFE, true, (i >> 9) == 1).get)
     B((if (rdAfter) 1 << 10 else 0) | code, 11 bits)
