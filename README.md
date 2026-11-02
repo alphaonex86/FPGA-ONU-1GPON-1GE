@@ -135,8 +135,14 @@ detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
 optics pins with the laser held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed, flow engine and EPON OLT and ONU included: 39.0K ALMs (83 %), 332 of 358 M20K, setup slack +0.03 ns
+HSMC card pins placed, flow engine and EPON OLT and ONU included: 39.1K ALMs (83 %), 332 of 358 M20K, setup slack +0.01 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
+With the HPS: `de25-standard/ghrd/` brings Terasic's DE25-Standard reference design (GHRD, not in this
+repository: `GHRD=<its folder> agilex5/gts/fit.sh <folder outside the repository> ghrd`) to Quartus 26.1, removes
+its JTAG debug masters and shrinks its on-chip RAM to make room, and wires PonBoard in: its three register
+windows on the HPS lightweight bridge (+0x100000 OLT, +0x101000 ONU, +0x102000 Ethernet), its 16 interrupts on
+f2h_irq1 bits 0-15, its management clock the GHRD's 100 MHz; fits with 41.7K ALMs (89 %), 336 of 358 M20K,
+setup slack +0.001 ns. The HPS DDR settings were upgraded by Quartus: to check on the board.
 
 ## License
 

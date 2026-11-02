@@ -113,7 +113,7 @@ case class GemCpuQueues(txDomain: ClockDomain, rxDomain: ClockDomain, txWords: I
     next.allocId := cur.allocId
     next.portId := cur.portId
     next.bytes := cur.bytes + take.asUInt
-    next.words := cur.words + (flush && rxData.io.push.ready).asUInt
+    next.words := (flush && rxData.io.push.ready) ? (cur.words + 1) | cur.words // ready (async FIFO full) only selects
     next.truncated := cur.truncated || flush && !rxData.io.push.ready
     next.end := last && io.rx.gem.pti(0)
     next.cut := !last
