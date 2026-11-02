@@ -40,3 +40,6 @@ gen olt duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_
 gen onu duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON $SWAP
 gen ben_tx duplex_mode=tx pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON
 gen eth duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH $SWAP
+# The OLT cage lane's second profile (EPON OLT or 1000BASE-X module), switched with olt by the DR controller (dr_lane)
+gen olt_1g25 duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH enable_port_rx_set_locktoref=1 $SWAP
+deploy intel_dr_gts dr_ctrl DR_XCVR_CHANNELS=1 DR_PROFILES=2 DR_CSR_CLK_MHZ=100.0 # last: fit.sh's up-to-date mark
