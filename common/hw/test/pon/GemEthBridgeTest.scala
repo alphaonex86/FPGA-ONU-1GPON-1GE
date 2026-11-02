@@ -39,6 +39,7 @@ object GemEthBridgeTest extends App {
   val EGRESS_WRITE = 0x54
   val FLOW_HIT_QUERY = 0x58
   val FLOW_HIT = 0x5C
+  val FLOW_DST_1 = 0x60 // _2, _3 follow, then FLOW_SRC_1-3
   import FlowRewriteTest.{be, l4Sum, sum, words}
   /** An IPv4 TCP frame with valid checksums. */
   def ipFrame(macs: (Long, Long), tags: Seq[Int], session: Option[Int], src: Long, dst: Long, sport: Int, dport: Int,
@@ -230,7 +231,7 @@ object GemEthBridgeTest extends App {
         (k.tagged.compare(false) << 30))
       apb.write(FLOW_NAT_IP, ip)
       apb.write(FLOW_NAT, port | (egress << 16) | (natSrc.compare(false) << 24))
-      apb.write(FLOW_WRITE, (FlowTable.model(k.bits) & 1023) | (1 << 17) | (if (ponToEth) 1L << 31 else 0L))
+      apb.write(FLOW_WRITE, k.bucket(10) | (1 << 17) | (if (ponToEth) 1L << 31 else 0L))
     }
     def egress(ponToEth: Boolean, index: Int, da: Long, sa: Long, vlan: Int, portId: Int, queue: Int, session: Option[Int]): Unit = {
       apb.write(EGRESS_DA, da & 0xFFFFFFFFL)
@@ -315,7 +316,7 @@ object GemEthBridgeTest extends App {
       "CPU frames: to Ethernet, and to the PON in the queue of their Port-ID (0x205: queue 1)")
 
     def hitOf(ponToEth: Boolean, k: FlowTableTest.Key, way: Int): Boolean = {
-      apb.write(FLOW_HIT_QUERY, (FlowTable.model(k.bits) & 1023) | (way << 16) | (if (ponToEth) 1L << 31 else 0L))
+      apb.write(FLOW_HIT_QUERY, k.bucket(10) | (way << 16) | (if (ponToEth) 1L << 31 else 0L))
       mgmt.waitSampling(30)
       val r = apb.read(FLOW_HIT).toLong
       assert((r >> 31) == 1, "FLOW_HIT not done")
@@ -326,6 +327,35 @@ object GemEthBridgeTest extends App {
     val answers = Seq(hitOf(false, usKey, 0), hitOf(false, usKey, 0), hitOf(true, dsKey, 0), hitOf(true, dsKey, 0),
       hitOf(true, dsKey, 1))
     check(answers == Seq(true, false, true, false, false), s"flow hit bits: set by the traffic, cleared by a query $answers")
+
+    // IPv6, routed: LAN 2001:db8:1::10 port 5000 -> 2001:4860::8888 port 443 into PPPoE session 0x1234 in VLAN 35
+    val tcp = be(5000, 2) ++ be(443, 2) ++ Seq.fill(16)(rnd.nextInt(256)) ++ payload // unchanged: no NAT
+    def ip6Frame(macs: (Long, Long), tags: Seq[Int], session: Option[Int], src: BigInt, dst: BigInt, hop: Int): Seq[Int] = {
+      val ip = Seq(0x60, 0, 0, 0) ++ be(tcp.length, 2) ++ Seq(6, hop) ++ (0 until 32).map(k =>
+        ((if (k < 16) src else dst) >> (8 * (15 - k % 16)) & 0xFF).toInt)
+      be(macs._1, 6) ++ be(macs._2, 6) ++ tags ++ (session match {
+        case Some(id) => Seq(0x88, 0x64, 0x11, 0x00) ++ be(id, 2) ++ be(ip.length + tcp.length + 2, 2) ++ Seq(0x00, 0x57)
+        case None => Seq(0x86, 0xDD)
+      }) ++ ip ++ tcp
+    }
+    val (host6, server6) = (BigInt("20010db8000100000000000000000010", 16), BigInt("20014860000000000000000000008888", 16))
+    val key6 = FlowTableTest.Key(443, 5000, server6, host6, false, 0, false, 0, false, addressBits = 128)
+    for ((reg, v) <- Seq(FLOW_PORTS -> (443 | (5000L << 16)), FLOW_DST -> (server6 & 0xFFFFFFFFL).toLong,
+           FLOW_SRC -> (host6 & 0xFFFFFFFFL).toLong, FLOW_L2 -> 0L, FLOW_NAT_IP -> 0L, FLOW_NAT -> (3L << 16)) ++
+         (1 to 3).map(k => (FLOW_DST_1 + 4 * (k - 1)) -> (server6 >> (32 * k) & 0xFFFFFFFFL).toLong) ++
+         (1 to 3).map(k => (FLOW_DST_1 + 12 + 4 * (k - 1)) -> (host6 >> (32 * k) & 0xFFFFFFFFL).toLong))
+      apb.write(reg, v)
+    apb.write(FLOW_WRITE, key6.bucket(8) | (1 << 17) | (1L << 30))
+    mgmt.waitSampling(50)
+    val us6 = ip6Frame((lan, host), Nil, None, host6, server6, 64)
+    val us6Out = ip6Frame((gw, wan), vlan35, Some(0x1234), host6, server6, 63)
+    val ponBefore3 = ponOut(1).length
+    send(us6)
+    mgmt.waitSampling(2000)
+    check(ponOut(1).drop(ponBefore3).toSeq == Seq((0x230, us6Out.length + 4, withFcs(us6Out))),
+      "IPv6 flow, Ethernet -> PON: routed (hop limit), PPPoE (0x0057) and VLAN 35 added, its Port-ID")
+    def hit6(): Long = { apb.write(FLOW_HIT_QUERY, key6.bucket(8) | (1L << 30)); mgmt.waitSampling(30); apb.read(FLOW_HIT).toLong }
+    check(Seq(hit6(), hit6()) == Seq(0x80000001L, 0x80000000L), "IPv6 flow hit bit: set, then cleared")
   }
   println("PASS GemEthBridgeTest")
 }

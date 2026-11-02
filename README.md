@@ -84,12 +84,13 @@ blocking the others); VLAN treatments each way (G.988 ME 171 subset: push,
 pop, translate, PCP set or kept; `VlanRewrite.scala`), the FCS computed after
 the rewrite; store-and-forward queues across the four clocks, drops counted.
 Flow offload in the bridge, each way (`FlowClassifier.scala`, mtk_ppe model):
-frame parser (0-2 VLAN tags, PPPoE session, IPv4 TCP/UDP), flow cache keyed by
-the 5-tuple, outer VID and PPPoE session (2-way hash, 2K flows per direction in
-block RAM, written by the CPU), 64 egress entries (next hop and own MAC, PPPoE
+frame parser (0-2 VLAN tags, PPPoE session, IPv4/IPv6 TCP/UDP), flow caches
+keyed by the 5-tuple, outer VID and PPPoE session (2-way hash in block RAM,
+written by the CPU, a hit bit per flow for the driver's stats: IPv4 2K flows,
+IPv6 512, routed only, per direction), 64 egress entries (next hop and own MAC, PPPoE
 session, VLAN treatment, Port-ID and queue); a hit is rewritten on its way out
-(`FlowRewrite.scala`: MACs, PPPoE add/strip, NAPT, TTL, incremental IP and
-TCP/UDP checksums), a miss follows the L2 rules or, in flows mode (router: per
+(`FlowRewrite.scala`: MACs, PPPoE add/strip, NAPT, TTL or hop limit,
+incremental IP and TCP/UDP checksums), a miss follows the L2 rules or, in flows mode (router: per
 Port-ID or VLAN entry), goes to the CPU; on each board side the bridge's LAN and
 WAN frame queues carry the misses to the CPU and the CPU's own frames out. On the board the Ethernet port goes to the CPU queues or to the
 OLT or the ONU bridge (`eth_board_regs.h` BRIDGE); a frame from the lane reaches

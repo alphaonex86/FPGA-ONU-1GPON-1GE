@@ -7,20 +7,22 @@ import scala.collection.mutable
 import pon.gpon.GtcDsTest.check
 
 /** FlowTable against a model: the CPU writes random flows in their hashed bucket (both ways, overwrites, an entry
-  * invalidated), lookups of written and unknown keys every clock answer hit and action 5 clocks later. */
+  * invalidated), lookups of written and unknown keys every clock answer hit and action 5 clocks later; IPv4 and IPv6
+  * keys. */
 object FlowTableTest extends App {
-  case class Key(dport: Int, sport: Int, dst: Long, src: Long, udp: Boolean, session: Int, pppoe: Boolean, vid: Int,
-                 tagged: Boolean) {
-    def bits: BigInt = Seq[(BigInt, Int)]((dport, 16), (sport, 16), (dst, 32), (src, 32), (if (udp) 1 else 0, 1),
-      (session, 16), (if (pppoe) 1 else 0, 1), (vid, 12), (if (tagged) 1 else 0, 1))
+  case class Key(dport: Int, sport: Int, dst: BigInt, src: BigInt, udp: Boolean, session: Int, pppoe: Boolean, vid: Int,
+                 tagged: Boolean, addressBits: Int = 32) {
+    def bits: BigInt = Seq[(BigInt, Int)]((dport, 16), (sport, 16), (dst, addressBits), (src, addressBits),
+      (if (udp) 1 else 0, 1), (session, 16), (if (pppoe) 1 else 0, 1), (vid, 12), (if (tagged) 1 else 0, 1))
       .foldRight(BigInt(0)) { case ((v, w), acc) => (acc << w) | v }
+    def bucket(bucketBits: Int): Int = FlowTable.model(bits, 63 + 2 * addressBits) & ((1 << bucketBits) - 1)
   }
   case class Action(natSrc: Boolean, ip: Long, port: Int, egress: Int)
   val rnd = new scala.util.Random(5)
-  def key(): Key = {
+  def key(addressBits: Int): Key = {
     val pppoe = rnd.nextBoolean(); val tagged = rnd.nextBoolean()
-    Key(rnd.nextInt(65536), rnd.nextInt(65536), rnd.nextLong() & 0xFFFFFFFFL, rnd.nextLong() & 0xFFFFFFFFL,
-      rnd.nextBoolean(), if (pppoe) rnd.nextInt(65536) else 0, pppoe, if (tagged) rnd.nextInt(4096) else 0, tagged)
+    Key(rnd.nextInt(65536), rnd.nextInt(65536), BigInt(addressBits, rnd), BigInt(addressBits, rnd), rnd.nextBoolean(),
+      if (pppoe) rnd.nextInt(65536) else 0, pppoe, if (tagged) rnd.nextInt(4096) else 0, tagged, addressBits)
   }
   def action() = Action(rnd.nextBoolean(), rnd.nextLong() & 0xFFFFFFFFL, rnd.nextInt(65536), rnd.nextInt(64))
   def drive(k: FlowKey, v: Key): Unit = {
@@ -28,9 +30,10 @@ object FlowTableTest extends App {
     k.session #= v.session; k.pppoe #= v.pppoe; k.vid #= v.vid; k.tagged #= v.tagged
   }
   val bucketBits = 6 // small: many collisions
-  def bucketOf(k: Key) = FlowTable.model(k.bits) & ((1 << bucketBits) - 1)
+  def bucketOf(k: Key) = k.bucket(bucketBits)
 
-  SimConfig.compile(FlowTable(bucketBits)).doSim { dut =>
+  for (addressBits <- Seq(32, 128)) SimConfig.compile(FlowTable(bucketBits, addressBits)).doSim { dut =>
+    def key(): Key = FlowTableTest.key(addressBits)
     val io = dut.io
     val cd = dut.clockDomain
     cd.forkStimulus(10)
@@ -75,7 +78,8 @@ object FlowTableTest extends App {
     }
     io.lookup.valid #= false
     cd.waitSampling(8)
-    check(expected.isEmpty && wrong.isEmpty && hits > 100, s"lookups: $hits hits, misses and actions as the model ${wrong.take(2)}")
+    check(expected.isEmpty && wrong.isEmpty && hits > 100, s"IPv${if (addressBits == 32) 4 else 6} lookups: $hits hits, " +
+      s"misses and actions as the model ${wrong.take(2)}")
   }
   println("PASS FlowTableTest")
 }

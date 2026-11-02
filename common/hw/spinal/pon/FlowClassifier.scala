@@ -31,23 +31,28 @@ case class FlowDecision() extends Bundle {
 object FlowClassifier { val latency = 11 }
 
 /** The flow engine of one direction at its input: parses each frame, looks its flow up at its end (offloadable,
-  * TTL > 1), reads the flow's egress (64 entries) and builds its rewrite job with the updated checksums; the decision
+  * TTL > 1; IPv4 and IPv6 tables, IPv6 routed only), reads the flow's egress (64 entries) and builds its rewrite job
+  * with the updated checksums; the decision
   * comes FlowClassifier.latency clocks after the frame's last byte, so a frame may follow right after another.
-  * A hit sets its entry's hit bit; a hit query (bucket ## way) answers the bit two clocks later and clears it (a hit
-  * at that clock wins, so the bit may stay set). */
-case class FlowClassifier(bucketBits: Int) extends Component {
+  * A hit sets its entry's hit bit; a hit query (IPv6 ## bucket ## way) answers the bit two clocks later and clears it
+  * (a hit at that clock wins, so the bit may stay set). */
+case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
+  assert(bucketBits6 <= bucketBits)
   val io = new Bundle {
     val input = slave Flow (Fragment(Bits(8 bits)))
     val decision = master Flow (FlowDecision())
     val flowWrite = slave Flow (FlowWrite(bucketBits))
+    val flowWrite6 = slave Flow (FlowWrite(bucketBits6, 128))
     val egressWrite = slave Flow (EgressWrite())
-    val hitQuery = slave Flow (UInt(bucketBits + 1 bits))
+    val hitQuery = slave Flow (UInt(bucketBits + 2 bits))
     val hitAnswer = master Flow (Bool())
   }
   val parser = FrameParser()
   parser.io.input << io.input
   val table = FlowTable(bucketBits)
   table.io.write << io.flowWrite
+  val table6 = FlowTable(bucketBits6, 128)
+  table6.io.write << io.flowWrite6
   val egresses = Mem(FlowEgress(), 64)
   egresses.write(io.egressWrite.index, io.egressWrite.egress, io.egressWrite.valid)
 
@@ -55,26 +60,34 @@ case class FlowClassifier(bucketBits: Int) extends Component {
   val p = parser.io.header
   val h = RegNextWhen(p, ended)
   val tagged = p.vlans =/= 0
-  table.io.lookup.valid := ended && p.offloadable && p.ttl > 1
-  val key = table.io.lookup.payload
-  key.dport := p.dport; key.sport := p.sport; key.dst := p.dst; key.src := p.src; key.udp := p.proto === 17
-  key.session := p.pppoe ? p.session | U(0); key.pppoe := p.pppoe
-  key.vid := tagged ? p.outerVid | U(0); key.tagged := tagged
+  for ((t, ip) <- Seq(table -> p.ipv4, table6 -> p.ipv6)) {
+    t.io.lookup.valid := ended && p.offloadable && ip && p.ttl > 1
+    val key = t.io.lookup.payload
+    key.dport := p.dport; key.sport := p.sport; key.dst := p.dst.resized; key.src := p.src.resized
+    key.udp := p.proto === 17; key.session := p.pppoe ? p.session | U(0); key.pppoe := p.pppoe
+    key.vid := tagged ? p.outerVid | U(0); key.tagged := tagged
+  }
 
   val looked = Delay(ended, 5, init = False) // with the table's result
-  val result = table.io.result
-  val hit = RegNextWhen(result.valid && result.hit, looked)
-  val action = RegNextWhen(result.action, looked)
-  val e = RegNext(egresses.readSync(result.action.egress, looked)) // registered RAM output
-  val hits = Mem(Bool(), 2 << bucketBits) initBigInt (Seq.fill(2 << bucketBits)(BigInt(0)))
-  val setHit = looked && result.valid && result.hit
+  val (result, result6) = (table.io.result, table6.io.result)
+  val found = result.valid && result.hit || result6.valid && result6.hit
+  val hit = RegNextWhen(found, looked)
+  val foundAction = result6.valid ? result6.action | result.action
+  val action = RegNextWhen(foundAction, looked)
+  val e = RegNext(egresses.readSync(foundAction.egress, looked)) // registered RAM output
   val query = RegNext(io.hitQuery) init (io.hitQuery.getZero)
+  val answers = for ((r, bits, v6) <- Seq((result, bucketBits, false), (result6, bucketBits6, true))) yield {
+    val hits = Mem(Bool(), 2 << bits) initBigInt (Seq.fill(2 << bits)(BigInt(0)))
+    val setHit = looked && r.valid && r.hit
+    val mine = query.valid && query.payload.msb === Bool(v6)
+    hits.write(setHit ? r.index | query.payload.resize(bits + 1), setHit, setHit || mine)
+    hits.readSync(io.hitQuery.payload.resize(bits + 1), io.hitQuery.valid)
+  }
   io.hitAnswer.valid := RegNext(query.valid) init (False)
-  io.hitAnswer.payload := RegNext(hits.readSync(io.hitQuery.payload, io.hitQuery.valid))
-  hits.write(setHit ? result.index | query.payload, setHit, setHit || query.valid)
+  io.hitAnswer.payload := RegNext(query.payload.msb ? answers(1) | answers(0))
   // the job from registers held to the decision; the checksums 3 clocks after e
   val udp = h.proto === 17
-  val oldIp = action.natSrc ? h.src | h.dst
+  val oldIp = action.natSrc ? h.src(31 downto 0) | h.dst(31 downto 0)
   val oldPort = (action.natSrc ? h.sport | h.dport).asBits
   def halves(v: Bits) = Seq(v(31 downto 16), v(15 downto 0))
   val ttlProto = h.ttl.asBits ## h.proto.asBits
@@ -104,5 +117,6 @@ case class FlowClassifier(bucketBits: Int) extends Component {
   j.port := action.port
   j.udp := udp
   j.ipChecksum := ipChecksum
+  j.ipv6 := h.ipv6
   j.l4Checksum := noUdpChecksum ? B(0, 16 bits) | ((udp && l4Updated === 0) ? B"16'xFFFF" | l4Updated)
 }

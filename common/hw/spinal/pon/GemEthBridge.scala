@@ -44,7 +44,7 @@ case class EthFrames() extends Bundle with IMasterSlave {
   * reset while either side is down. cpuPort (the OMCI Port-ID) always takes the CPU action. */
 case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: ClockDomain, ethTxCd: ClockDomain,
                         ethRxCd: ClockDomain, defaultAction: Int, ponQueues: Int = 1, queueBytes: Int = 16384,
-                        frames: Int = 64, flowBucketBits: Int = 10) extends Component {
+                        frames: Int = 64, flowBucketBits: Int = 10, flowBucketBits6: Int = 8) extends Component {
   ponQueueCd.setSynchronousWith(ponRxCd)
   assert(ponQueues <= 4, "flow egress queues have 2 bits")
   val io = new Bundle {
@@ -143,7 +143,9 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   FLOW_WRITE.field(UInt(16 bits), AccessType.WO, 0, s"bucket, 0-${(1 << flowBucketBits) - 1}")(SymbolName("bucket"))
   FLOW_WRITE.field(Bool(), AccessType.WO, 0, "way")(SymbolName("way"))
   FLOW_WRITE.field(Bool(), AccessType.WO, 0, "valid, else the way is emptied")(SymbolName("valid"))
-  FLOW_WRITE.reserved(13 bits)
+  FLOW_WRITE.reserved(12 bits)
+  FLOW_WRITE.field(Bool(), AccessType.WO, 0, s"IPv6 table (buckets 0-${(1 << flowBucketBits6) - 1}, key 319 bits, " +
+    "FLOW_DST/SRC bits 31-0 then _1-_3, no NAT)")(SymbolName("ipv6"))
   FLOW_WRITE.field(Bool(), AccessType.WO, 0, "direction: 0 Ethernet -> PON, 1 PON -> Ethernet")(SymbolName("ponToEth"))
   val EGRESS_DA = busif.newReg("Flow egress, staged for EGRESS_WRITE: next hop MAC bits 31-0")
   val egressDaLow = staged(EGRESS_DA, Bits(32 bits), "da", "MAC bits 31-0")
@@ -168,12 +170,19 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   val FLOW_HIT_QUERY = busif.newReg("Write: read and clear a flow way's hit bit, answered in FLOW_HIT")
   FLOW_HIT_QUERY.field(UInt(16 bits), AccessType.WO, 0, "bucket")(SymbolName("bucket"))
   FLOW_HIT_QUERY.field(Bool(), AccessType.WO, 0, "way")(SymbolName("way"))
-  FLOW_HIT_QUERY.reserved(14 bits)
+  FLOW_HIT_QUERY.reserved(13 bits)
+  FLOW_HIT_QUERY.field(Bool(), AccessType.WO, 0, "IPv6 table")(SymbolName("ipv6"))
   FLOW_HIT_QUERY.field(Bool(), AccessType.WO, 0, "direction: 0 Ethernet -> PON, 1 PON -> Ethernet")(SymbolName("ponToEth"))
   val FLOW_HIT = busif.newReg("The last FLOW_HIT_QUERY's answer")
   val hitAnswer = FLOW_HIT.field(Bool(), AccessType.RO, 0, "hit: a frame took the flow since the previous query")(SymbolName("hit"))
   FLOW_HIT.reserved(30 bits)
   val hitDone = FLOW_HIT.field(Bool(), AccessType.RO, 0, "done: the answer is there")(SymbolName("done"))
+  def addressHigh(name: String, doc: String): Bits = (1 to 3).map { k =>
+    val reg = busif.newReg(s"Flow key, IPv6: $doc bits ${32 * k + 31}-${32 * k}")(SymbolName(s"${name}_$k"))
+    staged(reg, Bits(32 bits), "ip", "address")
+  }.reduce((low, high) => high ## low)
+  val flowDstHigh = addressHigh("FLOW_DST", "destination")
+  val flowSrcHigh = addressHigh("FLOW_SRC", "source")
   /** The register's writes into the table's domain, one in flight (busy); the sending side resets with the table's
     * domain, so a domain going down does not hold the bus. */
   val busies = scala.collection.mutable.ArrayBuffer[Bool]()
@@ -206,6 +215,14 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   flow.entry.action.ip := flowIp
   flow.entry.action.port := flowPort
   flow.entry.action.egress := flowEgress
+  val flow6 = FlowWrite(flowBucketBits6, 128)
+  flow6.bucket := flow.bucket.resized
+  flow6.way := flow.way
+  flow6.entry.valid := flow.entry.valid
+  flow6.entry.action := flow.entry.action
+  val key6 = flow6.entry.key
+  key6.dport := flowDport; key6.sport := flowSport; key6.dst := flowDstHigh ## flowDst; key6.src := flowSrcHigh ## flowSrc
+  key6.udp := flowUdp; key6.session := flowSession; key6.pppoe := flowPppoe; key6.vid := flowVid; key6.tagged := flowTagged
   val egress = EgressWrite()
   egress.index := busif.writeData(5 downto 0).asUInt
   egress.egress.da := egressDaHigh ## egressDaLow
@@ -215,17 +232,16 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   egress.egress.vlan := egressVlan
   egress.egress.portId := egressPortId
   egress.egress.queue := egressQueue
-  def flowWrites(ponToEth: Boolean, cd: ClockDomain) = {
+  /** The table writes and hit queries of one direction's classifier. */
+  def connectFlows(flows: FlowClassifier, ponToEth: Boolean, cd: ClockDomain): Unit = {
     val mine = busif.writeData(31) === Bool(ponToEth)
-    (tableWrite(FLOW_WRITE.hitDoWrite && mine, flow, cd), tableWrite(EGRESS_WRITE.hitDoWrite && mine, egress, cd))
+    val ipv6 = busif.writeData(30)
+    flows.io.flowWrite << tableWrite(FLOW_WRITE.hitDoWrite && mine && !ipv6, flow, cd)
+    flows.io.flowWrite6 << tableWrite(FLOW_WRITE.hitDoWrite && mine && ipv6, flow6, cd)
+    flows.io.egressWrite << tableWrite(EGRESS_WRITE.hitDoWrite && mine, egress, cd)
+    flows.io.hitQuery << tableWrite(FLOW_HIT_QUERY.hitDoWrite && mine,
+      (ipv6 ## busif.writeData(flowBucketBits - 1 downto 0) ## busif.writeData(16)).asUInt, cd)
   }
-  val (ponToEthFlowWrite, ponToEthEgressWrite) = flowWrites(ponToEth = true, ponQueueCd)
-  val (ethToPonFlowWrite, ethToPonEgressWrite) = flowWrites(ponToEth = false, ethRxCd)
-  def hitQuery(ponToEth: Boolean, cd: ClockDomain): Flow[UInt] = tableWrite(FLOW_HIT_QUERY.hitDoWrite &&
-    busif.writeData(31) === Bool(ponToEth), (busif.writeData(flowBucketBits - 1 downto 0) ## busif.writeData(16)).asUInt, cd)
-  val ponToEthHitQuery = hitQuery(ponToEth = true, ponQueueCd)
-  val ethToPonHitQuery = hitQuery(ponToEth = false, ethRxCd)
-  tableBusy := busies.orR
 
   /** Treatments 1-15 (written: index 3-0, then remove, add, pcpCopy, sTag, TCI); 0 stays transparent. */
   case class Treatments(write: Flow[Bits]) extends Area {
@@ -317,13 +333,10 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     push.portId := in.gem.portId
     push.cpu := flowsFrame
     push.job.assignDontCare()
-    val flows = FlowClassifier(flowBucketBits)
+    val flows = FlowClassifier(flowBucketBits, flowBucketBits6)
     flows.io.input.valid := byte || cut && open
     flows.io.input.fragment := in.gem.data
     flows.io.input.last := ends
-    flows.io.flowWrite << ponToEthFlowWrite
-    flows.io.egressWrite << ponToEthEgressWrite
-    flows.io.hitQuery << ponToEthHitQuery
     val decision = flows.io.decision.payload
     ethDescs.io.push.valid := later.valid
     ethDescs.io.push.bytes := later.bytes
@@ -446,13 +459,10 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     push.cpu := entry(18)
     push.vlan := treatment
     push.job.assignDontCare()
-    val flows = FlowClassifier(flowBucketBits)
+    val flows = FlowClassifier(flowBucketBits, flowBucketBits6)
     flows.io.input.valid := rx.valid
     flows.io.input.fragment := rx.fragment
     flows.io.input.last := rx.last
-    flows.io.flowWrite << ethToPonFlowWrite
-    flows.io.egressWrite << ethToPonEgressWrite
-    flows.io.hitQuery << ethToPonHitQuery
     val decision = flows.io.decision.payload
     val laterOk = Delay(frameOk, FlowClassifier.latency)
     val hit = decision.hit
@@ -547,6 +557,9 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     }
   }
 
+  connectFlows(ponToEth.flows, ponToEth = true, ponQueueCd)
+  connectFlows(ethToPon.flows, ponToEth = false, ethRxCd)
+  tableBusy := busies.orR
   val answer = Reg(Bool())
   val answered = RegInit(False)
   hitAnswer := answer

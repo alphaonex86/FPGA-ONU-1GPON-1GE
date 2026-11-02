@@ -63,6 +63,7 @@ case class PonLoop() extends Component {
   onu.io.dataTxBacklog := onuBridge.io.ponTxBacklog
   io.onuEth <> onuBridge.io.eth
   onuBridge.io.apb <> io.onuBridgeApb
+  for (b <- Seq(oltBridge, onuBridge)) { b.io.cpuToLan.setIdle(); b.io.cpuToWan.setIdle() }
   io.oltDs := olt.io.dsLine
   olt.io.usLine := io.oltUs
   onu.io.dsLine := io.onuDs

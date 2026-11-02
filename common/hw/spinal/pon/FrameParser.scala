@@ -14,13 +14,14 @@ case class FrameHeader() extends Bundle {
   val session = UInt(16 bits)
   val ipv4, ipv6 = Bool()
   val l3Offset = UInt(6 bits) // the IP header's first byte
-  val totalLength = UInt(16 bits)
-  val ttl, proto = UInt(8 bits)
+  val totalLength = UInt(16 bits) // of the IP packet, IPv6: 40 + payload length
+  val ttl, proto = UInt(8 bits) // IPv6: hop limit, next header
   val ipChecksum, l4Checksum = Bits(16 bits)
-  val src, dst = Bits(32 bits)
+  val src, dst = Bits(128 bits) // IPv4: bits 31-0
   val sport, dport = UInt(16 bits)
   val tcpFlags = Bits(8 bits)
-  val offloadable = Bool() // IPv4 TCP/UDP without options or fragmentation, its L4 header read, TCP without SYN/FIN/RST
+  val offloadable = Bool() // TCP/UDP over IPv4 without options or fragmentation, or over IPv6 without extension
+                           // headers; its L4 header read, TCP without SYN/FIN/RST
 }
 
 object ParserState extends SpinalEnum { val MAC, TYPE, VLAN, PPPOE, IPV4, IPV6, L4, DONE = newElement() }
@@ -92,14 +93,18 @@ case class FrameParser() extends Component {
         when(index === 11)(h.ipChecksum := word)
         when(index === 8)(h.ttl := b.asUInt)
         when(index === 9)(h.proto := b.asUInt)
-        when(index >= 12 && index < 16)(h.src := h.src(23 downto 0) ## b)
-        when(index >= 16 && index < 20)(h.dst := h.dst(23 downto 0) ## b)
+        when(index >= 12 && index < 16)(h.src := h.src(119 downto 0) ## b)
+        when(index >= 16 && index < 20)(h.dst := h.dst(119 downto 0) ## b)
         when(index === 19)(next((h.proto === 6 || udp) ? L4 | DONE))
       }
       is(IPV6) {
-        when(index === 0)(h.l3Offset := position)
-        h.ipv6 := True
-        next(DONE)
+        when(index === 0) { h.l3Offset := position; h.ipv6 := b(7 downto 4) === 6; when(b(7 downto 4) =/= 6)(next(DONE)) }
+        when(index === 5)(h.totalLength := word.asUInt + 40)
+        when(index === 6)(h.proto := b.asUInt)
+        when(index === 7)(h.ttl := b.asUInt)
+        when(index >= 8 && index < 24)(h.src := h.src(119 downto 0) ## b)
+        when(index >= 24 && index < 40)(h.dst := h.dst(119 downto 0) ## b)
+        when(index === 39)(next((h.proto === 6 || udp) ? L4 | DONE))
       }
       is(L4) {
         when(index === 1)(h.sport := word.asUInt)
@@ -113,5 +118,5 @@ case class FrameParser() extends Component {
     when(io.input.last) { state := MAC; index := 0; position := 0 }
   }
   h.offloadable.setAsComb() // the verdict from the fields
-  h.offloadable := h.ipv4 && l4Done && (udp || (h.tcpFlags & 0x07) === 0)
+  h.offloadable := (h.ipv4 || h.ipv6) && l4Done && (udp || (h.tcpFlags & 0x07) === 0)
 }
