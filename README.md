@@ -111,7 +111,7 @@ detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
 optics pins with the laser held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed: 15.7K ALMs, setup slack +0.077 ns
+HSMC card pins placed, flow engine included: 32.7K ALMs (69 %), 333 of 358 M20K, setup slack +0.019 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 
 ## License

@@ -275,12 +275,13 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val job = RewriteJob()
   }
   /** A descriptor pushed once its flow is decided, FlowClassifier.latency clocks after the frame's end; room: the
-    * queue has a slot for one more besides the descriptor in flight. */
+    * queue has a slot for one more besides the descriptors in flight, registered (311.04 MHz), so one slot spare
+    * for a push it has not seen yet. */
   def decided[T <: Data](push: Flow[T], descs: StreamFifoCC[T]): (Flow[T], Bool) = {
     val later = Delay(push, FlowClassifier.latency, init = push.getZero)
     val inFlight = Reg(UInt(2 bits)) init (0)
     inFlight := inFlight + push.valid.asUInt - later.valid.asUInt
-    (later, descs.io.pushOccupancy +^ inFlight < frames)
+    (later, RegNext(descs.io.pushOccupancy +^ inFlight < frames - 1) init (False))
   }
   val ethData = StreamFifoCC(Bits(8 bits), queueBytes, ponQueueCd, ethTxCd)
   val ethDescs = StreamFifoCC(EthDesc(), frames, ponQueueCd, ethTxCd)
