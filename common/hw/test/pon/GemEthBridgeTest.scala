@@ -37,6 +37,8 @@ object GemEthBridgeTest extends App {
   val EGRESS_VLAN = 0x4C
   val EGRESS_PORT = 0x50
   val EGRESS_WRITE = 0x54
+  val FLOW_HIT_QUERY = 0x58
+  val FLOW_HIT = 0x5C
   import FlowRewriteTest.{be, l4Sum, sum, words}
   /** An IPv4 TCP frame with valid checksums. */
   def ipFrame(macs: (Long, Long), tags: Seq[Int], session: Option[Int], src: Long, dst: Long, sport: Int, dport: Int,
@@ -311,6 +313,19 @@ object GemEthBridgeTest extends App {
     mgmt.waitSampling(500)
     check(ethOut.last == lanFrame && ponOut(1).last == ((0x205, wanPacket.length, wanPacket)),
       "CPU frames: to Ethernet, and to the PON in the queue of their Port-ID (0x205: queue 1)")
+
+    def hitOf(ponToEth: Boolean, k: FlowTableTest.Key, way: Int): Boolean = {
+      apb.write(FLOW_HIT_QUERY, (FlowTable.model(k.bits) & 1023) | (way << 16) | (if (ponToEth) 1L << 31 else 0L))
+      mgmt.waitSampling(30)
+      val r = apb.read(FLOW_HIT).toLong
+      assert((r >> 31) == 1, "FLOW_HIT not done")
+      (r & 1) == 1
+    }
+    val usKey = FlowTableTest.Key(443, 5000, server, hostIp, false, 0, false, 0, false)
+    val dsKey = FlowTableTest.Key(40000, 443, wanIp, server, false, 0x1234, true, 35, true)
+    val answers = Seq(hitOf(false, usKey, 0), hitOf(false, usKey, 0), hitOf(true, dsKey, 0), hitOf(true, dsKey, 0),
+      hitOf(true, dsKey, 1))
+    check(answers == Seq(true, false, true, false, false), s"flow hit bits: set by the traffic, cleared by a query $answers")
   }
   println("PASS GemEthBridgeTest")
 }

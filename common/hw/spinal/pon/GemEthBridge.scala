@@ -165,6 +165,15 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   EGRESS_WRITE.field(UInt(6 bits), AccessType.WO, 0, "entry")(SymbolName("index"))
   EGRESS_WRITE.reserved(25 bits)
   EGRESS_WRITE.field(Bool(), AccessType.WO, 0, "direction: 0 Ethernet -> PON, 1 PON -> Ethernet")(SymbolName("ponToEth"))
+  val FLOW_HIT_QUERY = busif.newReg("Write: read and clear a flow way's hit bit, answered in FLOW_HIT")
+  FLOW_HIT_QUERY.field(UInt(16 bits), AccessType.WO, 0, "bucket")(SymbolName("bucket"))
+  FLOW_HIT_QUERY.field(Bool(), AccessType.WO, 0, "way")(SymbolName("way"))
+  FLOW_HIT_QUERY.reserved(14 bits)
+  FLOW_HIT_QUERY.field(Bool(), AccessType.WO, 0, "direction: 0 Ethernet -> PON, 1 PON -> Ethernet")(SymbolName("ponToEth"))
+  val FLOW_HIT = busif.newReg("The last FLOW_HIT_QUERY's answer")
+  val hitAnswer = FLOW_HIT.field(Bool(), AccessType.RO, 0, "hit: a frame took the flow since the previous query")(SymbolName("hit"))
+  FLOW_HIT.reserved(30 bits)
+  val hitDone = FLOW_HIT.field(Bool(), AccessType.RO, 0, "done: the answer is there")(SymbolName("done"))
   /** The register's writes into the table's domain, one in flight (busy); the sending side resets with the table's
     * domain, so a domain going down does not hold the bus. */
   val busies = scala.collection.mutable.ArrayBuffer[Bool]()
@@ -212,6 +221,10 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   }
   val (ponToEthFlowWrite, ponToEthEgressWrite) = flowWrites(ponToEth = true, ponQueueCd)
   val (ethToPonFlowWrite, ethToPonEgressWrite) = flowWrites(ponToEth = false, ethRxCd)
+  def hitQuery(ponToEth: Boolean, cd: ClockDomain): Flow[UInt] = tableWrite(FLOW_HIT_QUERY.hitDoWrite &&
+    busif.writeData(31) === Bool(ponToEth), (busif.writeData(flowBucketBits - 1 downto 0) ## busif.writeData(16)).asUInt, cd)
+  val ponToEthHitQuery = hitQuery(ponToEth = true, ponQueueCd)
+  val ethToPonHitQuery = hitQuery(ponToEth = false, ethRxCd)
   tableBusy := busies.orR
 
   /** Treatments 1-15 (written: index 3-0, then remove, add, pcpCopy, sTag, TCI); 0 stays transparent. */
@@ -310,6 +323,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     flows.io.input.last := ends
     flows.io.flowWrite << ponToEthFlowWrite
     flows.io.egressWrite << ponToEthEgressWrite
+    flows.io.hitQuery << ponToEthHitQuery
     val decision = flows.io.decision.payload
     ethDescs.io.push.valid := later.valid
     ethDescs.io.push.bytes := later.bytes
@@ -438,6 +452,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     flows.io.input.last := rx.last
     flows.io.flowWrite << ethToPonFlowWrite
     flows.io.egressWrite << ethToPonEgressWrite
+    flows.io.hitQuery << ethToPonHitQuery
     val decision = flows.io.decision.payload
     val laterOk = Delay(frameOk, FlowClassifier.latency)
     val hit = decision.hit
@@ -530,6 +545,16 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
         output(k, Sender(q.descs.io.pop, q.data.io.pop).out, q.data.io.occupancy)
       }
     }
+  }
+
+  val answer = Reg(Bool())
+  val answered = RegInit(False)
+  hitAnswer := answer
+  hitDone := answered
+  when(FLOW_HIT_QUERY.hitDoWrite)(answered := False)
+  for ((a, cd) <- Seq(ponToEth.flows.io.hitAnswer -> ponQueueCd, ethToPon.flows.io.hitAnswer -> ethRxCd)) {
+    val back = FlowCCByToggle(a, cd, ClockDomain.current)
+    when(back.valid) { answer := back.payload; answered := True }
   }
 
   val ponDrops = Reg(UInt(16 bits)) init (0)

@@ -35,9 +35,10 @@ case class FlowWrite(bucketBits: Int) extends Bundle {
   val entry = FlowEntry()
 }
 
-case class FlowResult() extends Bundle {
+case class FlowResult(bucketBits: Int) extends Bundle {
   val hit = Bool()
   val action = FlowAction()
+  val index = UInt(bucketBits + 1 bits) // bucket ## way of the hit
 }
 
 object FlowTable {
@@ -57,7 +58,7 @@ object FlowTable {
 case class FlowTable(bucketBits: Int = 10) extends Component {
   val io = new Bundle {
     val lookup = slave Flow (FlowKey())
-    val result = master Flow (FlowResult())
+    val result = master Flow (FlowResult(bucketBits))
     val write = slave Flow (FlowWrite(bucketBits))
   }
   val ways = Seq.fill(2)(Mem(FlowEntry(), 1 << bucketBits))
@@ -76,4 +77,5 @@ case class FlowTable(bucketBits: Int = 10) extends Component {
   io.result.valid := RegNext(s4) init (False)
   io.result.hit := RegNext(hits.orR)
   io.result.action := RegNext(hits(0) ? actions(0) | actions(1))
+  io.result.index := RegNext(Delay(bucket, 3) @@ !hits(0))
 }

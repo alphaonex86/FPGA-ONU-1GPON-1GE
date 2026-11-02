@@ -32,13 +32,17 @@ object FlowClassifier { val latency = 11 }
 
 /** The flow engine of one direction at its input: parses each frame, looks its flow up at its end (offloadable,
   * TTL > 1), reads the flow's egress (64 entries) and builds its rewrite job with the updated checksums; the decision
-  * comes FlowClassifier.latency clocks after the frame's last byte, so a frame may follow right after another. */
+  * comes FlowClassifier.latency clocks after the frame's last byte, so a frame may follow right after another.
+  * A hit sets its entry's hit bit; a hit query (bucket ## way) answers the bit two clocks later and clears it (a hit
+  * at that clock wins, so the bit may stay set). */
 case class FlowClassifier(bucketBits: Int) extends Component {
   val io = new Bundle {
     val input = slave Flow (Fragment(Bits(8 bits)))
     val decision = master Flow (FlowDecision())
     val flowWrite = slave Flow (FlowWrite(bucketBits))
     val egressWrite = slave Flow (EgressWrite())
+    val hitQuery = slave Flow (UInt(bucketBits + 1 bits))
+    val hitAnswer = master Flow (Bool())
   }
   val parser = FrameParser()
   parser.io.input << io.input
@@ -62,6 +66,12 @@ case class FlowClassifier(bucketBits: Int) extends Component {
   val hit = RegNextWhen(result.valid && result.hit, looked)
   val action = RegNextWhen(result.action, looked)
   val e = RegNext(egresses.readSync(result.action.egress, looked)) // registered RAM output
+  val hits = Mem(Bool(), 2 << bucketBits) initBigInt (Seq.fill(2 << bucketBits)(BigInt(0)))
+  val setHit = looked && result.valid && result.hit
+  val query = RegNext(io.hitQuery) init (io.hitQuery.getZero)
+  io.hitAnswer.valid := RegNext(query.valid) init (False)
+  io.hitAnswer.payload := RegNext(hits.readSync(io.hitQuery.payload, io.hitQuery.valid))
+  hits.write(setHit ? result.index | query.payload, setHit, setHit || query.valid)
   // the job from registers held to the decision; the checksums 3 clocks after e
   val udp = h.proto === 17
   val oldIp = action.natSrc ? h.src | h.dst
