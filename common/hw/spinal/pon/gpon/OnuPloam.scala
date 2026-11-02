@@ -62,8 +62,10 @@ object OnuPloam {
 
 /** ONU activation (G.984.3 clause 10.2, states O1-O7, timers TO1/TO2) and the fixed downstream PLOAM set, upstream
   * clock domain: Upstream_Overhead, Extended_Burst_Length, Assign_ONU-ID, Ranging_Time (main path), Deactivate_ONU-ID,
-  * Disable_Serial_Number, POPUP, Assign_Alloc-ID, Configure_Port-ID, Encrypted_Port-ID, Key_Switching_Time and
-  * Request_Key (to the decryption), Request_Password (Password 3 times), Acknowledge of `ackTypes`. Every PLOAM addressed to us but No_message also goes to the CPU, which handles the rest.
+  * Disable_Serial_Number, POPUP, Swift_POPUP and Ranging_Adjustment (Annex D), Assign_Alloc-ID, Configure_Port-ID,
+  * Encrypted_Port-ID, Key_Switching_Time and Request_Key (to the decryption), Request_Password (Password 3 times),
+  * Acknowledge of `ackTypes` (and of a directed Ranging_Adjustment). Every PLOAM addressed to us but No_message also
+  * goes to the CPU, which handles the rest.
   * BWmap allocations for us become jobs at their ONU bit time; ownership and delay are those of the frame start's
   * state (a PLOAM acts from the next frame on). Upstream PLOAMs: ours first, then the CPU's. */
 case class OnuPloam(maxAllocIds: Int = 8, maxEncryptedPorts: Int = 16, jobDepth: Int = 32) extends Component {
@@ -157,7 +159,7 @@ case class OnuPloam(maxAllocIds: Int = 8, maxEncryptedPorts: Int = 16, jobDepth:
   val broadcast = id === 0xFF
   val snMatch = m(71 downto 8) === io.config.sn
   val received = io.ploam.valid && io.ploam.crcOk && io.synced
-  val popupOnly = state === O6 && !(kind === 0x05 || kind === 0x06 || kind === 0x0C) // G.984.3 10.2.2 f)
+  val popupOnly = state === O6 && !(kind === 0x05 || kind === 0x06 || kind === 0x0C || kind === 0x16) // 10.2.2 f), Annex D
   val act = received && state =/= O1 && !popupOnly
   io.cpuRx.valid := received && state =/= O1 && (own || broadcast) && kind =/= 0x0B
   io.cpuRx.payload := m
@@ -225,6 +227,15 @@ case class OnuPloam(maxAllocIds: Int = 8, maxEncryptedPorts: Int = 16, jobDepth:
           when(own) { state := O5; to2On := False }
         }
       }
+      is(0x16) { // Swift_POPUP (Annex D): to O5 with the EqD kept
+        when(broadcast && state === O6) { state := O5; to2On := False }
+      }
+      is(0x17) { // Ranging_Adjustment (Annex D): in O5 only, the sign in octet 3 bit 1 (bit 0 too, as stock ONUs), never below 0
+        when((own || broadcast) && state === O5) {
+          val delta = m(71 downto 40).asUInt
+          eqd := (byte(3)(1 downto 0) =/= 0) ? ((delta > eqd) ? U(0, 32 bits) | eqd - delta) | eqd + delta
+        }
+      }
       is(0x0A) {
         when(own && state === O5) {
           when(byte(5) === 0x01)(io.allocFull := allocIds.add(newAllocId))
@@ -249,7 +260,8 @@ case class OnuPloam(maxAllocIds: Int = 8, maxEncryptedPorts: Int = 16, jobDepth:
         when(own && (state === O4 || state === O5))(passwordLeft := 3)
       }
     }
-    ack := assigned && (own || broadcast) && (state === O4 || state === O5) && ackTypes.map(kind === _).reduce(_ || _)
+    ack := assigned && (own || broadcast) && (state === O4 || state === O5) && ackTypes.map(kind === _).reduce(_ || _) ||
+      own && state === O5 && kind === 0x17
   }
 
   // synchronization, timers, CPU enable: after the messages, so they win

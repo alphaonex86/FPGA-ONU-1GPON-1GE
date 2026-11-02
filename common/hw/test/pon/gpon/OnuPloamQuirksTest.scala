@@ -9,8 +9,8 @@ import GtcDsTest.{bigToBytes, bytesToBig, check}
 
 /** OnuPloam against the downstream PLOAM sequences of real OLTs, as recorded by stock ONUs (ZTE at two ISPs) and read
   * out of an OLT firmware (Broadcom Maple, HSGQ G008): copies, order, foreign ONUs' messages, EqD drift updates,
-  * deactivation churn with a new ONU-ID, messages left to the CPU. The ONU must answer exactly like the stock ONU
-  * (every copy acknowledged, Password 3 times, nothing else upstream) and keep its bursts where the OLT expects them:
+  * deactivation churn with a new ONU-ID, messages left to the CPU, Annex D (Swift_POPUP, Ranging_Adjustment). The ONU
+  * must answer exactly like the stock ONU (every copy acknowledged, Password 3 times, nothing else upstream) and keep its bursts where the OLT expects them:
   * an OLT re-ranges past 4 bits of drift and deactivates past 8 (G.984.3 Table 10-2). One frame per call, compressed in
   * time (the gaps between messages carry no state but TO1/TO2). */
 object OnuPloamQuirksTest extends App {
@@ -199,10 +199,26 @@ object OnuPloamQuirksTest extends App {
     // other ONUs join while we run
     val foreign = Seq(withSn(ploam(0xFF, 0x06, 0x00), other), withSn(ploam(0xFF, 0x03, 2), other))
     check(answers(foreign.foreach(copies(_))).isEmpty && state == 5 && io.onuId.toInt == mapleId, "another ONU's enable and ONU-ID: no effect")
-    // messages the hardware leaves to the CPU (PEE, Change_Power_Level, PST, Swift_POPUP, Ranging_Adjustment, Sleep_Allow)
-    val cpuOnly = Seq(0x0F, 0x10, 0x11, 0x16, 0x17, 0x18).map(k => ploam(mapleId, k, 0x01))
+    // messages the hardware leaves to the CPU (PEE, Change_Power_Level, PST, Sleep_Allow)
+    val cpuOnly = Seq(0x0F, 0x10, 0x11, 0x18).map(k => ploam(mapleId, k, 0x01))
     check(answers(cpuOnly.foreach(m => send(Some(m)))).isEmpty && state == 5 && cpuOnly.forall(toCpu.contains),
       "PLOAMs without a fixed answer: to the CPU, O5 kept, nothing from the hardware")
+    // Annex D
+    val up = ploam(mapleId, 0x17, 0x00, 0, 0, 0, 0x10)
+    check(answers(send(Some(up))) == Seq(ack(mapleId, up)) && io.eqd.toLong == mapleEqd + 0x10 && toCpu.contains(up),
+      "directed Ranging_Adjustment +16: EqD moved, one Acknowledge")
+    check(answers(send(Some(ploam(0xFF, 0x17, 0x02, 0, 0, 0, 0x30)))).isEmpty && io.eqd.toLong == mapleEqd - 0x20,
+      "broadcast Ranging_Adjustment -48 (S = octet 3 bit 1): EqD moved, no answer")
+    check(answers(copies(ploam(0xFF, 0x16))).isEmpty && state == 5, "Swift_POPUP in O5: no effect")
+    io.synced #= false
+    idle(2)
+    check(state == 6, "LOS: O6")
+    io.synced #= true
+    copies(ploam(0xFF, 0x16))
+    check(state == 5 && io.eqd.toLong == mapleEqd - 0x20, "Swift_POPUP in O6: O5, the EqD kept")
+    val down = ploam(mapleId, 0x17, 0x01, 0xFF, 0xFF, 0xFF, 0xFF)
+    check(answers(send(Some(down))) == Seq(ack(mapleId, down)) && io.eqd.toLong == 0,
+      "Ranging_Adjustment below zero (S in bit 0, as the chip SDK reads it): EqD 0")
     check(answers(copies(ploam(mapleId, 0x05))).isEmpty && state == 2, "Deactivate_ONU-ID x3: O2 once, the copies ignored")
     activate(mapleId, mapleEqd, maple = true)
     copies(withSn(ploam(0xFF, 0x06, 0xFF), sn))
