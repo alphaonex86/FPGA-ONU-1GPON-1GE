@@ -100,7 +100,7 @@ case class OltBoardCore() extends Component {
   queues.io.rx << bridge.io.toCpu
   queues.io.rxCut := bridge.io.toCpuCut
   pon.mac.io.gem << new ClockingArea(domains.ds) {
-    val ds = StreamArbiterFactory.lowerFirst.fragmentLock.onArgs(queues.io.tx, bridge.io.ponTx)
+    val ds = StreamArbiterFactory.lowerFirst.fragmentLock.onArgs(queues.io.tx, bridge.io.ponTx(0))
   }.ds
   io.eth <> bridge.io.eth
   val bridgeUp = board.io.alive && !BufferCC(io.ethDown, True)

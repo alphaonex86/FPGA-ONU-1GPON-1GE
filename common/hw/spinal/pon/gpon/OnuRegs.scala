@@ -10,10 +10,12 @@ import spinal.lib.bus.regif._
 /** CPU registers of the ONU MAC (APB3, upstream clock domain). Writing PLOAM_TX_2 queues an upstream PLOAM, reading
   * PLOAM_RX_2 pops a downstream one. A full queue drops and sets its ERRORS bit; EVENTS and ERRORS bits are cleared by
   * writing 1. */
-case class OnuRegs(defaultResponseBits: Int) extends Component {
+case class OnuRegs(defaultResponseBits: Int, dataTconts: Int) extends Component {
   val io = new Bundle {
     val apb = slave(Apb3(Apb3Config(addressWidth = 8, dataWidth = 32)))
     val config = out(OnuConfig())
+    val dataAlloc = Vec(master Flow (UInt(12 bits)), dataTconts) // the Alloc-ID of each upstream data stream
+    val blockBytes = out UInt (16 bits)
     val cpuPloam = master Stream (Bits(96 bits))
     val cpuRx = slave Flow (Bits(96 bits))
     val state = in(ActivationState())
@@ -126,11 +128,14 @@ case class OnuRegs(defaultResponseBits: Int) extends Component {
     reg
   }
 
-  val DATA_ALLOC = busif.newReg("Upstream data GEM (the Ethernet bridge): its T-CONT")
-  io.config.dataAlloc.payload := DATA_ALLOC.field(UInt(12 bits), AccessType.RW, 0, "Alloc-ID")(SymbolName("allocId"))
-  io.config.dataAlloc.valid := DATA_ALLOC.field(Bool(), AccessType.RW, 0, "valid, else the data stream waits")(SymbolName("valid"))
   val DBRU = busif.newReg("DBRu reports: queued bytes in reporting blocks (OMCI ANI-G GEM block length)")
-  io.config.blockBytes := DBRU.field(UInt(16 bits), AccessType.RW, 48, "reporting block, bytes")(SymbolName("blockBytes"))
+  io.blockBytes := DBRU.field(UInt(16 bits), AccessType.RW, 48, "reporting block, bytes")(SymbolName("blockBytes"))
+  val DATA_ALLOC = for ((alloc, k) <- io.dataAlloc.zipWithIndex) yield {
+    val reg = busif.newReg(s"Upstream data queue $k of the Ethernet bridge: its T-CONT")(SymbolName(s"DATA_ALLOC_$k"))
+    alloc.payload := reg.field(UInt(12 bits), AccessType.RW, 0, "Alloc-ID")(SymbolName("allocId"))
+    alloc.valid := reg.field(Bool(), AccessType.RW, 0, "valid, else the queue waits")(SymbolName("valid"))
+    reg
+  }
 
   busif.accept(DocCHeader("onu_regs", "ONU")) // onu_regs.h next to the Verilog
 }

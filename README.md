@@ -58,8 +58,8 @@ the bit, deactivation churn; meets timing on the DE25-Standard FPGA. Like those
 OLTs, our OLT sends each of its PLOAMs 3 times. OMCI over GEM both ways:
 downstream fragments of the OMCI Port-ID to the CPU, CPU packets upstream in
 the default allocation (OMCC), fragmented to the grant, and data GEM at the
-same time in its own T-CONT, each stream continuing its packet in its next
-allocation. DBRu reports of the real backlog (reporting blocks rounded up,
+same time in up to 4 data T-CONTs, each stream continuing its packet in its
+next allocation. DBRu reports of the real backlog (reporting blocks rounded up,
 G.984.3 Table 8-1 code, mode 0 and 1). Downstream AES-128
 counter-mode decryption of the encrypted Port-IDs with the key switch at the
 OLT's superframe, and downstream FEC: RS(255,239) decoding, up to 8 byte errors
@@ -78,12 +78,14 @@ from the CPU registers to the looped-back lane.
 L2 bridge GEM <-> Ethernet (`common/hw/spinal/pon/GemEthBridge.scala`,
 `bridge_regs.h`): per Port-ID action towards Ethernet (drop, CPU, Ethernet;
 whole frames with a good FCS), the outer VLAN ID or the untagged default picks
-the Port-ID towards the PON, store-and-forward queues across the four clocks,
-drops counted. On the board the Ethernet port goes to the CPU queues or to the
+the Port-ID towards the PON, directly or by PCP (802.1p mapper), and the
+Port-ID its T-CONT queue (4 on the ONU, each dropping when full without
+blocking the others), store-and-forward queues across the four clocks, drops
+counted. On the board the Ethernet port goes to the CPU queues or to the
 OLT or the ONU bridge (`eth_board_regs.h` BRIDGE); a frame from the lane reaches
 the OLT MAC's downstream GEM, or the ONU MAC's upstream data stream, in
 simulation; in the closed OLT <-> ONU loop, Ethernet frames cross both bridges
-end to end each way.
+end to end each way, upstream in two T-CONTs granted by our OLT's DBA.
 HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`).
 Board top (`agilex5/hw/spinal/pon/PonBoard.scala`), OLT side: OLT MAC on its GTS lane

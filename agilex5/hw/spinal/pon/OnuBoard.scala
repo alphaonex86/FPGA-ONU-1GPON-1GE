@@ -92,7 +92,7 @@ case class OnuBoardRegs() extends Component {
 /** ONU side of the board without the vendor blocks: 0x000 OnuMac registers (across to the upstream domain, an error
   * answer while the ONU clocks are down), 0x100 board registers, 0x200 GEM CPU queues (OMCI; reset with the clocks),
   * 0x300 Ethernet bridge (also an error while the Ethernet lane is down; by default downstream GEM is dropped, the OMCI
-  * Port-ID goes to the CPU; upstream in the data T-CONT, DATA_ALLOC). The ONU lane's tx clock (311.04 MHz, from the VCXO)
+  * Port-ID goes to the CPU; upstream one queue per data T-CONT, DATA_ALLOC_k). The ONU lane's tx clock (311.04 MHz, from the VCXO)
   * and half clock clock everything, the downstream words included (GTS RX phase compensation FIFO); the VCXO loop
   * keeps that clock on the recovered one (rxClk), both sampled by the helper clock (VcxoTracker). */
 case class OnuBoardCore() extends Component {
@@ -169,13 +169,14 @@ case class OnuBoardCore() extends Component {
   pon.mac.io.gemTxBacklog := queues.io.txBacklog
   io.gemIrq := queues.io.irq
 
-  val bridge = ethBridge(domains.ds, domains.us, io.ethTxClk, io.ethRxClk, !io.onuLane.txReady || io.ethDown, defaultAction = 0)
+  val bridge = ethBridge(domains.ds, domains.us, io.ethTxClk, io.ethRxClk, !io.onuLane.txReady || io.ethDown, defaultAction = 0,
+    ponQueues = pon.mac.dataTconts)
   bridge.io.ponRx << pon.mac.io.gemRx
   bridge.io.ponRxCut := pon.mac.io.gemRxCut
   bridge.io.cpuPort << pon.mac.io.omciPort
   queues.io.rx << bridge.io.toCpu
   queues.io.rxCut := bridge.io.toCpuCut
-  pon.mac.io.dataTx << bridge.io.ponTx
+  (pon.mac.io.dataTx, bridge.io.ponTx).zipped.foreach(_ << _)
   pon.mac.io.dataTxBacklog := bridge.io.ponTxBacklog
   io.eth <> bridge.io.eth
   val bridgeUp = board.io.alive && !BufferCC(io.ethDown, True)

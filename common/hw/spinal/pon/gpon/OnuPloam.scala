@@ -14,8 +14,6 @@ case class OnuConfig() extends Bundle {
   val to1Frames = UInt(20 bits)    // SN acquisition and ranging timeout (10 s)
   val to2Frames = UInt(12 bits)    // POPUP timeout (100 ms)
   val key = Bits(128 bits)         // shadow key: generated and sent by the CPU on Request_Key
-  val dataAlloc = Flow(UInt(12 bits)) // the T-CONT of the upstream data GEM (OMCI: its Alloc-ID)
-  val blockBytes = UInt(16 bits)   // DBRu reporting block (OMCI ANI-G GEM block length)
 }
 
 /** Up to n 12-bit IDs (Alloc-IDs, Port-IDs). */

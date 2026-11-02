@@ -76,7 +76,7 @@ object OnuBoardTest extends App {
     waitUntil(io.ethRxClk.toBoolean); waitUntil(!io.ethRxClk.toBoolean)
     io.eth.rx.valid #= false
     mgmt.waitSampling(500)
-    val data = dut.pon.mac.io.dataTx // no allocation yet: the packet waits at the MAC
+    val data = dut.pon.mac.io.dataTx(0) // no allocation yet: the packet waits at the MAC
     check(data.valid.toBoolean && data.fragment.portId.toInt == 0x200 && data.fragment.length.toInt == 104,
       s"Ethernet frame -> bridge -> ONU MAC data stream: Port-ID 0x200, 100 bytes + FCS")
     write(OPTICS, 0)

@@ -80,9 +80,9 @@ object BoardFields {
   /** A PON side's Ethernet bridge: the Port-ID lookup in the MAC's GEM receive domain, the queues on the same clocks
     * reset while `down` (asynchronous: either lane not ready). */
   def ethBridge(ponRx: ClockDomain, ponTx: ClockDomain, ethTxClk: Bool, ethRxClk: Bool, down: Bool,
-                defaultAction: Int): GemEthBridge = {
+                defaultAction: Int, ponQueues: Int = 1): GemEthBridge = {
     def domain(clk: Bool): ClockDomain = ClockDomain(clk, ClockDomain(clk)(BufferCC(down)))
-    GemEthBridge(ponRx, domain(ponRx.clock), domain(ponTx.clock), domain(ethTxClk), domain(ethRxClk), defaultAction)
+    GemEthBridge(ponRx, domain(ponRx.clock), domain(ponTx.clock), domain(ethTxClk), domain(ethRxClk), defaultAction, ponQueues)
   }
 }
 

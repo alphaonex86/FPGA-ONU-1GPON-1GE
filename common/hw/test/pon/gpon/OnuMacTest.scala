@@ -48,17 +48,18 @@ case class PonLoop() extends Component {
   oltBridge.io.ponRxCut := olt.io.usGemCut
   oltBridge.io.cpuPort.setIdle()
   io.oltUsGem << oltBridge.io.toCpu
-  olt.io.gem << StreamArbiterFactory.lowerFirst.fragmentLock.onArgs(io.oltGem, oltBridge.io.ponTx)
+  olt.io.gem << StreamArbiterFactory.lowerFirst.fragmentLock.onArgs(io.oltGem, oltBridge.io.ponTx(0))
   io.oltEth <> oltBridge.io.eth
   oltBridge.io.apb <> io.oltBridgeApb
-  val onuBridge = GemEthBridge(ClockDomain.current, ClockDomain.current, usDomain, ethDomain, ethDomain, defaultAction = 0)
+  val onuBridge = GemEthBridge(ClockDomain.current, ClockDomain.current, usDomain, ethDomain, ethDomain, defaultAction = 0,
+    ponQueues = onu.dataTconts)
   onuBridge.io.ponRx << onu.io.gemRx
   onuBridge.io.ponRxCut := onu.io.gemRxCut
   onuBridge.io.cpuPort << onu.io.omciPort
   io.onuGemRx << onuBridge.io.toCpu
   onu.io.gemTx << io.onuGemTx
   onu.io.gemTxBacklog := io.onuGemBacklog
-  onu.io.dataTx << onuBridge.io.ponTx
+  (onu.io.dataTx, onuBridge.io.ponTx).zipped.foreach(_ << _)
   onu.io.dataTxBacklog := onuBridge.io.ponTxBacklog
   io.onuEth <> onuBridge.io.eth
   onuBridge.io.apb <> io.onuBridgeApb
@@ -72,6 +73,7 @@ case class PonLoop() extends Component {
   io.oltIrq := olt.io.irq
   io.onuIrq := onu.io.irq
   olt.framer.io.frameStart.simPublic()
+  olt.io.usGem.simPublic()
   olt.us.receiver.io.burst.simPublic()
   olt.us.receiver.io.dbru.simPublic()
   onu.upstream.ploam.io.state.simPublic()
@@ -319,7 +321,7 @@ object OnuMacTest extends App {
     val onuBridge = Apb3Driver(io.onuBridgeApb, ds)
     val br = dut.onuBridge
     onuBridge.write(br.UNTAGGED.addr, 0x200 | (1 << 12))
-    onu.writes += ((q.DATA_ALLOC.addr, BigInt(300 | (1 << 12))))
+    onu.writes += ((q.DATA_ALLOC(0).addr, BigInt(300 | (1 << 12))))
     us.waitSamplingWhere(!onu.busy)
     onuGem.queue ++= omci.map(0x123 -> _)
     onuEth.toSend ++= data
@@ -354,6 +356,22 @@ object OnuMacTest extends App {
     waitFrames(3)
     check(onuEth.received.toList == List(down) && oltEth.received.toList == List(up),
       "Ethernet frames end to end: 1000 bytes OLT -> ONU, 64 bytes ONU -> OLT, FCS checked and stripped")
+    // a second T-CONT: VLAN 10 -> Port-ID 0x210 -> ONU queue 1 -> Alloc-ID 301, granted by the OLT's DBA
+    oltSend(ploam(onuId, 0x0A, 0x12, 0xD0, 0x01)) // Assign_Alloc-ID 301, GEM
+    olt.writes ++= Seq(r.TCONT_A.addr -> BigInt(1 | (301 << 8) | (onuId << 20)), r.TCONT_B.addr -> BigInt(100 | (100 << 16)),
+      r.DBA.addr -> BigInt(2 | (48 << 8)))
+    onu.writes += ((q.DATA_ALLOC(1).addr, BigInt(301 | (1 << 12))))
+    onuBridge.write(br.VLAN_MAP.addr, 10 | (0x210 << 12) | (1 << 24))
+    onuBridge.write(br.PORT_QUEUE.addr, 0x210 | (1 << 12))
+    oltBridge.write(dut.oltBridge.PORT_ACTION.addr, 0x210 | (2 << 12))
+    waitFrames(4)
+    val tagged = List(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0x81, 0x00, 0x00, 10) ++ List.tabulate(84)(i => i & 0xFF)
+    var allocsOf0x210 = Set[Int]() // at the OLT MAC, before its bridge
+    us.onSamplings { val g = dut.olt.io.usGem; if (g.valid.toBoolean && g.gem.portId.toInt == 0x210) allocsOf0x210 += g.allocId.toInt }
+    onuEth.toSend += tagged
+    waitFrames(3)
+    check(oltEth.received.toList == List(up, tagged) && allocsOf0x210 == Set(301),
+      "VLAN 10 frame in queue 1, T-CONT 301, out of the OLT port")
     check(oltBridge.read(dut.oltBridge.DROPS.addr) == 0 && onuBridge.read(br.DROPS.addr) == 0, "no bridge drop")
 
     var fec = Seq[BigInt]()
