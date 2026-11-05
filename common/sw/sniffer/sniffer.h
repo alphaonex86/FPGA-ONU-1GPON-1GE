@@ -12,6 +12,9 @@
 #define SNIFFER_ENTRIES 64
 #define SNIFFER_VOTES 16
 #define SNIFFER_GRANTS 16 // decoded per burst
+#define SNIFFER_OMCI_BYTES 2048 // an extended OMCI message, whole
+#define SNIFFER_PENDING 32
+#define SNIFFER_PROFILE_LINES 16384 // remembered to skip repeats
 
 enum sniffer_kind { SNIFFER_PLOAM, SNIFFER_ALLOC, SNIFFER_GEM, SNIFFER_BURST };
 
@@ -38,12 +41,15 @@ struct sniffer_options {
     unsigned alloc_count, port_count;
     FILE *text;             // decoded records, or NULL
     FILE *dump;             // raw records, or NULL
+    FILE *profile;          // OMCI request/answer pairs, or NULL
 };
 
 struct sniffer_stream {
     uint8_t bytes[12 + 65535 + 3];
     unsigned have;
 };
+
+struct sniffer_omci { uint16_t length; uint8_t bytes[SNIFFER_OMCI_BYTES]; };
 
 struct sniffer_grant { uint16_t alloc_id, flags, start, stop; };
 // A burst's BWmap entries (contiguous), stop: its last StopTime
@@ -60,7 +66,12 @@ struct sniffer {
     unsigned omci_port_count;
     struct sniffer_stream ds, us;
     unsigned desyncs;
-    uint8_t us_continued[4096]; // an upstream GEM fragment of that Port-ID waits for its end
+    struct sniffer_omci omci[2][SNIFFER_MAX_IDS]; // reassembly, downstream and upstream, per OMCI Port-ID
+    struct sniffer_omci pending[SNIFFER_PENDING]; // the OLT's requests waiting for their answer
+    unsigned pending_next;
+    uint64_t profile_lines[SNIFFER_PROFILE_LINES]; // hashes of the lines written, open addressing
+    unsigned profile_line_count;
+    int failed; // an output write failed (logged)
     // offset learning: the first entries of the bursts, and the offsets they gave
     struct sniffer_entry entries[SNIFFER_ENTRIES];
     unsigned entry_next, entry_count;

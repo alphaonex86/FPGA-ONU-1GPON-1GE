@@ -220,6 +220,7 @@ static void usage(void)
             "usage: sniffer [options]\n"
             "  -w FILE  raw records (keep the dumps out of the public repo)\n"
             "  -t FILE  decoded records (default stdout, '-' none)\n"
+            "  -P FILE  OMCI profile: the OLT's requests with the ONU's answers\n"
             "  -r FILE  decode a raw dump instead of the board\n"
             "  -u DEV   the sniffer's UIO device (de25-standard/ghrd/uio_overlay.sh), e.g. /dev/uio0: waits on its\n"
             "           interrupt; else /dev/mem, polled\n"
@@ -240,12 +241,13 @@ int main(int argc, char **argv)
     static struct sniffer s;
     static uint8_t serial[8];
     struct sniffer_options opt = {.onu_id = -1, .delimiter = 0xAB5983, .lead = 128, .width = 16, .text = stdout};
-    const char *dump = NULL, *text = NULL, *in = NULL, *uio = NULL;
+    const char *dump = NULL, *profile = NULL, *text = NULL, *in = NULL, *uio = NULL;
     unsigned long value, bridge = LW_BRIDGE;
     int c;
-    while ((c = getopt(argc, argv, "w:t:r:u:b:o:s:a:p:Ad:l:W:h")) != -1) {
+    while ((c = getopt(argc, argv, "w:P:t:r:u:b:o:s:a:p:Ad:l:W:h")) != -1) {
         switch (c) {
         case 'w': dump = optarg; break;
+        case 'P': profile = optarg; break;
         case 't': text = optarg; break;
         case 'r': in = optarg; break;
         case 'u': uio = optarg; break;
@@ -290,6 +292,8 @@ int main(int argc, char **argv)
         return 1;
     if (dump && !(opt.dump = open_file(dump, "wb")))
         return 1;
+    if (profile && !(opt.profile = open_file(profile, "w")))
+        return 1;
     struct sigaction stop = {.sa_handler = on_stop};
     if (sigaction(SIGINT, &stop, NULL) < 0 || sigaction(SIGTERM, &stop, NULL) < 0) {
         perror("sniffer: signals");
@@ -306,6 +310,10 @@ int main(int argc, char **argv)
         fclose(file);
     } else {
         result = live(&s, (uint32_t)bridge, uio, &opt);
+    }
+    if (opt.profile && fclose(opt.profile) != 0) {
+        perror("sniffer: profile");
+        result = -1;
     }
     if (opt.dump && fclose(opt.dump) != 0) {
         perror("sniffer: dump");

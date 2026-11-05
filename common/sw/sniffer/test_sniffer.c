@@ -103,7 +103,7 @@ static void idle(uint8_t *burst, unsigned at, unsigned end)
 // grant 0 (PLOAMu, DBRu mode 0): an Acknowledge, a report, an OMCI answer; grant 1: idle
 static unsigned answer(uint8_t *b, unsigned start, unsigned middle, unsigned stop)
 {
-    static const uint8_t omci[48] = {0x80, 0x01, 0x2D, 0x0A, 0x00, 0x02, 0x00, 0x00};
+    static const uint8_t omci[48] = {0x80, 0x01, 0x2D, 0x0A, 0x00, 0x02, 0x00, 0x00, 0x00, 0x05}; // 5 uploads
     unsigned at = 3;
     b[0] = 0x5A;
     b[1] = 5;
@@ -133,12 +133,13 @@ int main(void)
 {
     static struct model m;
     static struct sniffer s;
-    char *text = NULL, *dump = NULL;
-    size_t text_size = 0, dump_size = 0;
+    char *text = NULL, *dump = NULL, *profile = NULL;
+    size_t text_size = 0, dump_size = 0, profile_size = 0;
     struct sniffer_options opt = {.onu_id = -1, .delimiter = 0xAB5983, .lead = 128, .width = 16, .allocs = {6}, .alloc_count = 1};
     opt.text = open_memstream(&text, &text_size);
     opt.dump = open_memstream(&dump, &dump_size);
-    CHECK(opt.text && opt.dump);
+    opt.profile = open_memstream(&profile, &profile_size);
+    CHECK(opt.text && opt.dump && opt.profile);
     m.alloc_keep[77] = m.port_keep[77] = 1; // a previous run's
     struct sniffer_regs regs = {&m, model_read, model_write};
     CHECK(sniffer_start(&s, &regs, &opt) == 0);
@@ -162,8 +163,8 @@ int main(void)
     drain(&s, &m);
     CHECK(m.alloc_keep[1000] && !m.alloc_keep[2000] && m.port_keep[0x123]);
     ploam(&m, 50, 5, 0x0A, (const uint8_t[10]){1000 >> 4, (1000 & 0xF) << 4, 0xFF});
-    uint8_t omci[10 + 48] = {0x01, 0x23, 0, 44, 0, 0, 0, 0, 0, 1, 0x80, 0x01, 0x4D, 0x0A, 0x00, 0x02, 0x00, 0x00};
-    push(&m.ds, SNIFFER_GEM, 0, 60, omci, sizeof(omci));
+    uint8_t omci[10 + 48] = {0x01, 0x23, 0, 48, 0, 0, 0, 0, 0, 1, 0x80, 0x01, 0x4D, 0x0A, 0x00, 0x02, 0x00, 0x00};
+    push(&m.ds, SNIFFER_GEM, 1, 60, omci, sizeof(omci)); // PTI 1: its end
     drain(&s, &m);
     CHECK(!m.alloc_keep[1000]);
 
@@ -194,6 +195,11 @@ int main(void)
     CHECK(m.regs[SNIFFER_CTRL / 4] == 0);
     fclose(opt.text);
     fclose(opt.dump);
+    fclose(opt.profile);
+    char expected[512];
+    snprintf(expected, sizeof(expected), "4d0a00020000%064d 2d0a000200000005%060d # MIB_upload 2/0\n", 0, 0);
+    const char *pair = strchr(profile, '\n');
+    CHECK(pair && strcmp(pair + 1, expected) == 0); // the first answer only: the others have no request
     CHECK(strstr(text, "MIB_upload") && strstr(text, "RESET_OFFSET 50000"));
     CHECK(!strstr(text, "bad-") && !strstr(text, "cut"));
     unsigned answers = 0, acks = 0, reports = 0;
@@ -219,6 +225,7 @@ int main(void)
     CHECK(records == 8 + 80 + sent);
     free(text);
     free(dump);
+    free(profile);
     if (failures)
         fprintf(stderr, "%d check(s) failed\n", failures);
     else

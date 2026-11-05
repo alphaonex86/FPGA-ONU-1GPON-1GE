@@ -102,12 +102,12 @@ static void say_hex(struct sniffer *s, const uint8_t *bytes, unsigned size)
         say(s, "%02x", bytes[i]);
 }
 
-static int is_omci(const struct sniffer *s, unsigned port)
+static int omci_index(const struct sniffer *s, unsigned port)
 {
     for (unsigned i = 0; i < s->omci_port_count; i++)
         if (s->omci_ports[i] == port)
-            return 1;
-    return 0;
+            return (int)i;
+    return -1;
 }
 
 // OMCI message header (G.988 11.2): TCI, type, device, ME class / instance
@@ -115,6 +115,109 @@ static void say_omci(struct sniffer *s, const uint8_t *m)
 {
     say(s, " omci tci=%04x %s%s%s me=%u/%u", be16(m), NAME(omci_names, m[2] & 0x1Fu), m[2] & 0x40 ? " ar" : "",
         m[2] & 0x20 ? " ak" : "", be16(m + 4), be16(m + 6));
+}
+
+// From the message type to the contents' end (TCI and trailer left out), 0 when malformed.
+static unsigned omci_body(const struct sniffer_omci *m)
+{
+    if (m->length < 10)
+        return 0;
+    if (m->bytes[3] == 0x0A) // baseline: 32 bytes of contents
+        return m->length >= 40 ? 38 : 0;
+    unsigned contents = be16(m->bytes + 8);
+    if (m->bytes[3] == 0x0B) // extended: its contents length
+        return m->length >= 10 + contents ? 8 + contents : 0;
+    return 0;
+}
+
+// One line per new pair: request body, answer body, the request's name and ME (the loader keeps the last answer).
+static void profile_pair(struct sniffer *s, const struct sniffer_omci *request, const struct sniffer_omci *answer)
+{
+    static char line[4 * SNIFFER_OMCI_BYTES + 64];
+    unsigned length = 0;
+    for (int side = 0; side < 2; side++) {
+        const struct sniffer_omci *m = side ? answer : request;
+        unsigned body = omci_body(m);
+        for (unsigned i = 0; i < body; i++)
+            length += (unsigned)sprintf(line + length, "%02x", m->bytes[2 + i]);
+        line[length++] = side ? '\0' : ' ';
+    }
+    const uint8_t *r = request->bytes;
+    snprintf(line + length - 1, sizeof(line) - length + 1, " # %s %u/%u\n", NAME(omci_names, r[2] & 0x1Fu), be16(r + 4), be16(r + 6));
+    uint64_t hash = 14695981039346656037ull; // FNV-1a
+    for (const char *c = line; *c; c++)
+        hash = (hash ^ (uint8_t)*c) * 1099511628211ull;
+    hash |= 1; // 0: free slot
+    if (s->profile_line_count < SNIFFER_PROFILE_LINES * 3 / 4) {
+        unsigned slot = (unsigned)hash % SNIFFER_PROFILE_LINES;
+        while (s->profile_lines[slot] && s->profile_lines[slot] != hash)
+            slot = (slot + 1) % SNIFFER_PROFILE_LINES;
+        if (s->profile_lines[slot])
+            return;
+        s->profile_lines[slot] = hash;
+        s->profile_line_count++;
+    }
+    if (fputs(line, s->opt.profile) < 0) {
+        perror("sniffer: profile");
+        s->failed = 1;
+    }
+}
+
+// A whole OMCI message: the OLT's requests wait for the answer with their TCI and type.
+static void omci_message(struct sniffer *s, int upstream, const struct sniffer_omci *m)
+{
+    if (!omci_body(m)) {
+        fprintf(stderr, "sniffer: malformed %s OMCI message (%u bytes)\n", upstream ? "US" : "DS", m->length);
+        return;
+    }
+    if (!upstream) {
+        s->pending[s->pending_next] = *m;
+        s->pending_next = (s->pending_next + 1) % SNIFFER_PENDING;
+        return;
+    }
+    if (!(m->bytes[2] & 0x20)) // not an answer: alarm, AVC
+        return;
+    for (unsigned k = 1; k <= SNIFFER_PENDING; k++) {
+        struct sniffer_omci *request = &s->pending[(s->pending_next + SNIFFER_PENDING - k) % SNIFFER_PENDING];
+        if (request->length && be16(request->bytes) == be16(m->bytes) && (request->bytes[2] & 0x1F) == (m->bytes[2] & 0x1F)) {
+            if (s->opt.profile)
+                profile_pair(s, request, m);
+            request->length = 0;
+            return;
+        }
+    }
+}
+
+// A GEM fragment: OMCI Port-IDs are reassembled, a cut message is lost.
+static void omci_fragment(struct sniffer *s, int upstream, unsigned port, const uint8_t *data, unsigned size, int last, int cut)
+{
+    int i = omci_index(s, port);
+    if (i < 0)
+        return;
+    struct sniffer_omci *m = &s->omci[upstream][i];
+    if (cut || m->length + size > SNIFFER_OMCI_BYTES) {
+        if (!cut)
+            fprintf(stderr, "sniffer: OMCI message over %u bytes on Port-ID %u, dropped\n", SNIFFER_OMCI_BYTES, port);
+        m->length = 0;
+        return;
+    }
+    memcpy(m->bytes + m->length, data, size);
+    m->length += (uint16_t)size;
+    if (last) {
+        omci_message(s, upstream, m);
+        m->length = 0;
+    }
+}
+
+// The OMCI header on a message's first fragment.
+static void say_fragment(struct sniffer *s, int upstream, unsigned port, const uint8_t *data, unsigned size)
+{
+    int i = omci_index(s, port);
+    if (i >= 0 && !s->omci[upstream][i].length && size >= 8)
+        say_omci(s, data);
+    say(s, " ");
+    say_hex(s, data, size);
+    say(s, "\n");
 }
 
 static void keep(struct sniffer *s, unsigned map, unsigned id, int kept)
@@ -172,6 +275,11 @@ int sniffer_start(struct sniffer *s, const struct sniffer_regs *regs, const stru
     reg_write(s, SNIFFER_RESET_TIMING, 0); // no pulse until the offset is learned
     s->ctrl = SNIFFER_CTRL_ENABLE_MASK | (opt->all_ploams ? SNIFFER_CTRL_ALLPLOAMS_MASK : 0) |
               0xFFu << SNIFFER_CTRL_ONUID_SHIFT | DEFAULT_DELIMITER_ERRORS << SNIFFER_CTRL_DELIMITERERRORS_SHIFT;
+    if (opt->profile && fputs("# OMCI profile (common/sw/sniffer -P): request answer, hex from the message type to the contents' end\n",
+                              opt->profile) < 0) {
+        perror("sniffer: profile");
+        return -1;
+    }
     if (opt->onu_id >= 0)
         set_onu(s, (unsigned)opt->onu_id);
     else
@@ -316,12 +424,8 @@ static void decode_gem(struct sniffer *s, const uint8_t *data, unsigned at, unsi
         }
         unsigned bytes = pli < end - at ? pli : end - at;
         say(s, "  gem port=%u pli=%u pti=%u%s", port, pli, pti, bytes < pli ? " cut" : "");
-        if (is_omci(s, port) && !s->us_continued[port] && bytes >= 8)
-            say_omci(s, data + at);
-        say(s, " ");
-        say_hex(s, data + at, bytes);
-        say(s, "\n");
-        s->us_continued[port] = !(pti & 1);
+        say_fragment(s, 1, port, data + at, bytes);
+        omci_fragment(s, 1, port, data + at, bytes, pti & 1, bytes < pli);
         at += pli;
     }
 }
@@ -432,11 +536,8 @@ static void handle_gem(struct sniffer *s, const struct sniffer_record *r)
     say(s, " port=%u pli=%u pti=%u counter=%llx%s", port, pli, r->flags & 7, (unsigned long long)counter, r->flags & 8 ? " cut" : "");
     const uint8_t *data = p + 10;
     unsigned bytes = r->length - 10;
-    if (is_omci(s, port) && bytes >= 8)
-        say_omci(s, data);
-    say(s, " ");
-    say_hex(s, data, bytes);
-    say(s, "\n");
+    say_fragment(s, 0, port, data, bytes);
+    omci_fragment(s, 0, port, data, bytes, r->flags & 1, r->flags & 0x88);
 }
 
 int sniffer_handle(struct sniffer *s, const struct sniffer_record *r)
@@ -481,7 +582,7 @@ int sniffer_handle(struct sniffer *s, const struct sniffer_record *r)
             decode_burst(s, r, e);
         break;
     }
-    return 0;
+    return s->failed ? -1 : 0;
 }
 
 static int feed(struct sniffer *s, struct sniffer_stream *st, uint32_t word)
