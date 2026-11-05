@@ -189,12 +189,11 @@ def sniffer_serdes(lay):
         lay.track(net, [(xy[0], ybot - 0.6), pad_of_net(lay, part_on(lay, net, 'C'), net)], SERDES_W)
     return {'Y5', 'Y6', 'Y7', 'Y8'}
 
-HSMC_W, HSMC_H, HSMC_HOST = 80.0, 88.0, (16.0, 78.0)   # the host overlap strip ends at y = 78: south of it, the corner is cut
+HSMC_W, HSMC_H, HSMC_HOST = 80.0, 79.0, (16.0, 78.0)   # the host overlap strip ends at y = 78: south of it, the corner is cut
 
 def hsmc_layout():
     """The card hangs east of the DE25-Standard: connector on the bottom along the west edge (bank 1 north, odd row
-    west, as on the open Zipper HSMC card), SFP+ cages and the BOSA fiber out of the east edge, bottom empty over the host;
-    the upstream sniffer in a south strip past the host's edge, its receive can's fibre out of the south edge."""
+    west, as on the open Zipper HSMC card), SFP+ cages and the BOSA fiber out of the east edge, bottom empty over the host."""
     lay = Layout(hsmc(), HSMC_W, HSMC_H)
     lay.notch = HSMC_HOST
     lay.keepout['F'].append((0, HSMC_HOST[1], HSMC_HOST[0], HSMC_H))
@@ -228,20 +227,6 @@ def hsmc_layout():
     lay.place(vcxo[False], 14.0, 9.0)    # 155.52 MHz at XCVR_RX7 (pins 2/4)
     lay.place(vcxo[True], 14.0, 15.0)    # 156.25 MHz at XCVR_RX6 (pins 6/8)
     lay.place(refs(lay, 'TPS563201')[0], 46.0, 40.5)   # 12 V buck for the cages, under cage 1
-    # upstream sniffer: RX can 5 mm from the south edge, rotated so the BOSA body (east at 0, as on the sniffer board)
-    # and its fibre go over that edge; its limiting amp west of it, outputs west towards the pair
-    sx, sy = 59.0, HSMC_H - 6.0
-    lay.place(refs(lay, 'BOSA_RX')[0], sx + 8.0, HSMC_H - 5.0, 270)
-    lay.place(refs(lay, 'SY88349NDL')[0], sx, sy, 180)
-    # its inputs (swapped: no crossing from the can's pads): coupling caps between the can and the pins, the 50 ohm
-    # terminations to VREF right north and south of them
-    for net, dy in (('US_DIN_N', -1.0), ('US_DIN_P', 1.0)):
-        put_pair(lay, [(part_on(lay, net, 'C'), sx + 4.0, sy + dy)], 180)
-    for net, dy, rot in (('US_DIN_N', -2.6, 90), ('US_DIN_P', 2.6, 270)):   # DIN pad towards the LA
-        put_pair(lay, [(part_on(lay, net, 'R'), sx + 3.0, sy + dy)], rot)
-    lay.place(refs(lay, 'TPS61391')[1], 71.0, sy - 5.5)
-    lay.place(refs(lay, 'D_Schottky')[1], 75.5, sy - 5.5)
-    lay.place_near(refs(lay, 'AD5593R')[1], 36.0, sy + 1.0)
     hsmc_pairs(lay)
     # cage 1 parts on +3V3_SFP: under the cage, on that plane; beside the cage pins they fall across the ONU RX pair
     for r, p in lay.parts.items():
@@ -250,7 +235,7 @@ def hsmc_layout():
     lay.place_near(refs(lay, '74LVC1G123')[0], bx - 24.0, by + 10.0)
     lay.place_near(refs(lay, '74LVC1G97')[0], bx - 28.0, by + 10.0)
     lay.place_near(refs(lay, '74LVC1G32')[0], bx - 32.0, by + 10.0)
-    for k, y in enumerate((41.5, HSMC_H - 3.5)):
+    for k, y in enumerate((41.5, 70.0)):   # the second clear of the BOSA courtyard
         lay.place(refs(lay, 'MountingHole')[k], HSMC_W - 4.5, y)
     return lay
 
@@ -402,22 +387,6 @@ def hsmc_pairs(lay):
                  [(cr[0], ye + 0.7 + xm - 0.4 - cr[0]), (cr[0], cr[1] - 1.1)]))
     for n, c in ((nl, cl), (nr, cr)):
         via(n, (c[0], c[1] - 1.1), pcbnew.F_Cu, c)
-    # upstream sniffer RX: B.Cu parallel to the ONU RX pair on its south-west side (2.5 mm apart), south past the
-    # ONU optics, east to vias at its AC caps, which sit at the SY88349 output pins 9 (LA-, north) / 12 (LA+)
-    la = refs(lay, 'SY88349NDL')[0]
-    (xn, yn), (xp, yp) = pad(la, '9'), pad(la, '12')
-    assert yn < yp and xn < pad(la, '1')[0]
-    cn, cp = part_on(lay, 'US_LA_N', 'C'), part_on(lay, 'US_LA_P', 'C')
-    put_pair(lay, [(cn, xn - 3.0, yn), (cp, xp - 3.0, yp)], 180)
-    y0 = pad(j, '30')[1] + 0.25
-    ym = (yn + yp) / 2
-    nl, nr = rx(30, [(y0 - 3.7, y0), (48.0, 48.0 + 3.7), (48.0, ym - 4.0), (52.0, ym), (52.6, ym)], ([], []))
-    assert (nl, nr) == ('US_RX_N', 'US_RX_P')
-    for n, xy, c, pin in ((nl, (52.6, ym - 0.4), cn, (xn, yn)), (nr, (52.6, ym + 0.4), cp, (xp, yp))):
-        via(n, xy, pcbnew.F_Cu, pad_of_net(lay, c, n))
-        la_net = net(la, '9' if c == cn else '12')
-        pts = [pad_of_net(lay, c, la_net), pin]
-        lay.track(la_net, pts, 2 * NECK_W, locked=True); keep_free(lay, 'F', pts)
 
 def put_pair(lay, refs_xy, rot):
     """Place 0402 parts of a pair exactly: [(ref, x, y)]."""

@@ -229,18 +229,6 @@
       },
       {
         "netclass": "Power",
-        "pattern": "+3V3_US_APD"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "+3V3_US_APDA"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "+3V3_US_OPT"
-      },
-      {
-        "netclass": "Power",
         "pattern": "+3V3_XO"
       },
       {

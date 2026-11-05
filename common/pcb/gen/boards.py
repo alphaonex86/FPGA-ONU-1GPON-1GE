@@ -401,18 +401,18 @@ def sniffer():
     return b
 
 # HSMC GTS lanes (DE25-Standard: 4, lanes 0-3) and the even-row single-ended pins (bank 2 north, bank 3 south)
-HSMC_LANES = {3: ('SFP0_TD', 'SFP0_RD'), 2: ('SFP1_TD', 'SFP1_RD'), 1: ('ONU_TX', 'ONU_RX'), 0: ('ONU_BEN', 'US_RX')}
-HSMC_SWAP = {'SFP0_RD', 'SFP1_RD', 'ONU_RX', 'ONU_TX', 'US_RX'}   # P/N swapped at the connector for a planar route: GTS polarity
-                                                      # inversion on these (ONU_TX, US_RX: undo the DIN swap, so not inverted)
+HSMC_LANES = {3: ('SFP0_TD', 'SFP0_RD'), 2: ('SFP1_TD', 'SFP1_RD'), 1: ('ONU_TX', 'ONU_RX'), 0: ('ONU_BEN', None)}
+HSMC_SWAP = {'SFP0_RD', 'SFP1_RD', 'ONU_RX', 'ONU_TX'}   # P/N swapped at the connector for a planar route: GTS polarity
+                                                # inversion on these (ONU_TX: undoes the DIN swap, so not inverted)
 HSMC_IO = {'SFP0': [42, 44, 48, 50, 54, 56, 60, 62], 'SFP1': [66, 68, 72, 74, 78, 80, 84, 86],
-           'ONU': [102, 104, 108, 110, 114, 116, 120, 122, 126]}
+           'ONU': [102, 104, 108, 110, 114, 116, 120, 122]}
 
 def hsmc():
     """DE25-Standard HSMC card: two SFP+ cages (SFP0: a GPON or EPON OLT module or an Ethernet one, SFP1: Ethernet, a
-    1000BASE-X module or a copper 1000BASE-T SFP over SGMII; 10G later), GPON ONU optics (BOSA of the X100DG), an upstream
-    sniffer receiver (1310 nm receive can on the burst enable lane's free RX, beside the ONU BOSA on a splitter). Power: HSMC 3.3 V (1.5 A) for the logic and optics, HSMC 12 V (1 A; the board's
+    1000BASE-X module or a copper 1000BASE-T SFP over SGMII; 10G later), GPON ONU optics (BOSA of the X100DG); the upstream sniffer
+    is a GPON OLT module in SFP0 (operator 2026-11-05). Power: HSMC 3.3 V (1.5 A) for the logic and optics, HSMC 12 V (1 A; the board's
     HSMC 12V Power Header must be set to pins 2-3, default off) through a buck for the two cages (10G / XGS-PON modules up to ~1.1 A each)."""
-    b = Bridge('hsmc', 'HSMC card for DE25-Standard: OLT/Ethernet and Ethernet SFP+ cages, GPON ONU BOSA, upstream sniffer')
+    b = Bridge('hsmc', 'HSMC card for DE25-Standard: OLT/Ethernet and Ethernet SFP+ cages, GPON ONU BOSA')
     b.serdes_w = 0.3   # all lanes left to the router: ~55 ohm on the JLC outer layers
     fn = hsmc_pinout()
     pin_of = {f: p for p, f in fn.items()}
@@ -428,7 +428,7 @@ def hsmc():
                 conn.update({str(pin_of[f'XCVR_{d}p{lane}']): f'{net}_{p}', str(pin_of[f'XCVR_{d}n{lane}']): f'{net}_{n}'})
     conn.update({'6': 'GTS_REFCLK_P', '8': 'GTS_REFCLK_N', '2': 'GTS_RXREF_P', '4': 'GTS_RXREF_N'})   # XCVR_RX6 / RX7
     io = {cage: [f'{cage}_{n}' for n in ('TX_DIS', 'TX_FAULT', 'LOS', 'MOD_ABS', 'SCL', 'SDA', 'RS0', 'RS1')] for cage in ('SFP0', 'SFP1')}
-    io['ONU'] = ['LASER_DIS_FPGA', 'RX_SD', 'ONU_SCL', 'ONU_SDA', 'VCXO_PWM', 'BURST_CUT', 'BEN_IO', 'VCXO156_PWM', 'US_SD']
+    io['ONU'] = ['LASER_DIS_FPGA', 'RX_SD', 'ONU_SCL', 'ONU_SDA', 'VCXO_PWM', 'BURST_CUT', 'BEN_IO', 'VCXO156_PWM']
     for group, nets in io.items():
         conn.update({str(p): n for p, n in zip(HSMC_IO[group], nets)})
     b.block = 'hsmc'
@@ -478,14 +478,6 @@ def hsmc():
           {'1': 'LASER_DIS_FPGA', '2': 'BURST_CUT', '4': 'LASER_DIS', 'VCC': '+3V3', 'GND': 'GND'}, MPN='SN74LVC1G32DBVR')
     b.decouple('+3V3', 1)
     b.r('4.7k', 'LASER_DIS_FPGA', '+3V3')   # FPGA unconfigured: laser off
-    # upstream sniffer (operator 2026-11-04): bursts AC coupled as on the sniffer board, trims on a second AD5593R (0x11)
-    receiver(b, 'US_', ('BOSA_RX', 'XL-BCB2111-LS-02, RX can only', 'bridge:BOSA_RX_TO46'), '220p', swap=True)
-    apd_bias(b, 'US_', '330k')   # XL-BCB2111 Vbr up to 60 V: 330k gives 19..61 V over the DAC range
-    b.block = 'ddm:US_'
-    b.add('U', 'Analog', 'AD5593R', 'AD5593RBRUZ', 'Package_SO:TSSOP-16_4.4x5mm_P0.65mm',
-          {'~{RESET}': 'DDM_RESET', 'A0': '+3V3', 'V_{DD}': '+3V3', 'V_{LOGIC}': '+3V3', 'V_{REF}': 'US_DDM_VREF', 'GND': 'GND',
-           'SDA': 'ONU_SDA', 'SCL': 'ONU_SCL', 'IO0': 'US_APD_ADJ', 'IO1': 'US_APD_MON'}, MPN='AD5593RBRUZ')
-    b.c('100n', 'US_DDM_VREF'); b.decouple('+3V3', 1)
     b.block = 'mech'
     for _ in range(2):
         b.add('H', 'Mechanical', 'MountingHole', 'M3', 'MountingHole:MountingHole_3.2mm_M3', {})
