@@ -13579,7 +13579,7 @@
 				)
 			)
 		)
-		(property "MPN" "SiT3821AI-1B2-33EB155.520000 (LVPECL, +-50 ppm pull; check code)"
+		(property "MPN" "SiT3821AI-1B2-33NE155.520000"
 			(at 0 0 0)
 			(layer "F.SilkS")
 			(hide yes)
@@ -16717,7 +16717,7 @@
 				)
 			)
 		)
-		(property "MPN" "SiT3821AI-1B2-33EB156.250000 (LVPECL, +-50 ppm pull; check code)"
+		(property "MPN" "SiT3821AI-1B2-33NH156.250000"
 			(at 0 0 0)
 			(layer "F.SilkS")
 			(hide yes)

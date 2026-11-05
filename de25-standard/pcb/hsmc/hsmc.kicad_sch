@@ -4900,7 +4900,7 @@
     (property "Datasheet" "" (at 60.96 157.48 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (property
       "MPN"
-      "SiT3821AI-1B2-33EB156.250000 (LVPECL, +-50 ppm pull; check code)"
+      "SiT3821AI-1B2-33NH156.250000"
       (at 60.96 157.48 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "ef78531f-71de-5676-b401-e8368bf63a83"))
@@ -5224,7 +5224,7 @@
     (property "Datasheet" "" (at 279.4 157.48 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (property
       "MPN"
-      "SiT3821AI-1B2-33EB155.520000 (LVPECL, +-50 ppm pull; check code)"
+      "SiT3821AI-1B2-33NE155.520000"
       (at 279.4 157.48 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "31667348-eedd-5b5d-a6ac-09709baf7044"))

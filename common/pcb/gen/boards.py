@@ -248,7 +248,7 @@ def onu():
     b.block = 'clock'
     b.add('Y', LIB, 'VCXO_LVDS_3225', 'SiT3821 155.52 MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
           {'VIN': 'VCXO_VC', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'REFCLK_P', 'OUT-': 'REFCLK_N'},
-          MPN='SiT3821AI-2B2-33EB155.520000 (LVDS, +-50 ppm pull; check code)')
+          MPN='SiT3821AI-2B2-33NB155.520000 (LVDS, +-50 ppm pull)')
     b.fb('+3V3', '+3V3_XO'); b.decouple('+3V3_XO', 1, 1)
     b.r('10k', 'VCXO_PWM', 'VCXO_RC'); b.c('1u', 'VCXO_RC')
     b.r('10k', 'VCXO_RC', 'VCXO_VC'); b.c('1u', 'VCXO_VC')
@@ -378,7 +378,7 @@ def sniffer():
     b.block = 'clock'
     b.add('Y', LIB, 'VCXO_LVDS_3225', 'SiT3821 155.52 MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
           {'VIN': 'VCXO_VC', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'REFCLK_P', 'OUT-': 'REFCLK_N'},
-          MPN='SiT3821AI-2B2-33EB155.520000 (LVDS, +-50 ppm pull; check code)')
+          MPN='SiT3821AI-2B2-33NB155.520000 (LVDS, +-50 ppm pull)')
     b.fb('+3V3', '+3V3_XO'); b.decouple('+3V3_XO', 1, 1)
     b.r('10k', 'VCXO_PWM', 'VCXO_RC'); b.c('1u', 'VCXO_RC')
     b.r('10k', 'VCXO_RC', 'VCXO_VC'); b.c('1u', 'VCXO_VC')
@@ -437,10 +437,12 @@ def hsmc():
     # GTS refclks, both VCXOs tuned by the FPGA: 155.52 MHz for every GPON lane, 156.25 MHz for 1.25 Gb/s (Ethernet, EPON:
     # the EPON ONU transmits loop-timed like a stock one, operator 2026-11-02)
     b.block = 'clock'
-    for mhz, v, ref in (('156.25', 'VCXO156', 'GTS_REFCLK'), ('155.52', 'VCXO', 'GTS_RXREF')):
+    # pull: absolute range (datasheet APR) minus ~30 % lost to the 20k series / 100k VIN divider must cover the line:
+    # 1000BASE-PX OLT +-100 ppm (H: APR +-170), GPON OLT (E: APR +-70); 3225 package: pin 2 NC ('N')
+    for mhz, v, ref, pull in (('156.25', 'VCXO156', 'GTS_REFCLK', 'H'), ('155.52', 'VCXO', 'GTS_RXREF', 'E')):
         b.add('Y', LIB, 'VCXO_LVDS_3225', f'SiT3821 {mhz} MHz', 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm',
               {'VIN': f'{v}_VC', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': f'{v}_P', 'OUT-': f'{v}_N'},
-              MPN=f'SiT3821AI-1B2-33EB{mhz}0000 (LVPECL, +-50 ppm pull; check code)')
+              MPN=f'SiT3821AI-1B2-33N{pull}{mhz}0000')
         for d in 'PN':   # LVPECL emitter load: ~1.6 Vpp, LVDS falls under the GTS 0.6 Vpp minimum
             b.r('150', f'{v}_{d}', 'GND'); b.c('100n', f'{v}_{d}', f'{ref}_{d}')
         b.r('10k', f'{v}_PWM', f'{v}_RC'); b.c('1u', f'{v}_RC')

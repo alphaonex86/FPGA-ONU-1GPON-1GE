@@ -13676,7 +13676,7 @@
     (property "Datasheet" "" (at 58.42 533.4 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (property
       "MPN"
-      "SiT3821AI-2B2-33EB155.520000 (LVDS, +-50 ppm pull; check code)"
+      "SiT3821AI-2B2-33NB155.520000 (LVDS, +-50 ppm pull)"
       (at 58.42 533.4 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "857bd64e-ae93-52d5-bdb2-7c54843075ec"))
