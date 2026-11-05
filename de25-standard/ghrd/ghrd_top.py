@@ -2,7 +2,7 @@
 """Patch a copy of the Terasic GHRD top (golden_top.v) to hold PonBoard: its pins become top ports, its HPS
 lightweight windows (lwOlt, lwOnu, lwEth) take the AXI bridges that qsys_top.tcl exports from qsys_top, its
 interrupts go to f2h_irq1 (bit k = k-th interrupt port of PonBoard, in port order), its management clock and reset
-are the GHRD's 100 MHz system clock and reset, clock_50 is CLOCK1_50 (same pin).
+are the GHRD's 100 MHz system clock and reset, clock_50 is CLOCK1_50 (same pin). Writes pon_irqs.h (f2h_irq1 bits).
 Usage: ghrd_top.py GOLDEN_TOP_V PONBOARD_V PIN_PORT..."""
 import re
 import sys
@@ -74,6 +74,11 @@ def main():
     golden = golden[:golden.rindex("endmodule")] + instance + "endmodule\n"
     open(golden_path, "w", newline="").write(golden)
     print("f2h_irq1 bits:", " ".join(f"{n}{w}" for _, w, n in irqs))
+    with open("pon_irqs.h", "w") as header:  # for the device tree (sniffer-uio.dtso)
+        bit = 0
+        for _, w, n in irqs:
+            header.write(f"#define PON_IRQ_{n} {bit}\n")
+            bit += width(w)
 
 
 main()

@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// The sniffer as a UIO device (sniffer -u): the lwOnu window and its interrupt. Built by uio_overlay.sh;
+// the kernel needs uio_pdrv_genirq.of_id=generic-uio.
+/dts-v1/;
+/plugin/;
+#include "pon_irqs.h"
+#ifndef F2H_IRQ1_SPI
+#error "F2H_IRQ1_SPI: GIC SPI of f2h_irq1 bit 0 (Agilex 5 HPS TRM, GIC shared peripheral interrupts map)"
+#endif
+
+&{/soc@0} {
+	sniffer@20101000 {
+		compatible = "generic-uio";
+		reg = <0x20101000 0x1000>; /* LW bridge + lwOnu (qsys_top.tcl), the sniffer at +0x900 */
+		interrupts = <0 (F2H_IRQ1_SPI + PON_IRQ_onuSnifferIrq) 4>; /* GIC_SPI, level high */
+	};
+};

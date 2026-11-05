@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: CERN-OHL-S-2.0
-// HPS (Linux) front end: the sniffer window through /dev/mem, or a replayed dump.
+// HPS (Linux) front end: the sniffer window through UIO (its interrupt) or /dev/mem (polled), or a replayed dump.
 #include "sniffer.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,7 @@
 #define LW_ONU 0x101000u      // lwOnu (de25-standard/ghrd/qsys_top.tcl)
 #define ONU_SNIFFER 0x900u    // PonBoard ONU side window
 #define POLL_IDLE_NS 20000
+#define UIO_MAP 0x1000u // de25-standard/ghrd/sniffer-uio.dtso: the lwOnu page
 
 static volatile sig_atomic_t stopping;
 
@@ -104,34 +106,82 @@ static int replay(struct sniffer *s, FILE *in)
     return 0;
 }
 
-static int live(struct sniffer *s, uint32_t bridge, const struct sniffer_options *opt)
+struct window {
+    uint8_t *map;
+    size_t size;
+    int uio; // its fd, -1: /dev/mem
+};
+
+static int open_window(uint32_t bridge, const char *uio, struct window *w)
 {
-    int fd = open("/dev/mem", O_RDWR | O_SYNC);
+    int fd = open(uio ? uio : "/dev/mem", uio ? O_RDWR : O_RDWR | O_SYNC);
     if (fd < 0) {
-        perror("sniffer: /dev/mem");
+        fprintf(stderr, "sniffer: %s: %s\n", uio ? uio : "/dev/mem", strerror(errno));
         return -1;
     }
-    long page = sysconf(_SC_PAGESIZE);
-    off_t base = (off_t)(bridge + LW_ONU) & ~(off_t)(page - 1);
-    size_t skip = (size_t)(bridge + LW_ONU - base) + ONU_SNIFFER;
-    uint8_t *map = mmap(NULL, skip + 0x100, PROT_READ | PROT_WRITE, MAP_SHARED, fd, base);
-    if (close(fd) < 0)
-        perror("sniffer: close /dev/mem");
-    if (map == MAP_FAILED) {
+    off_t base = 0;
+    size_t skip = ONU_SNIFFER;
+    w->size = UIO_MAP;
+    if (!uio) {
+        long page = sysconf(_SC_PAGESIZE);
+        base = (off_t)(bridge + LW_ONU) & ~(off_t)(page - 1);
+        skip += (size_t)(bridge + LW_ONU - base);
+        w->size = skip + 0x100;
+    }
+    w->map = mmap(NULL, w->size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, base);
+    if (w->map == MAP_FAILED) {
         perror("sniffer: mmap");
+        if (close(fd) < 0)
+            perror("sniffer: close");
         return -1;
     }
-    struct sniffer_regs regs = {map + skip, mem_read, mem_write};
+    w->map += skip;
+    w->uio = uio ? fd : -1;
+    if (!uio && close(fd) < 0)
+        perror("sniffer: close /dev/mem");
+    return (int)skip;
+}
+
+// Unmasks the interrupt (level: words wait) and waits for it, 1 s at most.
+static int wait_interrupt(int uio)
+{
+    uint32_t value = 1;
+    if (write(uio, &value, sizeof(value)) != sizeof(value)) {
+        perror("sniffer: UIO unmask");
+        return -1;
+    }
+    struct pollfd wait = {uio, POLLIN, 0};
+    int ready = poll(&wait, 1, 1000);
+    if (ready < 0 && errno == EINTR)
+        return 0;
+    if (ready < 0) {
+        perror("sniffer: UIO poll");
+        return -1;
+    }
+    if (ready > 0 && read(uio, &value, sizeof(value)) != sizeof(value)) {
+        perror("sniffer: UIO read");
+        return -1;
+    }
+    return 0;
+}
+
+static int live(struct sniffer *s, uint32_t bridge, const char *uio, const struct sniffer_options *opt)
+{
+    struct window w; // mapped from w.map - skip
+    int skip = open_window(bridge, uio, &w);
+    if (skip < 0)
+        return -1;
+    struct sniffer_regs regs = {w.map, mem_read, mem_write};
     struct sigaction bus = {.sa_handler = on_bus_error};
+    int result = 0;
     if (sigaction(SIGBUS, &bus, NULL) < 0) {
         perror("sniffer: SIGBUS");
-        return -1;
+        result = -1;
+    } else if (sniffer_start(s, &regs, opt) < 0) {
+        result = -1;
     }
-    if (sniffer_start(s, &regs, opt) < 0)
-        return -1;
-    int result = 0;
     struct timespec idle = {0, POLL_IDLE_NS}, now, reported = {0, 0};
-    while (!stopping) {
+    while (!result && !stopping) {
         int words = sniffer_poll(s);
         if (words < 0) {
             result = -1;
@@ -146,16 +196,21 @@ static int live(struct sniffer *s, uint32_t bridge, const struct sniffer_options
             reported = now;
             sniffer_report(s);
         }
-        if (words == 0 && nanosleep(&idle, NULL) < 0 && errno != EINTR) {
+        if (words)
+            continue;
+        if (w.uio >= 0)
+            result = wait_interrupt(w.uio);
+        else if (nanosleep(&idle, NULL) < 0 && errno != EINTR) {
             perror("sniffer: nanosleep");
             result = -1;
-            break;
         }
     }
     sniffer_stop(s);
     sniffer_report(s);
-    if (munmap(map, skip + 0x100) < 0)
+    if (munmap(w.map - skip, w.size) < 0)
         perror("sniffer: munmap");
+    if (w.uio >= 0 && close(w.uio) < 0)
+        perror("sniffer: close UIO");
     return result;
 }
 
@@ -166,7 +221,9 @@ static void usage(void)
             "  -w FILE  raw records (keep the dumps out of the public repo)\n"
             "  -t FILE  decoded records (default stdout, '-' none)\n"
             "  -r FILE  decode a raw dump instead of the board\n"
-            "  -b ADDR  HPS-to-FPGA lightweight bridge base (default 0x%08x)\n"
+            "  -u DEV   the sniffer's UIO device (de25-standard/ghrd/uio_overlay.sh), e.g. /dev/uio0: waits on its\n"
+            "           interrupt; else /dev/mem, polled\n"
+            "  -b ADDR  HPS-to-FPGA lightweight bridge base, /dev/mem only (default 0x%08x)\n"
             "  -o ID    tapped ONU-ID (default: from its bursts)\n"
             "  -s SN    tapped ONU's serial number, e.g. HWTC1234abcd (its ONU-ID from Assign_ONU-ID)\n"
             "  -a ID    also keep this Alloc-ID's grants (repeatable)\n"
@@ -183,14 +240,15 @@ int main(int argc, char **argv)
     static struct sniffer s;
     static uint8_t serial[8];
     struct sniffer_options opt = {.onu_id = -1, .delimiter = 0xAB5983, .lead = 128, .width = 16, .text = stdout};
-    const char *dump = NULL, *text = NULL, *in = NULL;
+    const char *dump = NULL, *text = NULL, *in = NULL, *uio = NULL;
     unsigned long value, bridge = LW_BRIDGE;
     int c;
-    while ((c = getopt(argc, argv, "w:t:r:b:o:s:a:p:Ad:l:W:h")) != -1) {
+    while ((c = getopt(argc, argv, "w:t:r:u:b:o:s:a:p:Ad:l:W:h")) != -1) {
         switch (c) {
         case 'w': dump = optarg; break;
         case 't': text = optarg; break;
         case 'r': in = optarg; break;
+        case 'u': uio = optarg; break;
         case 'b': if (parse_number(optarg, 0xFFFFFFFFul, &bridge) < 0) return 2; break;
         case 'o': if (parse_number(optarg, 254, &value) < 0) return 2; opt.onu_id = (int)value; break;
         case 's': if (parse_serial(optarg, serial) < 0) return 2; opt.serial = serial; break;
@@ -247,7 +305,7 @@ int main(int argc, char **argv)
         sniffer_stop(&s);
         fclose(file);
     } else {
-        result = live(&s, (uint32_t)bridge, &opt);
+        result = live(&s, (uint32_t)bridge, uio, &opt);
     }
     if (opt.dump && fclose(opt.dump) != 0) {
         perror("sniffer: dump");
