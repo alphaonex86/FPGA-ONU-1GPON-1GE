@@ -38,7 +38,7 @@ Developed and proven on an FPGA, the final target is an ASIC that holds everythi
   shared parts library (`pcb/gen`, `pcb/lib`).
 - `agilex5/`: common to the Agilex 5 boards (Quartus benches, GTS lane variants).
 - `de25-standard/`: Terasic DE25-Standard, our HSMC card (`pcb/hsmc`: two SFP+
-  cages, the ONU BOSA and an upstream sniffer receiver; placed and routed, DRC/ERC clean, not yet ordered).
+  cages and the ONU BOSA; placed and routed, DRC/ERC clean, not yet ordered).
 - `de25-nano/`: Terasic DE25-Nano, ECP5 SerDes bridge boards (alternative).
 
 ## Status
@@ -140,19 +140,19 @@ clock kept on the recovered downstream clock by a VCXO loop (DDMTD phase
 detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
 optics pins with the laser held off until both lanes are up. Sniffer (ONU side, 0x900,
-`sniffer_regs.h`; with a passive tap on a stock ONU's fibre, the BOSA receiving the downstream copy and the
-card's upstream receiver, on the burst enable lane's receiver, that ONU's bursts): one ONU's PLOAMs, BWmap
+`sniffer_regs.h`; with a passive tap on a stock ONU's fibre, the BOSA receiving the downstream copy and a GPON
+OLT module in cage 0 that ONU's bursts): one ONU's PLOAMs, BWmap
 entries and GEM fragments (still ciphered) and its descrambled bursts, timestamped, read by the CPU as records;
-the laser is held off while it records; checked in simulation.
+the laser and cage 0's transmitter are held off while it records; checked in simulation.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed, flow engine, EPON OLT and ONU, cage 0's Ethernet port and the sniffer included: 40.8K ALMs (87 %), 348 of 358 M20K, setup slack +0.014 ns
+HSMC card pins placed, flow engine, EPON OLT and ONU, cage 0's Ethernet port and the sniffer included: 40.4K ALMs (86 %), 308 of 358 M20K, setup slack +0.018 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 With the HPS: `de25-standard/ghrd/` brings Terasic's DE25-Standard reference design (GHRD, not in this
 repository: `GHRD=<its folder> agilex5/gts/fit.sh <folder outside the repository> ghrd`) to Quartus 26.1, removes
 its JTAG debug masters and shrinks its on-chip RAM to make room, and wires PonBoard in: its three register
 windows on the HPS lightweight bridge (+0x100000 OLT, +0x101000 ONU, +0x102000 Ethernet), its 18 interrupts on
-f2h_irq1 bits 0-17, its management clock the GHRD's 100 MHz: 42.9K ALMs (92 %), 352 of 358 M20K,
-setup slack +0.005 ns. A fit folder holding an earlier fit made Quartus 26.1.1 crash (internal error 22912) or fail where a fresh
+f2h_irq1 bits 0-17, its management clock the GHRD's 100 MHz: 42.5K ALMs (91 %), 312 of 358 M20K,
+setup slack +0.008 ns. A fit folder holding an earlier fit made Quartus 26.1.1 crash (internal error 22912) or fail where a fresh
 one passed, so fit.sh empties its own folder and refuses any other non-empty one. The HPS DDR settings were upgraded by Quartus: to check on the board.
 
 ## License

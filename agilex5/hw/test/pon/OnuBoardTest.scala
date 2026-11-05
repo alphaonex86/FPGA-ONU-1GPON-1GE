@@ -25,6 +25,7 @@ object OnuBoardTest extends App {
   val QUEUES_STATUS = 0x200 + 0x14 // GemCpuQueues STATUS: txFree
   val BRIDGE_VLAN_MAP = 0x304
   val BRIDGE_UNTAGGED = 0x308
+  val SNIFFER_CTRL = 0x900
   val LAN = 0x400 // GemCpuQueues
   val LAN_CONTROL = 0x600
   val TX_HEAD = 0x00
@@ -36,7 +37,7 @@ object OnuBoardTest extends App {
     val io = dut.io
     val mgmt = dut.clockDomain
     mgmt.forkStimulus(10)
-    for (c <- Seq(io.dsClk, io.usClk, io.gponRxClk, io.eponRxClk, io.helperClk, io.eponHelperClk)) c #= false
+    for (c <- Seq(io.dsClk, io.usClk, io.gponRxClk, io.eponRxClk, io.tapRxClk, io.helperClk, io.eponHelperClk)) c #= false
     io.helperLocked #= true
     io.epon #= false
     var dsHalf = 2
@@ -44,7 +45,7 @@ object OnuBoardTest extends App {
       var n = 0
       while (true) {
         sleep(dsHalf); io.dsClk #= !io.dsClk.toBoolean
-        for (c <- Seq(io.gponRxClk, io.eponRxClk)) c #= io.dsClk.toBoolean
+        for (c <- Seq(io.gponRxClk, io.eponRxClk, io.tapRxClk)) c #= io.dsClk.toBoolean
         if (io.dsClk.toBoolean) io.rxWord #= io.txWord.toInt
         if (n % 2 == 0) io.usClk #= !io.usClk.toBoolean
         n += 1
@@ -55,6 +56,8 @@ object OnuBoardTest extends App {
            lane.txPllLocked, lane.rxLockedToData, lane.rxLockedToRef)) b #= false
     for (b <- Seq(io.pins.rxSd, io.pins.burstCut, io.pins.scl.read, io.pins.sda.read, io.pins.benIo.read)) b #= false
     io.rxWord #= 0
+    io.tapRxDown #= true
+    io.tapRxWord #= 0
     io.ethDown #= true
     io.eth.tx.ready #= true
     io.eth.rx.valid #= false
@@ -136,6 +139,12 @@ object OnuBoardTest extends App {
     io.benLane.txReady #= true
     mgmt.waitSampling(6)
     check(!io.pins.laserDisable.toBoolean && !io.pins.benIo.writeEnable.toBoolean, "laser enabled, BEN_IO hi-Z")
+    write(SNIFFER_CTRL, 0x10001) // enable, delimiterErrors 1
+    mgmt.waitSampling(6)
+    check(io.pins.laserDisable.toBoolean && io.sniffing.toBoolean, "sniffing: laser and cage 0 TX off")
+    write(SNIFFER_CTRL, 0x10000)
+    mgmt.waitSampling(6)
+    check(!io.pins.laserDisable.toBoolean && !io.sniffing.toBoolean, "sniffer off: laser enabled again")
 
     write(EVENTS, 0x7)
     write(IRQ_ENABLE, 0x1)

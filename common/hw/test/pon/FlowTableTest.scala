@@ -7,7 +7,7 @@ import scala.collection.mutable
 import pon.gpon.GtcDsTest.check
 
 /** FlowTable against a model: the CPU writes random flows in their hashed bucket (both ways, overwrites, an entry
-  * invalidated), lookups of written and unknown keys every clock answer hit and action 5 clocks later; IPv4 and IPv6
+  * invalidated), lookups of written and unknown keys, one at a time, answer hit and action 6 clocks later; IPv4 and IPv6
   * keys. */
 object FlowTableTest extends App {
   case class Key(dport: Int, sport: Int, dst: BigInt, src: BigInt, udp: Boolean, session: Int, pppoe: Boolean, vid: Int,
@@ -73,8 +73,11 @@ object FlowTableTest extends App {
       drive(io.lookup.payload, k)
       io.lookup.valid #= rnd.nextInt(4) != 0
       cd.waitSampling()
-      if (io.lookup.valid.toBoolean) expected += (0 until 2).flatMap(w => table.get((bucketOf(k), w)))
-        .collectFirst { case (kk, a) if kk == k => a }
+      if (io.lookup.valid.toBoolean) {
+        expected += (0 until 2).flatMap(w => table.get((bucketOf(k), w))).collectFirst { case (kk, a) if kk == k => a }
+        io.lookup.valid #= false
+        cd.waitSampling(5) // one lookup at a time
+      }
     }
     io.lookup.valid #= false
     cd.waitSampling(8)

@@ -57,29 +57,30 @@ object FlowTable {
   }
 }
 
-/** Flow cache of one direction: 2^bucketBits buckets of 2 ways in block RAM, written whole by the CPU. A lookup
-  * answers 5 clocks later (hash, RAM, compare each registered: 311.04 MHz), a hit when a valid way's key matches. */
+/** Flow cache of one direction: 2^bucketBits buckets of 2 ways in one block RAM (bucket ## way: the IPv6 entries
+  * fill an M20K's width, not its depth), written whole by the CPU. A lookup, one at a time (the next after the
+  * answer: frames are >= 64 clocks apart), reads way 0 then way 1 through one comparator and answers 6 clocks later (hash, RAM, compare each registered: 311.04 MHz), a
+  * hit when a valid way's key matches. */
 case class FlowTable(bucketBits: Int = 10, addressBits: Int = 32) extends Component {
   val io = new Bundle {
     val lookup = slave Flow (FlowKey(addressBits))
     val result = master Flow (FlowResult(bucketBits))
     val write = slave Flow (FlowWrite(bucketBits, addressBits))
   }
-  val ways = Seq.fill(2)(Mem(FlowEntry(addressBits), 1 << bucketBits))
-  for ((w, k) <- ways.zipWithIndex) w.write(io.write.bucket, io.write.entry, io.write.valid && io.write.way === k)
-  for (w <- ways) w.initBigInt(Seq.fill(1 << bucketBits)(BigInt(0)))
+  val entries = Mem(FlowEntry(addressBits), 2 << bucketBits) initBigInt (Seq.fill(2 << bucketBits)(BigInt(0)))
+  entries.write(io.write.bucket @@ io.write.way, io.write.entry, io.write.valid)
 
-  val s1 = RegNext(io.lookup) init (io.lookup.getZero)
-  val bucket = RegNext(FlowTable.hash(io.lookup.payload.asBits)(bucketBits - 1 downto 0).asUInt)
-  val read = ways.map(_.readSync(bucket, s1.valid))
-  val s2 = RegNext(s1) init (s1.getZero)
-  val entries = read.map(RegNext(_)) // registered RAM outputs
-  val s3 = RegNext(s2) init (s2.getZero)
-  val hits = entries.map(e => RegNext(e.valid && e.key === s3.payload)) // s4
-  val actions = entries.map(e => RegNext(e.action))
-  val s4 = RegNext(s3.valid) init (False)
-  io.result.valid := RegNext(s4) init (False)
-  io.result.hit := RegNext(hits.orR)
-  io.result.action := RegNext(hits(0) ? actions(0) | actions(1))
-  io.result.index := RegNext(Delay(bucket, 3) @@ !hits(0))
+  val first = RegNext(io.lookup.valid) init (False) // way 0 read
+  val second = RegNext(first) init (False) // way 1 read
+  val key = RegNextWhen(io.lookup.payload, io.lookup.valid)
+  val bucket = RegNextWhen(FlowTable.hash(io.lookup.payload.asBits)(bucketBits - 1 downto 0).asUInt, io.lookup.valid)
+  val read = RegNext(entries.readSync(bucket @@ second.asUInt, first || second)) // registered RAM output
+  val hit = RegNext(read.valid && read.key === key) // way 0 when Delay(first, 3), way 1 a clock later
+  val action = RegNext(read.action)
+  val hit0 = RegNext(hit)
+  val action0 = RegNext(action)
+  io.result.valid := RegNext(Delay(second, 3, init = False)) init (False)
+  io.result.hit := RegNext(hit0 || hit)
+  io.result.action := RegNext(hit0 ? action0 | action)
+  io.result.index := RegNext(bucket @@ !hit0)
 }

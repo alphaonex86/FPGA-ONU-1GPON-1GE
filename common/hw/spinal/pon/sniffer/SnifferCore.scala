@@ -40,7 +40,7 @@ case class SnifferCore(usDomain: ClockDomain, gemDepth: Int = 4096, burstDepth: 
   }
   val busif = BusInterface(io.apb, SizeMapping(0, 256))
   val CTRL = busif.newReg("Sniffer control")
-  val enable = CTRL.field(Bool(), AccessType.RW, 0, "enable: record (the ONU laser is forced off meanwhile)")(SymbolName("enable"))
+  val enable = CTRL.field(Bool(), AccessType.RW, 0, "enable: record (the ONU laser and cage 0 TX are forced off meanwhile)")(SymbolName("enable"))
   val allPloams = CTRL.field(Bool(), AccessType.RW, 0, "allPloams: every PLOAM, else to onuId or broadcast")(SymbolName("allPloams"))
   CTRL.reserved(6 bits)
   val onuId = CTRL.field(Bits(8 bits), AccessType.RW, 0, "onuId: the tapped ONU's")(SymbolName("onuId"))

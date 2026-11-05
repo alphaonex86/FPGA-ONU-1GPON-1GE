@@ -23,7 +23,7 @@ case class PonBoard() extends Component {
     val clock_50 = in Bool () // board oscillator, 50 MHz
     val sfp0_tx_p, sfp0_tx_n, onu_tx_p, onu_tx_n, ben_tx_p, ben_tx_n = out Bool ()
     val sfp1_tx_p, sfp1_tx_n = out Bool ()
-    val sfp0_rx_p, sfp0_rx_n, onu_rx_p, onu_rx_n, ben_rx_p, ben_rx_n, sfp1_rx_p, sfp1_rx_n = in Bool ()
+    val sfp0_rx_p, sfp0_rx_n, onu_rx_p, onu_rx_n, sfp1_rx_p, sfp1_rx_n = in Bool ()
     val lwOlt, lwOnu, lwEth = slave(Axi4(HpsBridge.axiConfig))
     val sfp0, sfp1 = master(SfpPins())
     val onuPins = master(OnuPins())
@@ -37,6 +37,7 @@ case class PonBoard() extends Component {
   olt.io.axi <> io.lwOlt
   onu.io.axi <> io.lwOnu
   io.sfp0 <> olt.io.sfp
+  io.sfp0.txDisable.removeAssignments() := olt.io.sfp.txDisable || onu.io.sniffing // the tap's OLT module dark
   io.onuPins <> onu.io.pins
   io.vcxoPwm := onu.io.vcxoPwm
   io.vcxo156Pwm := onu.io.vcxo156Pwm
@@ -148,6 +149,9 @@ case class PonBoard() extends Component {
   olt.io.gponRxWord := ponLanes.sfp0Gpon.o_rx_parallel_data(7 downto 0)
   olt.io.eponRxClk := ponLanes.sfp0Epon.o_rx_clkout
   olt.io.eponRxWord := ponLanes.sfp0Epon.o_rx_parallel_data(9 downto 0)
+  onu.io.tapRxClk := ponLanes.sfp0Gpon.o_rx_clkout
+  onu.io.tapRxDown := !olt.io.lane.rxReady || oltSide.isEpon
+  onu.io.tapRxWord := ponLanes.sfp0Gpon.o_rx_parallel_data(7 downto 0)
 
   val onuSide = new DrSide(ponLanes.onu, ponLanes.onuGpon, ponLanes.onuEpon, drCtrl.o_one_hot_sel(2), onu.io.onuLane,
     onu.io.txWord, rxOnCoreClock = true, (io.onu_tx_p, io.onu_tx_n), (io.onu_rx_p, io.onu_rx_n))
@@ -165,33 +169,22 @@ case class PonBoard() extends Component {
   onu.io.eponHelperClk := helperPll.outclk_1
   onu.io.helperLocked := helperPll.locked
 
-  // the burst enable lane switches with the ONU lane (DR combinations): always on the ONU core clock, bit-aligned;
-  // its receiver (the upstream sniffer) through the GTS RX FIFO on that clock too, as the ONU lane's
+  // the burst enable lane switches with the ONU lane (DR combinations): always on the ONU core clock, bit-aligned
   val ben = onu.io.benLane
   for ((p, refclk) <- Seq(ponLanes.benGpon -> io.pon_refclk, ponLanes.benEpon -> io.eth_refclk)) {
     p.i_tx_pll_refclk_p := refclk
-    p.i_rx_cdr_refclk_p := refclk
     p.i_tx_coreclkin := onuClocks.clock_div1x
-    p.i_rx_coreclkin := onuClocks.clock_div1x
     p.i_tx_reset := ben.txReset
-    p.i_rx_reset := ben.rxReset
-    p.i_rx_set_locktoref := ben.rxLockToRef
   }
   ponLanes.benGpon.i_tx_parallel_data := B(0, 72 bits) ## onu.io.benWord(7 downto 0)
   ponLanes.benEpon.i_tx_parallel_data := B(0, 70 bits) ## onu.io.benWord
-  def benActive[T <: Data](f: vendor.GtsDrLanes#Profile => T): T = onuSide.isEpon ? f(ponLanes.benEpon) | f(ponLanes.benGpon)
+  def benActive(f: vendor.GtsDrLanes#Profile => Bool): Bool = onuSide.isEpon ? f(ponLanes.benEpon) | f(ponLanes.benGpon)
   ben.txResetAck := benActive(_.o_tx_reset_ack)
-  ben.rxResetAck := benActive(_.o_rx_reset_ack)
   ben.txReady := benActive(_.o_tx_ready)
-  ben.rxReady := benActive(_.o_rx_ready)
   ben.txPllLocked := benActive(_.o_tx_pll_locked)
-  ben.rxLockedToData := benActive(_.o_rx_is_lockedtodata)
-  ben.rxLockedToRef := benActive(_.o_rx_is_lockedtoref)
-  onu.io.benRxWord := benActive(_.o_rx_parallel_data(9 downto 0))
+  for (b <- Seq(ben.rxResetAck, ben.rxReady, ben.rxLockedToData, ben.rxLockedToRef)) b := False
   io.ben_tx_p := ponLanes.ben.o_tx_serial_data_p
   io.ben_tx_n := ponLanes.ben.o_tx_serial_data_n
-  ponLanes.ben.i_rx_serial_data_p := io.ben_rx_p
-  ponLanes.ben.i_rx_serial_data_n := io.ben_rx_n
 
   val ethLane = vendor.GtsDuplex("sfp1")
   duplex(ethLane, eth.io.lane, io.eth_refclk, ethLane.o_tx_clkout, ethLane.o_rx_clkout, eth.io.txWord, eth.io.rxWord)

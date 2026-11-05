@@ -37,11 +37,11 @@ project=$top
 [ $top != ghrd ] || { project=golden_top; [ -n "${GHRD:-}" ] || die "ghrd: set GHRD to the Terasic GHRD directory"; }
 # DE25-Standard user manual, HSMC GTS table (P pins; N follows)
 pins="pon_refclk:AT120 eth_refclk:AP120 ben_tx_p:AU129 onu_tx_p:AR129 sfp1_tx_p:AN129 sfp0_tx_p:AL129
-      ben_rx_p:AT135 onu_rx_p:AP135 sfp1_rx_p:AM135 sfp0_rx_p:AK135"
+      onu_rx_p:AP135 sfp1_rx_p:AM135 sfp0_rx_p:AK135"
 # HSMC card IO (common/pcb/gen/boards.py HSMC_IO -> hsmcpins.de25_name -> manual HSMC_D table), 3.3 V by JP5
 io_pins="sfp0_txDisable:F34 sfp0_txFault:H37 sfp0_los:Y34 sfp0_modAbs:Y15 sfp0_scl:AL32 sfp0_sda:AK21 sfp0_rs0:AL29
          sfp0_rs1:AJ1 onuPins_laserDisable:AG36 onuPins_rxSd:Y24 onuPins_scl:AB24 onuPins_sda:T8 vcxoPwm:AG21 vcxo156Pwm:R2
-         onuPins_burstCut:T18 onuPins_benIo:AJ2 onuPins_usSd:Y18
+         onuPins_burstCut:T18 onuPins_benIo:AJ2
          sfp1_txDisable:AK25 sfp1_txFault:Y8 sfp1_los:AG13 sfp1_modAbs:AB4 sfp1_scl:AH4 sfp1_sda:AD2
          sfp1_rs0:T15 sfp1_rs1:Y4"
 clock_pins="clock_50:D8" # board oscillator CLOCK1_50, bank 6C at 1.8 V (manual); to the helper PLL over a global clock

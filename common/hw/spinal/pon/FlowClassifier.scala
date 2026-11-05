@@ -29,7 +29,7 @@ case class FlowDecision() extends Bundle {
   val queue = UInt(2 bits)
 }
 
-object FlowClassifier { val latency = 11 }
+object FlowClassifier { val latency = 12 }
 
 /** The flow engine of one direction at its input: parses each frame, looks its flow up at its end (offloadable,
   * TTL > 1; IPv4 and IPv6 tables, IPv6 routed only), reads the flow's egress (64 entries) and builds its rewrite job
@@ -67,7 +67,7 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
     key.vid := tagged ? p.outerVid | U(0); key.tagged := tagged
   }
 
-  val looked = Delay(ended, 5, init = False) // with the table's result
+  val looked = Delay(ended, 6, init = False) // with the table's result
   val egresses = Mem(FlowEgress(), 64) addTag (ReadDuringWriteFree)
   // a CPU write waits out the clock of a read (frames are >= 64 clocks apart)
   val egressWrite = RegNextWhen(io.egressWrite.payload, io.egressWrite.valid)
