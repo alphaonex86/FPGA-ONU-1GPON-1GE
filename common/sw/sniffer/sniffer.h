@@ -11,6 +11,7 @@
 #define SNIFFER_MAX_IDS 16
 #define SNIFFER_ENTRIES 64
 #define SNIFFER_VOTES 16
+#define SNIFFER_GRANTS 16 // decoded per burst
 
 enum sniffer_kind { SNIFFER_PLOAM, SNIFFER_ALLOC, SNIFFER_GEM, SNIFFER_BURST };
 
@@ -44,7 +45,9 @@ struct sniffer_stream {
     unsigned have;
 };
 
-struct sniffer_entry { uint64_t time; unsigned start, stop, fec; };
+struct sniffer_grant { uint16_t alloc_id, flags, start, stop; };
+// A burst's BWmap entries (contiguous), stop: its last StopTime
+struct sniffer_entry { uint64_t time; unsigned stop, count; struct sniffer_grant grants[SNIFFER_GRANTS]; };
 
 struct sniffer {
     struct sniffer_regs regs;
@@ -57,6 +60,7 @@ struct sniffer {
     unsigned omci_port_count;
     struct sniffer_stream ds, us;
     unsigned desyncs;
+    uint8_t us_continued[4096]; // an upstream GEM fragment of that Port-ID waits for its end
     // offset learning: the first entries of the bursts, and the offsets they gave
     struct sniffer_entry entries[SNIFFER_ENTRIES];
     unsigned entry_next, entry_count;
@@ -77,5 +81,8 @@ int sniffer_poll(struct sniffer *s);
 int sniffer_handle(struct sniffer *s, const struct sniffer_record *record);
 // Prints the sync and lost counters when they change.
 void sniffer_report(struct sniffer *s);
+// G.984.3 helpers: PLOAM/DBRu CRC-8, GEM header with its HEC (before the mask).
+uint8_t sniffer_crc8(const uint8_t *bytes, size_t size);
+uint64_t sniffer_gem_header(unsigned pli, unsigned port, unsigned pti);
 
 #endif

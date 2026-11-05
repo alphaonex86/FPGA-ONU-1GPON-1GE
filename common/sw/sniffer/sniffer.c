@@ -22,6 +22,11 @@ static const char *const ploam_names[] = {
     "Key_Switching_Time", "Extended_Burst_Length", "PON-ID", "Swift_POPUP", "Ranging_Adjustment", "Sleep_Allow",
 };
 
+static const char *const ploamu_names[] = {
+    NULL, "Serial_Number_ONU", "Password", "Dying_Gasp", "No_Message", "Encryption_Key", "Physical_Equipment_Error",
+    "PST", "REI", "Acknowledge", "Sleep_Request",
+};
+
 static const char *const omci_names[32] = {
     [4] = "Create", [6] = "Delete", [8] = "Set", [9] = "Get", [11] = "Get_all_alarms", [12] = "Get_all_alarms_next",
     [13] = "MIB_upload", [14] = "MIB_upload_next", [15] = "MIB_reset", [16] = "Alarm", [17] = "AVC", [18] = "Test",
@@ -32,6 +37,27 @@ static const char *const omci_names[32] = {
 
 static unsigned be16(const uint8_t *p) { return (unsigned)p[0] << 8 | p[1]; }
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+
+#define NAME(table, i) ((i) < sizeof(table) / sizeof(table[0]) && table[i] ? table[i] : "?")
+
+uint8_t sniffer_crc8(const uint8_t *bytes, size_t size)
+{
+    unsigned crc = 0;
+    for (size_t i = 0; i < size; i++)
+        for (int bit = 7; bit >= 0; bit--)
+            crc = ((crc << 1) & 0xFF) ^ (((crc >> 7 ^ bytes[i] >> bit) & 1) ? 0x07 : 0);
+    return (uint8_t)crc;
+}
+
+uint64_t sniffer_gem_header(unsigned pli, unsigned port, unsigned pti)
+{
+    uint64_t data = (uint64_t)(pli & 0xFFF) << 15 | (port & 0xFFF) << 3 | (pti & 7);
+    unsigned remainder = 0;
+    for (int i = 26; i >= 0; i--)
+        remainder = ((remainder << 1) & 0xFFF) ^ (((remainder >> 11 ^ (unsigned)(data >> i)) & 1) ? 0x539 : 0);
+    uint64_t code = data << 12 | remainder;
+    return code << 1 | (__builtin_popcountll(code) & 1);
+}
 
 static void reg_write(struct sniffer *s, unsigned offset, uint32_t value)
 {
@@ -68,6 +94,27 @@ int sniffer_parse(const uint8_t *bytes, size_t size, struct sniffer_record *reco
         record->time = record->time << 8 | bytes[4 + i];
     record->payload = bytes + 12;
     return (int)total;
+}
+
+static void say_hex(struct sniffer *s, const uint8_t *bytes, unsigned size)
+{
+    for (unsigned i = 0; i < size; i++)
+        say(s, "%02x", bytes[i]);
+}
+
+static int is_omci(const struct sniffer *s, unsigned port)
+{
+    for (unsigned i = 0; i < s->omci_port_count; i++)
+        if (s->omci_ports[i] == port)
+            return 1;
+    return 0;
+}
+
+// OMCI message header (G.988 11.2): TCI, type, device, ME class / instance
+static void say_omci(struct sniffer *s, const uint8_t *m)
+{
+    say(s, " omci tci=%04x %s%s%s me=%u/%u", be16(m), NAME(omci_names, m[2] & 0x1Fu), m[2] & 0x40 ? " ar" : "",
+        m[2] & 0x20 ? " ak" : "", be16(m + 4), be16(m + 6));
 }
 
 static void keep(struct sniffer *s, unsigned map, unsigned id, int kept)
@@ -141,10 +188,12 @@ void sniffer_stop(struct sniffer *s)
         fflush(s->opt.text);
 }
 
+static int uses_fec(const struct sniffer_entry *e) { return e->grants[0].flags >> 9 & 1; }
+
 static unsigned burst_bytes(const struct sniffer_entry *e)
 {
-    unsigned bytes = 3 + ((e->stop - e->start + 1) & 0xFFFF);
-    return e->fec ? bytes + 16 * ((bytes + 238) / 239) : bytes;
+    unsigned bytes = 3 + ((e->stop - e->grants[0].start + 1) & 0xFFFF);
+    return uses_fec(e) ? bytes + 16 * ((bytes + 238) / 239) : bytes;
 }
 
 static int compare_votes(const void *a, const void *b)
@@ -182,41 +231,138 @@ static void vote(struct sniffer *s, int64_t offset)
 // A burst starts at an entry not contiguous with its frame's previous one (as BurstReset).
 static void learn_entry(struct sniffer *s, uint64_t time, const uint8_t *p)
 {
-    unsigned flags = (p[1] & 0xF) << 8 | p[2], start = be16(p + 3), stop = be16(p + 5);
+    struct sniffer_grant grant = {(uint16_t)(p[0] << 4 | p[1] >> 4), (uint16_t)((p[1] & 0xF) << 8 | p[2]),
+                                  (uint16_t)be16(p + 3), (uint16_t)be16(p + 5)};
     int contiguous = s->entry_count && time - s->previous_time < SNIFFER_FRAME_CLOCKS / 2 &&
-                     start == ((s->previous_stop + 1) & 0xFFFF);
+                     grant.start == ((s->previous_stop + 1) & 0xFFFF);
+    struct sniffer_entry *e;
     if (contiguous) {
-        s->entries[(s->entry_next + SNIFFER_ENTRIES - 1) % SNIFFER_ENTRIES].stop = stop;
+        e = &s->entries[(s->entry_next + SNIFFER_ENTRIES - 1) % SNIFFER_ENTRIES];
+        if (e->count == SNIFFER_GRANTS)
+            fprintf(stderr, "sniffer: a burst of more than %u grants, the rest not decoded\n", SNIFFER_GRANTS);
+        else
+            e->grants[e->count++] = grant;
     } else {
-        s->entries[s->entry_next] = (struct sniffer_entry){time, start, stop, flags >> 9 & 1};
+        e = &s->entries[s->entry_next];
+        *e = (struct sniffer_entry){.time = time, .count = 1, .grants = {grant}};
         s->entry_next = (s->entry_next + 1) % SNIFFER_ENTRIES;
         if (s->entry_count < SNIFFER_ENTRIES)
             s->entry_count++;
     }
+    e->stop = grant.stop;
     s->previous_time = time;
-    s->previous_stop = stop;
+    s->previous_stop = grant.stop;
 }
 
-// The burst's entry: the one whose grant has the burst's length, else (equal grants) the latest, both possible.
-static void learn_burst(struct sniffer *s, const struct sniffer_record *r)
+// Learning: the burst's entry is the one whose grant has the burst's length, else (equal grants) the latest, both
+// possible. Returns the entry at the learned offset, else the one of the burst's length, else NULL.
+static const struct sniffer_entry *burst_entry(struct sniffer *s, const struct sniffer_record *r)
 {
+    int learn = !(r->flags & 0x81);
     int64_t best = -1;
     int best_matched = 0;
+    const struct sniffer_entry *found = NULL, *best_entry = NULL;
     for (unsigned i = 0; i < s->entry_count; i++) {
         const struct sniffer_entry *e = &s->entries[i];
         if (r->time <= e->time)
             continue;
-        int64_t offset = (int64_t)(r->time - e->time) + PLOU_CLOCKS - 2 * (int64_t)e->start;
+        int64_t offset = (int64_t)(r->time - e->time) + PLOU_CLOCKS - 2 * (int64_t)e->grants[0].start;
         if (offset < MIN_OFFSET || offset > MAX_OFFSET)
             continue;
-        int matched = abs((int)burst_bytes(e) - (int)r->length) <= LENGTH_SLACK;
+        if (s->offset >= 0 && llabs(offset - s->offset) <= VOTE_SLACK)
+            found = e;
+        int matched = learn && abs((int)burst_bytes(e) - (int)r->length) <= LENGTH_SLACK;
         if (matched > best_matched || (matched == best_matched && (best < 0 || offset < best))) {
             best = offset;
             best_matched = matched;
+            best_entry = e;
         }
     }
-    if (best >= 0)
+    if (learn && best >= 0)
         vote(s, best);
+    return found ? found : best_matched ? best_entry : NULL;
+}
+
+// Returns the bytes after it.
+static unsigned decode_ploamu(struct sniffer *s, const uint8_t *data, unsigned at, unsigned end)
+{
+    if (at + 13 > end) {
+        say(s, "  ploamu cut\n");
+        return at + 13;
+    }
+    const uint8_t *m = data + at;
+    say(s, "  ploamu onu=%u msg=0x%02x %s ", m[0], m[1], NAME(ploamu_names, m[1]));
+    say_hex(s, m + 2, 10);
+    if (m[1] == 0x01)
+        say(s, " sn=%.4s%08x", (const char *)m + 2, be32(m + 6));
+    say(s, "%s\n", sniffer_crc8(m, 12) == m[12] ? "" : " bad-crc");
+    return at + 13;
+}
+
+static void decode_gem(struct sniffer *s, const uint8_t *data, unsigned at, unsigned end)
+{
+    static const uint8_t mask[5] = {0xB6, 0xAB, 0x31, 0xE0, 0x55};
+    while (at + 5 <= end) {
+        uint64_t header = 0;
+        for (int i = 0; i < 5; i++)
+            header = header << 8 | (data[at + i] ^ mask[i]);
+        at += 5;
+        if (header == 0) // idle
+            continue;
+        unsigned pli = (unsigned)(header >> 28), port = (header >> 16) & 0xFFF, pti = (header >> 13) & 7;
+        if (sniffer_gem_header(pli, port, pti) != header) {
+            say(s, "  gem bad-hec %010llx\n", (unsigned long long)header);
+            return;
+        }
+        unsigned bytes = pli < end - at ? pli : end - at;
+        say(s, "  gem port=%u pli=%u pti=%u%s", port, pli, pti, bytes < pli ? " cut" : "");
+        if (is_omci(s, port) && !s->us_continued[port] && bytes >= 8)
+            say_omci(s, data + at);
+        say(s, " ");
+        say_hex(s, data + at, bytes);
+        say(s, "\n");
+        s->us_continued[port] = !(pti & 1);
+        at += pli;
+    }
+}
+
+// Each grant: PLOAMu, PLSu, DBRu as its flags say, then GEM frames (G.984.3 8.2); FEC parity left out first.
+static void decode_burst(struct sniffer *s, const struct sniffer_record *r, const struct sniffer_entry *e)
+{
+    static const unsigned dbru_bytes[4] = {0, 2, 3, 5};
+    static uint8_t clear[65536];
+    const uint8_t *data = r->payload;
+    unsigned n = r->length;
+    if (uses_fec(e)) {
+        unsigned kept = 0;
+        for (unsigned at = 0; at < n; at += 255) {
+            unsigned chunk = n - at < 255 ? n - at : 255;
+            if (chunk > 16) {
+                memcpy(clear + kept, data + at, chunk - 16);
+                kept += chunk - 16;
+            }
+        }
+        data = clear;
+        n = kept;
+    }
+    for (unsigned i = 0; i < e->count; i++) {
+        const struct sniffer_grant *g = &e->grants[i];
+        unsigned at = 3 + ((g->start - e->grants[0].start) & 0xFFFF), end = 3 + ((g->stop - e->grants[0].start + 1) & 0xFFFF);
+        if (end > n)
+            end = n;
+        say(s, "  grant alloc-id=%u flags=%03x\n", g->alloc_id, g->flags);
+        if (g->flags & 0x400)
+            at = decode_ploamu(s, data, at, end);
+        if (g->flags & 0x800)
+            at += 120;
+        unsigned dbru = dbru_bytes[g->flags >> 7 & 3];
+        if (dbru && at + dbru <= end) {
+            say(s, "  dbru ");
+            say_hex(s, data + at, dbru - 1);
+            say(s, "%s\n", sniffer_crc8(data + at, dbru - 1) == data[at + dbru - 1] ? "" : " bad-crc");
+        }
+        decode_gem(s, data, at + dbru, end);
+    }
 }
 
 static void handle_ploam(struct sniffer *s, const struct sniffer_record *r)
@@ -224,9 +370,9 @@ static void handle_ploam(struct sniffer *s, const struct sniffer_record *r)
     const uint8_t *p = r->payload;
     unsigned onu = p[0], msg = p[1];
     int bad = r->flags & 1;
-    say(s, " onu=%u msg=0x%02x %s", onu, msg, msg < sizeof(ploam_names) / sizeof(ploam_names[0]) && ploam_names[msg] ? ploam_names[msg] : "?");
-    for (int i = 2; i < 12; i++)
-        say(s, "%s%02x", i == 2 ? " " : "", p[i]);
+    say(s, " onu=%u msg=0x%02x %s", onu, msg, NAME(ploam_names, msg));
+    say(s, " ");
+    say_hex(s, p + 2, 10);
     if (bad) {
         say(s, " bad-crc\n");
         return;
@@ -286,17 +432,10 @@ static void handle_gem(struct sniffer *s, const struct sniffer_record *r)
     say(s, " port=%u pli=%u pti=%u counter=%llx%s", port, pli, r->flags & 7, (unsigned long long)counter, r->flags & 8 ? " cut" : "");
     const uint8_t *data = p + 10;
     unsigned bytes = r->length - 10;
-    int omci = 0;
-    for (unsigned i = 0; i < s->omci_port_count; i++)
-        omci |= s->omci_ports[i] == port;
-    if (omci && bytes >= 8) {
-        unsigned type = data[2] & 0x1F;
-        say(s, " omci tci=%04x %s%s%s me=%u/%u", be16(data), omci_names[type] ? omci_names[type] : "?",
-            data[2] & 0x40 ? " ar" : "", data[2] & 0x20 ? " ak" : "", be16(data + 4), be16(data + 6));
-    }
+    if (is_omci(s, port) && bytes >= 8)
+        say_omci(s, data);
     say(s, " ");
-    for (unsigned i = 0; i < bytes; i++)
-        say(s, "%02x", data[i]);
+    say_hex(s, data, bytes);
     say(s, "\n");
 }
 
@@ -331,10 +470,15 @@ int sniffer_handle(struct sniffer *s, const struct sniffer_record *r)
         break;
     case SNIFFER_BURST:
         say(s, " onu=%u ind=%02x bytes=%u%s\n", p[1], p[2], r->length, r->flags & 1 ? " long" : "");
-        if (p[1] != 0xFF && (int)p[1] != s->onu_id)
+        if (p[1] == 0xFF) { // serial number answer: a PLOAMu alone
+            decode_ploamu(s, p, 3, r->length);
+            break;
+        }
+        if ((int)p[1] != s->onu_id)
             set_onu(s, p[1]);
-        if (!(r->flags & 0x81) && (int)p[1] == s->onu_id)
-            learn_burst(s, r);
+        const struct sniffer_entry *e = burst_entry(s, r);
+        if (e)
+            decode_burst(s, r, e);
         break;
     }
     return 0;
