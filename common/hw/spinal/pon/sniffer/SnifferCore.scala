@@ -36,6 +36,7 @@ case class SnifferCore(usDomain: ClockDomain, gemDepth: Int = 4096, burstDepth: 
     val ds = in(DsFields()) // the ONU's deframer
     val usLine = in Bits (8 bits) // usDomain
     val enabled = out Bool ()
+    val burstReset = out Bool () // the tap's OLT module, before each burst (BurstReset)
     val irq = out Bool () // record words wait
   }
   val busif = BusInterface(io.apb, SizeMapping(0, 256))
@@ -67,6 +68,7 @@ case class SnifferCore(usDomain: ClockDomain, gemDepth: Int = 4096, burstDepth: 
   val ds = SnifferDs(gemDepth)
   val fields = ds.io.fields // gated, a clock later: the deframer also feeds the ONU MAC (311.04 MHz)
   fields.synced := RegNext(io.ds.synced) init (False)
+  fields.frameStart := RegNext(io.ds.frameStart && enable) init (False)
   fields.ploam := io.ds.ploam.takeWhen(enable).stage()
   fields.alloc := io.ds.alloc.takeWhen(enable).stage()
   fields.gem := io.ds.gem.takeWhen(enable).stage()
@@ -111,6 +113,20 @@ case class SnifferCore(usDomain: ClockDomain, gemDepth: Int = 4096, burstDepth: 
     reg.field(UInt(16 bits), AccessType.RO, 0, "truncations")(SymbolName("truncations")) := truncations.resized
   }
   io.irq := RegNext(dsFifo.io.pop.valid || usFifo.io.pop.valid) init (False)
+
+  val rxReset = BurstReset()
+  rxReset.io.frameStart := fields.frameStart
+  rxReset.io.alloc << ds.io.kept
+  rxReset.io.flush := !enable
+  rxReset.io.time := time.resized
+  val RESET_OFFSET = busif.newReg("Burst reset: clocks from a kept BWmap entry's record time to its StartTime 0 at the tap")
+  rxReset.io.offset := RESET_OFFSET.field(UInt(32 bits), AccessType.RW, 0, "offset")(SymbolName("offset"))
+  val RESET_TIMING = busif.newReg("Burst reset of the tap's OLT module (cage 0 RS pin in burst reset mode), clocks")
+  rxReset.io.lead := RESET_TIMING.field(UInt(16 bits), AccessType.RW, 0, "lead: the pulse starts before the burst's StartTime")(SymbolName("lead"))
+  rxReset.io.width := RESET_TIMING.field(UInt(16 bits), AccessType.RW, 0, "width: 0 no pulse")(SymbolName("width"))
+  val RESET_LOST = busif.newReg("Burst resets not planned: already past, or the queue full, count")
+  RESET_LOST.field(UInt(16 bits), AccessType.RO, 0, "lost")(SymbolName("lost")) := rxReset.io.lost
+  io.burstReset := rxReset.io.reset
 
   busif.accept(DocCHeader("sniffer_regs", "SNIFFER")) // sniffer_regs.h next to the Verilog
 }

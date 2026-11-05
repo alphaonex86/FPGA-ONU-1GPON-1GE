@@ -70,6 +70,8 @@ object OltBoardTest extends App {
            io.lane.rxLockedToData, io.lane.rxLockedToRef, io.sfp.modAbs, io.sfp.los, io.sfp.txFault,
            io.sfp.scl.read, io.sfp.sda.read)) b #= false
     io.refclkFail #= 0
+    io.sniffing #= false
+    io.tapBurstReset #= false
     io.ethDown #= true
     io.eth.tx.ready #= true
     io.eth.rx.valid #= false
@@ -124,6 +126,15 @@ object OltBoardTest extends App {
     mgmt.waitSampling(2)
     check(!io.sfp.txDisable.toBoolean && io.sfp.rs0.writeEnable.toBoolean && io.sfp.rs0.write.toBoolean &&
       !io.sfp.rs1.writeEnable.toBoolean, "TX_DIS low, RS0 driven high, RS1 hi-Z")
+    write(SFP_CTRL, 0x4 | (3 << 3)) // RS1 burst reset
+    io.sniffing #= true
+    for (pulse <- Seq(true, false)) {
+      io.tapBurstReset #= pulse
+      mgmt.waitSampling(2)
+      check(io.sfp.rs1.writeEnable.toBoolean && io.sfp.rs1.write.toBoolean == pulse, s"sniffing: RS1 follows the sniffer's burst reset ($pulse)")
+    }
+    io.sniffing #= false
+    write(SFP_CTRL, 0x4)
     write(EVENTS, 0xF)
     write(IRQ_ENABLE, 0x1)
     io.sfp.modAbs #= true

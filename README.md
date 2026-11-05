@@ -143,16 +143,17 @@ optics pins with the laser held off until both lanes are up. Sniffer (ONU side, 
 `sniffer_regs.h`; with a passive tap on a stock ONU's fibre, the BOSA receiving the downstream copy and a GPON
 OLT module in cage 0 that ONU's bursts): one ONU's PLOAMs, BWmap
 entries and GEM fragments (still ciphered) and its descrambled bursts, timestamped, read by the CPU as records;
-the laser and cage 0's transmitter are held off while it records; checked in simulation.
+the laser and cage 0's transmitter are held off while it records, and the module gets its burst reset before each
+burst, planned from the captured BWmap; checked in simulation.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed, flow engine, EPON OLT and ONU, cage 0's Ethernet port and the sniffer included: 40.4K ALMs (86 %), 308 of 358 M20K, setup slack +0.018 ns
+HSMC card pins placed, flow engine, EPON OLT and ONU, cage 0's Ethernet port and the sniffer included: 40.5K ALMs (87 %), 308 of 358 M20K, setup slack +0.034 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 With the HPS: `de25-standard/ghrd/` brings Terasic's DE25-Standard reference design (GHRD, not in this
 repository: `GHRD=<its folder> agilex5/gts/fit.sh <folder outside the repository> ghrd`) to Quartus 26.1, removes
 its JTAG debug masters and shrinks its on-chip RAM to make room, and wires PonBoard in: its three register
 windows on the HPS lightweight bridge (+0x100000 OLT, +0x101000 ONU, +0x102000 Ethernet), its 18 interrupts on
-f2h_irq1 bits 0-17, its management clock the GHRD's 100 MHz: 42.5K ALMs (91 %), 312 of 358 M20K,
-setup slack +0.008 ns. A fit folder holding an earlier fit made Quartus 26.1.1 crash (internal error 22912) or fail where a fresh
+f2h_irq1 bits 0-17, its management clock the GHRD's 100 MHz: 42.7K ALMs (91 %), 312 of 358 M20K,
+setup slack +0.017 ns. A fit folder holding an earlier fit made Quartus 26.1.1 crash (internal error 22912) or fail where a fresh
 one passed, so fit.sh empties its own folder and refuses any other non-empty one. The HPS DDR settings were upgraded by Quartus: to check on the board.
 
 ## License

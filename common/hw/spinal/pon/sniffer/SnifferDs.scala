@@ -13,7 +13,7 @@ case class KeepWrite() extends Bundle {
 
 /** What SnifferDs takes from a GtcDsDeframer (the ONU's own: one deframer, with FEC, per line). */
 case class DsFields() extends Bundle {
-  val synced = Bool()
+  val synced, frameStart = Bool()
   val ploam = Flow(Checked(Bits(96 bits)))
   val alloc = Flow(Checked(Allocation()))
   val gem = Flow(Fragment(GemRxByte()))
@@ -26,6 +26,7 @@ object DsFields {
   def of(deframer: GtcDsDeframer): DsFields = {
     val f = DsFields()
     f.synced := deframer.io.synced.pull()
+    f.frameStart := deframer.io.frameStart.pull()
     f.ploam := deframer.io.ploam.pull()
     f.alloc := deframer.io.alloc.pull()
     f.gem := deframer.io.gem.pull()
@@ -48,6 +49,7 @@ case class SnifferDs(gemDepth: Int = 16384) extends Component {
     val allPloams = in Bool ()
     val allocMap = slave Flow (KeepWrite())
     val portMap = slave Flow (KeepWrite())
+    val kept = master Flow (Allocation()) // the kept entries with a good CRC, at their record's time
     val output = master Stream (Fragment(Bits(8 bits)))
     val drops = out UInt (32 bits)
     val truncations = out UInt (32 bits)
@@ -73,6 +75,8 @@ case class SnifferDs(gemDepth: Int = 16384) extends Component {
   allocs.io.close.flags := B(0, 7 bits) ## !alloc.crcOk
   allocs.io.close.time := io.time
   allocs.io.close.extra := alloc.value.line
+  io.kept.valid := alloc.valid && allocHit && alloc.crcOk
+  io.kept.payload := alloc.value
 
   // GEM: the header event comes a clock before the fragment's first byte, the map answers on that byte
   val gems = RecordWriter(10, gemDepth, 32)

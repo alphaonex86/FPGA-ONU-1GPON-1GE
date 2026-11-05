@@ -38,6 +38,8 @@ case class PonBoard() extends Component {
   onu.io.axi <> io.lwOnu
   io.sfp0 <> olt.io.sfp
   io.sfp0.txDisable.removeAssignments() := olt.io.sfp.txDisable || onu.io.sniffing // the tap's OLT module dark
+  olt.io.sniffing := onu.io.sniffing
+  olt.io.tapBurstReset := onu.io.tapBurstReset
   io.onuPins <> onu.io.pins
   io.vcxoPwm := onu.io.vcxoPwm
   io.vcxo156Pwm := onu.io.vcxo156Pwm

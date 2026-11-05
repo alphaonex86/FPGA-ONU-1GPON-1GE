@@ -128,6 +128,7 @@ case class OltBoardCore(anSpeedup: Boolean = false) extends Component {
     val eponRxWord = in Bits (10 bits)
     val refclkFail = in Bits (8 bits)
     val sfp = master(SfpPins())
+    val sniffing, tapBurstReset = in Bool () // the ONU side's sniffer on this cage: its burst reset instead
     val ponIrq, boardIrq, gemIrq, ethPortIrq = out Bool ()
     val bridgeIrq = out Bits (4 bits) // LAN, WAN, LAN control, WAN control frame queues
     val ethTxClk, ethRxClk, ethDown = in Bool () // the Ethernet lane: clocks, not ready (asynchronous)
@@ -185,7 +186,7 @@ case class OltBoardCore(anSpeedup: Boolean = false) extends Component {
     val ethQueues = mgmt.copy(reset = mgmt.readResetWire || mgmt(RegNext(!ethAlive).init(True)))(gpon.GemCpuQueues(ethTx, ethRx))
     eth.io.tx << EthCpuQueues(ethQueues, eth, True)
   }
-  board.io.burstReset := io.epon ? epon.mac.io.rxReset | pon.mac.io.rxReset
+  board.io.burstReset := io.sniffing ? io.tapBurstReset | (io.epon ? epon.mac.io.rxReset | pon.mac.io.rxReset)
   io.ponIrq := BufferCC(pon.mac.io.irq, False) || BufferCC(epon.mac.io.irq, False)
 
   val queuesDomain = ClockDomain.current.copy(reset = ClockDomain.current.readResetWire || RegNext(!board.io.alive).init(True))

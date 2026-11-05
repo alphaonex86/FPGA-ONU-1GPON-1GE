@@ -129,6 +129,7 @@ case class OnuBoardCore() extends Component {
     val tapRxClk, tapRxDown = in Bool () // cage 0's receiver (upstream tap): rx_clkout, not ready or not GPON
     val tapRxWord = in Bits (8 bits) // on tapRxClk
     val sniffing = out Bool () // cage 0's TX held off
+    val tapBurstReset = out Bool () // cage 0's module burst reset while sniffing
     val pins = master(OnuPins())
     val vcxoPwm, vcxo156Pwm = out Bool ()
     val ponIrq, boardIrq, gemIrq, snifferIrq = out Bool ()
@@ -173,6 +174,7 @@ case class OnuBoardCore() extends Component {
   }
   board.io.sniffing := pon.tap.io.enabled
   io.sniffing := pon.tap.io.enabled
+  io.tapBurstReset := pon.tap.io.burstReset
   io.snifferIrq := BufferCC(pon.tap.io.irq, False)
   val epon = new ClockingArea(eponDomain) {
     val mac = EponOnuMac()
