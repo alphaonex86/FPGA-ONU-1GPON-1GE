@@ -152,6 +152,10 @@ each burst is split by its matched grants into PLOAMu, DBRu and GEM frames, so t
 to the OLT's requests; `-P` writes them as an OMCI profile (whole messages paired by TCI: request, answer).
 `common/sw/omci` (portable C, `make test`) loads such a profile and answers a request from it with the request's
 TCI and a new trailer (AAL5 CRC-32): the clone path for MEs our ONU lacks.
+`common/sw/linux` (GPL): the HPS driver of our ONU on the OpenWrt fork's GPON core (`make KDIR=...`): activation
+stays in the FPGA, the core's OMCI responder answers on the OMCI Port-ID through the CPU GEM queues, and the core's
+clone fallback answers what its ME model lacks from the binary profile (`common/sw/omci/omci_profile`). Not yet:
+the Encryption_Key exchange, OMCI to bridge mapping.
 Both sides checked in simulation, fit together on the DE25-Standard with the
 HSMC card pins placed, flow engine, EPON OLT and ONU, cage 0's Ethernet port and the sniffer included: 40.5K ALMs (87 %), 308 of 358 M20K, setup slack +0.034 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
@@ -166,4 +170,5 @@ one passed, so fit.sh empties its own folder and refuses any other non-empty one
 ## License
 
 Hardware and RTL are licensed under the CERN Open Hardware Licence v2 -
-Strongly Reciprocal ([CERN-OHL-S-2.0](LICENSE)).
+Strongly Reciprocal ([CERN-OHL-S-2.0](LICENSE)). Exception: `common/sw/linux` (the Linux driver, built with the GPL GPON
+core of the OpenWrt fork) is GPL-2.0-or-later.

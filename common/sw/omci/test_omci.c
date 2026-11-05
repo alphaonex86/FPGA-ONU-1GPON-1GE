@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CERN-OHL-S-2.0
 #include "omci.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static int failures;
@@ -46,6 +47,22 @@ int main(void)
     CHECK(omci_profile_answer(&p, request, sizeof(request), answer, sizeof(answer)) == 0);
     request[7] = 0;
     CHECK(omci_profile_answer(&p, request, sizeof(request), answer, 40) == -1);
+
+    // binary: magic, then the sorted 76-byte records the GPL core searches
+    struct omci_profile two = {0};
+    static const char second[] = "490a01010000" "0000000000000000000000000000000000000000000000000000000000000000"
+                                 " 290a01010000" "0000000000000000000000000000000000000000000000000000000000000000\n";
+    char both[1024];
+    snprintf(both, sizeof(both), "%s%s", text, second); // the Get (49...) after the MIB upload (4d...)
+    CHECK(load(&two, both) == 0 && two.count == 2);
+    char *binary = NULL;
+    size_t size = 0;
+    FILE *out = open_memstream(&binary, &size);
+    CHECK(out && omci_profile_write_binary(&two, out) == 2 && fclose(out) == 0);
+    CHECK(size == 8 + 2 * OMCI_PROFILE_RECORD && !memcmp(binary, OMCI_PROFILE_MAGIC, 8));
+    CHECK((uint8_t)binary[8] == 0x49 && (uint8_t)binary[8 + OMCI_PROFILE_RECORD] == 0x4d);
+    free(binary);
+    omci_profile_free(&two);
     omci_profile_free(&p);
 
     static const char *const bad[] = {

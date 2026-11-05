@@ -153,6 +153,34 @@ void omci_profile_free(struct omci_profile *p)
     *p = (struct omci_profile){0};
 }
 
+static int compare_records(const void *a, const void *b) { return memcmp(a, b, 38); }
+
+int omci_profile_write_binary(const struct omci_profile *p, FILE *file)
+{
+    uint8_t *records = malloc((size_t)p->count * OMCI_PROFILE_RECORD + 1);
+    if (!records) {
+        fprintf(stderr, "omci: out of memory\n");
+        return -1;
+    }
+    unsigned n = 0;
+    for (unsigned i = 0; i < p->count; i++) {
+        const struct omci_profile_entry *e = &p->entries[i];
+        if (e->request[1] != DEVICE_BASELINE)
+            continue;
+        memcpy(records + n * OMCI_PROFILE_RECORD, e->request, 38);
+        memcpy(records + n * OMCI_PROFILE_RECORD + 38, e->answer, 38);
+        n++;
+    }
+    qsort(records, n, OMCI_PROFILE_RECORD, compare_records);
+    int ok = fwrite(OMCI_PROFILE_MAGIC, 1, 8, file) == 8 && fwrite(records, OMCI_PROFILE_RECORD, n, file) == n;
+    free(records);
+    if (!ok) {
+        perror("omci: binary profile");
+        return -1;
+    }
+    return (int)n;
+}
+
 int omci_profile_answer(const struct omci_profile *p, const uint8_t *request, unsigned length, uint8_t *answer, unsigned room)
 {
     unsigned body = omci_body(request, length);

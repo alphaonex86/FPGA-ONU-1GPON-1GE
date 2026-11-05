@@ -26,6 +26,10 @@ case $top in
     hsmc_lanes) verilog=$src/hsmc_lanes.sv ;;
     PonBoard|ghrd)
         (cd "$repo" && "${SBT:-sbt}" -batch "runMain pon.PonBoardVerilog") > "$dir/sbt.log" 2>&1 || die "sbt, see $dir/sbt.log"
+        for h in "$repo"/out/rtl/*.h; do # the drivers include them: each must be C
+            printf '#include <stdint.h>\ntypedef uint32_t u32;\n#include "%s"\n' "$h" | gcc -fsyntax-only -x c - 2>> "$dir/headers.log" ||
+                die "$h is not C, see $dir/headers.log"
+        done
         # a copy (with its RAM init files): another fit's sbt may rewrite out/rtl meanwhile
         cp "$repo"/out/rtl/PonBoard.v "$repo"/out/rtl/PonBoard.v_*.bin "$dir/" || die "no PonBoard.v"
         verilog=$dir/PonBoard.v

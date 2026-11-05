@@ -32,4 +32,11 @@ void omci_profile_free(struct omci_profile *profile);
 int omci_profile_answer(const struct omci_profile *profile, const uint8_t *request, unsigned length, uint8_t *answer,
                         unsigned room);
 
+// The binary profile the GPL core loads (omci_onu_set_profile): OMCI_PROFILE_MAGIC, then records of
+// OMCI_PROFILE_RECORD bytes (request bytes 2..39, answer bytes 2..39) sorted by request. Baseline entries only:
+// returns how many were written, -1 on a write error (logged).
+#define OMCI_PROFILE_MAGIC "OMCIPRF1"
+#define OMCI_PROFILE_RECORD 76
+int omci_profile_write_binary(const struct omci_profile *profile, FILE *file);
+
 #endif

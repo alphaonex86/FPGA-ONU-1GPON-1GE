@@ -48,7 +48,7 @@ case class OnuRegs(defaultResponseBits: Int, dataTconts: Int) extends Component 
   io.config.to1Frames := TIMERS.field(UInt(20 bits), AccessType.RW, 80000, "TO1, SN acquisition and ranging")(SymbolName("to1"))
   io.config.to2Frames := TIMERS.field(UInt(12 bits), AccessType.RW, 800, "TO2, POPUP")(SymbolName("to2"))
 
-  val keyRegs = (0 until 4).map(i => busif.newReg(s"Shadow key bytes ${4 * i}-${4 * i + 3}: the next key, sent by the CPU on Request_Key"))
+  val keyRegs = (0 until 4).map(i => busif.newReg(s"Shadow key bytes ${4 * i}-${4 * i + 3}: the next key, sent by the CPU on Request_Key")(SymbolName(s"KEY_$i")))
   io.config.key := Cat(keyRegs.zipWithIndex.map { case (r, i) => r.field(Bits(32 bits), AccessType.RW, 0, "bytes")(SymbolName(s"key$i")) }.reverse)
 
   val STATE = busif.newReg("Activation state")

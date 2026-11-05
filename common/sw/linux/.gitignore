@@ -1,0 +1,9 @@
+gpon/
+*.o
+*.ko
+*.mod
+*.mod.c
+.*.cmd
+modules.order
+Module.symvers
+.tmp_versions/
