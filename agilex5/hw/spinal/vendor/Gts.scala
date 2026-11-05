@@ -107,13 +107,13 @@ case class GtsDrLanes() extends BlackBox {
   }
   val sfp0 = Channel(0)
   val onu = Channel(1)
-  val ben = Channel(2, rx = false)
+  val ben = Channel(2)
   val sfp0Gpon = Profile("sfp0_inst", lockToRef = true)
   val sfp0Epon = Profile("sfp0_1g25_inst", lockToRef = true)
   val onuGpon = Profile("onu_inst")
   val onuEpon = Profile("onu_1g25_inst")
-  val benGpon = Profile("ben_tx_inst", rx = false)
-  val benEpon = Profile("ben_1g25_inst", rx = false)
+  val benGpon = Profile("ben_tx_inst", lockToRef = true) // its receiver: the upstream sniffer (bursts)
+  val benEpon = Profile("ben_1g25_inst", lockToRef = true)
   noIoPrefix()
 }
 

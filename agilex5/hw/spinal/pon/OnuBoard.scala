@@ -11,15 +11,15 @@ import spinal.lib.io.TriState
 import BoardFields._
 import pon.epon.{EponGem, EponOnuMac}
 
-/** ONU optics pins of the HSMC card (BOSA driver, cutoff, AD5593R I2C). BEN_IO is the fitted-by-hand fallback
-  * (normally hi-Z); BURST_CUT is high while the hardware cutoff holds the laser off. */
+/** ONU optics pins of the HSMC card (BOSA driver, cutoff, AD5593R I2C, upstream sniffer's signal detect). BEN_IO is the
+  * fitted-by-hand fallback (normally hi-Z); BURST_CUT is high while the hardware cutoff holds the laser off. */
 case class OnuPins() extends Bundle with IMasterSlave {
   val laserDisable = Bool()
-  val rxSd, burstCut = Bool()
+  val rxSd, burstCut, usSd = Bool()
   val scl, sda, benIo = TriState(Bool())
   override def asMaster(): Unit = {
     out(laserDisable)
-    in(rxSd, burstCut)
+    in(rxSd, burstCut, usSd)
     master(scl, sda, benIo)
   }
 }
@@ -49,6 +49,7 @@ case class OnuBoardRegs() extends Component {
     val helperLocked = in Bool () // the VCXO loop's helper clock runs
     val vcxoPwm, vcxo156Pwm = out Bool ()
     val epon = in Bool () // the lane runs its 1.25 Gb/s profile
+    val sniffing = in Bool () // the sniffer records (asynchronous)
     val alive = out Bool () // the ONU clocks run: the MAC registers answer
     val irq = out Bool ()
   }
@@ -58,8 +59,8 @@ case class OnuBoardRegs() extends Component {
   io.alive := synced(io.onuLane.txReady) && !io.onuLane.txReset
 
   val OPTICS = busif.newReg("ONU optics")
-  val laserOff = OPTICS.field(Bool(), AccessType.RW, 1, "LASER_DIS, also forced while not alive or BEN lane not ready")(SymbolName("laserDisable"))
-  io.pins.laserDisable := laserOff || !io.alive || !synced(io.benLane.txReady) || io.benLane.txReset
+  val laserOff = OPTICS.field(Bool(), AccessType.RW, 1, "LASER_DIS, also forced while not alive, BEN lane not ready or sniffing")(SymbolName("laserDisable"))
+  io.pins.laserDisable := laserOff || !io.alive || !synced(io.benLane.txReady) || io.benLane.txReset || synced(io.sniffing)
   val benMode = OPTICS.field(UInt(2 bits), AccessType.RW, 0, "benIo: 0 hi-Z, 1 low, 2 burst enable (fallback)")(SymbolName("benIo"))
   io.pins.benIo.writeEnable := benMode =/= 0
   io.pins.benIo.write := benMode === 2 && io.burstEnable
@@ -67,7 +68,8 @@ case class OnuBoardRegs() extends Component {
   openDrain(OPTICS, io.pins.sda, "sdaLow")
 
   val STATUS = busif.newReg("ONU optics pins, alive: the ONU clocks run and the MAC registers answer")
-  val pins = Seq("rxSd" -> synced(io.pins.rxSd), "burstCut" -> synced(io.pins.burstCut), "alive" -> io.alive)
+  val pins = Seq("rxSd" -> synced(io.pins.rxSd), "burstCut" -> synced(io.pins.burstCut), "alive" -> io.alive,
+    "usSd" -> synced(io.pins.usSd))
   val helperLocked = synced(io.helperLocked)
   for ((name, pin) <- pins ++ Seq("scl" -> synced(io.pins.scl.read), "sda" -> synced(io.pins.sda.read), "helperLocked" -> helperLocked))
     STATUS.field(Bool(), AccessType.RO, 0, name)(SymbolName(name)) := pin
@@ -107,12 +109,14 @@ case class OnuBoardRegs() extends Component {
   * 0x300 Ethernet bridge (also an error while the Ethernet lane is down; by default downstream GEM is dropped, the OMCI
   * Port-ID goes to the CPU; upstream one queue per data T-CONT, DATA_ALLOC_k), 0x400 and 0x500 the bridge's LAN and
   * WAN frame queues (as the bridge: flows-mode misses and the CPU's frames, EPON OAM out), 0x600 and 0x700 their
-  * control frames, 0x800 EponOnuMac registers. The ONU lane runs GPON or, after a DR switch (`epon`, changed only
+  * control frames, 0x800 EponOnuMac registers, 0x900 the GPON sniffer (SnifferCore: downstream from the ONU lane, the
+  * upstream tap on the burst enable lane's receiver; laser off while it records). The ONU lane runs GPON or, after a DR switch (`epon`, changed only
   * while the lane is reset), 1.25 Gb/s for the EPON ONU MAC: its tx clock (311.04 / 125 MHz, from the profile's VCXO)
   * and half clock clock everything, the received words included (GTS RX phase compensation FIFO); a VCXO loop per
   * profile keeps that clock on the recovered one, both sampled by a helper clock (VcxoTracker). The bridge's upstream
   * queues run on the tx clock: into the EPON MAC, or a byte per half clock into the OnuMac. The burst enable lane
-  * switches profile with the ONU lane (DR), on the same clock; reset with it. */
+  * switches profile with the ONU lane (DR), on the same clock (its receiver too, through its RX FIFO); its TX reset
+  * with the ONU lane's. */
 case class OnuBoardCore() extends Component {
   val io = new Bundle {
     val axi = slave(Axi4(HpsBridge.axiConfig))
@@ -124,9 +128,10 @@ case class OnuBoardCore() extends Component {
     val txWord = out Bits (10 bits) // GPON: bits 7-0
     val benWord = out Bits (10 bits) // GPON: bits 7-0
     val rxWord = in Bits (10 bits) // GPON: bits 7-0
+    val benRxWord = in Bits (10 bits) // the burst enable lane's receiver (upstream tap), GPON: bits 7-0
     val pins = master(OnuPins())
     val vcxoPwm, vcxo156Pwm = out Bool ()
-    val ponIrq, boardIrq, gemIrq = out Bool ()
+    val ponIrq, boardIrq, gemIrq, snifferIrq = out Bool ()
     val bridgeIrq = out Bits (4 bits) // LAN, WAN, LAN control, WAN control frame queues
     val ethTxClk, ethRxClk, ethDown = in Bool () // the Ethernet lane: clocks, not ready (asynchronous)
     val eth = master(EthFrames())
@@ -148,7 +153,7 @@ case class OnuBoardCore() extends Component {
     lanes.io.usClk := io.usClk
     lanes.io.usReset := gponDomains.usReset
     lanes.io.oltDsLine := 0
-    lanes.io.oltRxWord := 0
+    lanes.io.oltRxWord := io.benRxWord(7 downto 0) // the upstream tap, 2x oversampled as an OLT's
     lanes.io.onuRxWord := io.rxWord(7 downto 0)
 
     val mac = gpon.OnuMac()
@@ -157,7 +162,13 @@ case class OnuBoardCore() extends Component {
     mac.io.dsLine := lanes.io.onuDsLine
     lanes.io.onuUsLine := mac.io.usLine
     lanes.io.onuUsBen := mac.io.usBen
+
+    val tap = sniffer.SnifferCore(gponDomains.us)
+    tap.io.ds := sniffer.DsFields.of(mac.deframer)
+    tap.io.usLine := lanes.io.oltUsLine
   }
+  board.io.sniffing := pon.tap.io.enabled
+  io.snifferIrq := BufferCC(pon.tap.io.irq, False)
   val epon = new ClockingArea(eponDomain) {
     val mac = EponOnuMac()
     mac.io.rxCode := io.rxWord
@@ -233,8 +244,10 @@ case class OnuBoardCore() extends Component {
   pon.mac.io.apb <> gponCC.io.output
   val eponCC = Apb3CC(epon.mac.io.apb.config, ClockDomain.current, eponDomain)
   epon.mac.io.apb <> eponCC.io.output
+  val tapCC = Apb3CC(pon.tap.io.apb.config, ClockDomain.current, gponDomains.ds)
+  pon.tap.io.apb <> tapCC.io.output
   val eponMode = synced(io.epon)
   HpsBridge(io.axi, Seq(gponCC.io.input -> (board.io.alive && !eponMode), board.io.apb -> True,
     queues.io.apb -> board.io.alive, bridge.io.apb -> bridgeUp) ++ bridgeQueues.slaves(bridgeUp) ++
-    Seq(eponCC.io.input -> (board.io.alive && eponMode)))
+    Seq(eponCC.io.input -> (board.io.alive && eponMode), tapCC.io.input -> (board.io.alive && !eponMode)))
 }

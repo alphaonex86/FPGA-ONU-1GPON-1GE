@@ -9,9 +9,10 @@ import pon.gpon._
 import pon.gpon.GponCodes._
 import pon.gpon.GtcDsTest.{check, bigToBytes, bytesToBig, GemDriver, PloamDriver, writeBwmap}
 
-/** OLT framer -> 3-bit delay -> downstream sniffer. Test only. */
+/** OLT framer -> 3-bit delay -> deframer -> downstream sniffer. Test only. */
 case class SnifferDsBench() extends Component {
   val framer = GtcDsFramer()
+  val deframer = GtcDsDeframer()
   val sniffer = SnifferDs()
   val io = new Bundle {
     val ploam = slave(cloneOf(framer.io.ploam))
@@ -33,13 +34,14 @@ case class SnifferDsBench() extends Component {
   framer.io.gem << io.gem
   framer.io.fec := False
   val previous = RegNext(framer.io.line) init (0)
-  sniffer.io.line := (previous ## framer.io.line)(12 downto 5)
+  deframer.io.line := (previous ## framer.io.line)(12 downto 5)
+  sniffer.io.fields := DsFields.of(deframer)
   sniffer.io.time := io.time
   sniffer.io.onuId := io.onuId
   sniffer.io.allPloams := io.allPloams
   sniffer.io.allocMap << io.allocMap
   sniffer.io.portMap << io.portMap
-  io.synced := sniffer.io.synced
+  io.synced := deframer.io.synced
   io.output << sniffer.io.output
   io.drops := sniffer.io.drops
   io.truncations := sniffer.io.truncations
@@ -138,8 +140,9 @@ object SnifferTest extends App {
     check(dut.io.drops.toLong == 0 && dut.io.truncations.toLong == 0, "no record dropped or truncated")
   }
 
-  // writer overflow: 20-byte records into a 16-byte data FIFO, then a third record with both head entries taken
-  SimConfig.compile(RecordWriter(2, 16, 2)).doSim { dut =>
+  // writer overflow: 20-byte records into a 16-byte data FIFO, then a third record without room (of 3 head entries, two
+  // stay free for the pushes in flight)
+  SimConfig.compile(RecordWriter(2, 16, 3)).doSim { dut =>
     val cd = dut.clockDomain
     dut.io.data.valid #= false
     dut.io.close.valid #= false

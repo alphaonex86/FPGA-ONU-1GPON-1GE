@@ -4,7 +4,7 @@
 # slack over the timing corners (fails if negative). TOP: hsmc_lanes (lane check, default), PonBoard (Spinal, needs
 # sbt or SBT=path; its PON lanes switch profiles by DR; every other port but clk virtual) or ghrd (PonBoard in the
 # Terasic GHRD with the HPS: GHRD=its directory, brought into DIR by de25-standard/ghrd/prepare.sh).
-# Usage: [GHRD=dir] fit.sh DIR [TOP]
+# Usage: [GHRD=dir] fit.sh DIR [TOP]    (DIR: new, or one of fit.sh, emptied first)
 set -euo pipefail
 QUARTUS=${QUARTUS:-$HOME/altera_pro/26.1.1/quartus/bin}
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -12,15 +12,23 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 src=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$src/../.." && pwd)
 top=${2:-hsmc_lanes}
+# a fit in a DIR holding an earlier fit's Quartus state crashed (22912) or failed (23098) where a fresh one passed:
+# every fit starts empty; a DIR of ours (marker) is emptied, any other non-empty one refused
+mark=.fit_sh_dir
+if [ -e "$1/$mark" ]; then rm -r "$1"
+elif [ -d "$1" ] && [ -n "$(ls -A "$1")" ]; then die "$1: not empty and not made by fit.sh"; fi
 mkdir -p "$1"
+touch "$1/$mark"
 dir=$(cd "$1" && pwd)
-[ "$dir/ip/dr_ctrl.ip" -nt "$src/gen_ip.sh" ] || "$src/gen_ip.sh" "$dir/ip" # variants older than their script: regenerated
+"$src/gen_ip.sh" "$dir/ip"
 ips="srcss sfp0 onu ben_tx sfp1 pon_clocks helper_pll" # divider after its source
 case $top in
     hsmc_lanes) verilog=$src/hsmc_lanes.sv ;;
     PonBoard|ghrd)
         (cd "$repo" && "${SBT:-sbt}" -batch "runMain pon.PonBoardVerilog") > "$dir/sbt.log" 2>&1 || die "sbt, see $dir/sbt.log"
-        verilog=$repo/out/rtl/PonBoard.v
+        # a copy (with its RAM init files): another fit's sbt may rewrite out/rtl meanwhile
+        cp "$repo"/out/rtl/PonBoard.v "$repo"/out/rtl/PonBoard.v_*.bin "$dir/" || die "no PonBoard.v"
+        verilog=$dir/PonBoard.v
         sources=$(cat "$repo/out/rtl/PonBoard.sources") # black box RTL (taxi); the DR profiles (dr_top) from quartus_tlg's qip
         ips="srcss sfp0 sfp0_1g25 onu onu_1g25 ben_tx ben_1g25 dr_ctrl sfp1 clock_mux pon_clocks helper_pll" ;;
     *) die "unknown top $top" ;;
@@ -29,11 +37,11 @@ project=$top
 [ $top != ghrd ] || { project=golden_top; [ -n "${GHRD:-}" ] || die "ghrd: set GHRD to the Terasic GHRD directory"; }
 # DE25-Standard user manual, HSMC GTS table (P pins; N follows)
 pins="pon_refclk:AT120 eth_refclk:AP120 ben_tx_p:AU129 onu_tx_p:AR129 sfp1_tx_p:AN129 sfp0_tx_p:AL129
-      onu_rx_p:AP135 sfp1_rx_p:AM135 sfp0_rx_p:AK135"
+      ben_rx_p:AT135 onu_rx_p:AP135 sfp1_rx_p:AM135 sfp0_rx_p:AK135"
 # HSMC card IO (common/pcb/gen/boards.py HSMC_IO -> hsmcpins.de25_name -> manual HSMC_D table), 3.3 V by JP5
 io_pins="sfp0_txDisable:F34 sfp0_txFault:H37 sfp0_los:Y34 sfp0_modAbs:Y15 sfp0_scl:AL32 sfp0_sda:AK21 sfp0_rs0:AL29
          sfp0_rs1:AJ1 onuPins_laserDisable:AG36 onuPins_rxSd:Y24 onuPins_scl:AB24 onuPins_sda:T8 vcxoPwm:AG21 vcxo156Pwm:R2
-         onuPins_burstCut:T18 onuPins_benIo:AJ2
+         onuPins_burstCut:T18 onuPins_benIo:AJ2 onuPins_usSd:Y18
          sfp1_txDisable:AK25 sfp1_txFault:Y8 sfp1_los:AG13 sfp1_modAbs:AB4 sfp1_scl:AH4 sfp1_sda:AD2
          sfp1_rs0:T15 sfp1_rs1:Y4"
 clock_pins="clock_50:D8" # board oscillator CLOCK1_50, bank 6C at 1.8 V (manual); to the helper PLL over a global clock
@@ -57,16 +65,15 @@ fi
     echo "set_global_assignment -name SYSTEMVERILOG_FILE $verilog"
     for f in ${sources:-}; do echo "set_global_assignment -name SYSTEMVERILOG_FILE $f"; done
     for ip in $ips; do echo "set_global_assignment -name IP_FILE ip/$ip.ip"; done
-    if [ $top != hsmc_lanes ]; then # the DR group, profile:id:channel:combination: 1 all GPON (startup), 2 OLT 1.25 Gb/s,
-        # 3 ONU 1.25 Gb/s (its burst enable lane with it). Quartus 26.1.1 crashes (22912) on an IP in two combinations and
-        # rejects (23098) partial ones of startup IPs: back to GPON is combination 1, which also resets the other side's
-        for profile in sfp0:1:0:1 sfp0_1g25:2:0:2 onu:3:1:1 onu_1g25:4:1:3 ben_tx:5:2:1 ben_1g25:6:2:3; do
-            IFS=: read -r name id channel combination <<< "$profile"
+    if [ $top != hsmc_lanes ]; then # the DR group, profile:id:channel:combinations: (OLT, ONU) 1 GPON/GPON (startup),
+        # 2 1.25G/GPON, 3 GPON/1.25G, 4 1.25G/1.25G, so each side switches alone (the ONU's burst enable lane with it)
+        for profile in sfp0:1:0:1,3 sfp0_1g25:2:0:2,4 onu:3:1:1,2 onu_1g25:4:1:3,4 ben_tx:5:2:1,2 ben_1g25:6:2:3,4; do
+            IFS=: read -r name id channel combinations <<< "$profile"
             i=${name}_inst
             echo "set_instance_assignment -name DR_IP_INSTANCE -to $i -section_id dr_top $name"
             echo "set_instance_assignment -name DR_GROUP_RECONFIG_ID $id -to $i -section_id dr_top"
             echo "set_instance_assignment -name DR_COMBINATION_IP_INSTANCE_RELATIVE_LOCATION -to $i -section_id dr_top $channel"
-            echo "set_instance_assignment -name DR_COMBINATION -section_id dr_top -to $i $combination"
+            for c in ${combinations/,/ }; do echo "set_instance_assignment -name DR_COMBINATION -section_id dr_top -to $i $c"; done
         done
         echo "set_global_assignment -name DR_GROUP_STARTUP_COMBINATION -section_id dr_top 1"
     fi

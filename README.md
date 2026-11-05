@@ -121,9 +121,8 @@ line rates from their refclk pins (`agilex5/gts/fit.sh`). One GTS dynamic
 reconfiguration controller switches cage 0 and the ONU each on its own at run time
 between GPON and 1.25 Gb/s, each profile on its own refclk: the cage 0 lane (GPON
 OLT, or EPON OLT, 1000BASE-X or SGMII module) and the ONU BOSA lane with its
-burst enable lane (EPON ONU); back to GPON goes through the all-GPON
-combination, which also resets the other side's lane if it runs at 1.25 Gb/s (a Quartus
-26.1.1 limit). Cage 0 with a normal SFP: the OLT core's own
+burst enable lane (EPON ONU); four combinations (GPON or 1.25 Gb/s per side), so
+switching one side leaves the other running (to check on the board). Cage 0 with a normal SFP: the OLT core's own
 Ethernet port replaces the EPON OLT MAC on the 1.25 Gb/s profile (`olt_board_regs.h`
 ETH, set while the lane is reset; frames to the CPU queues at 0xA00), checked in
 simulation through the lane; software picks the mode from the module's EEPROM.
@@ -140,17 +139,21 @@ queues for OMCI (whole packets downstream, upstream fragments with descriptors;
 clock kept on the recovered downstream clock by a VCXO loop (DDMTD phase
 detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
-optics pins with the laser held off until both lanes are up.
+optics pins with the laser held off until both lanes are up. Sniffer (ONU side, 0x900,
+`sniffer_regs.h`; with a passive tap on a stock ONU's fibre, the BOSA receiving the downstream copy and the
+card's upstream receiver, on the burst enable lane's receiver, that ONU's bursts): one ONU's PLOAMs, BWmap
+entries and GEM fragments (still ciphered) and its descrambled bursts, timestamped, read by the CPU as records;
+the laser is held off while it records; checked in simulation.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed, flow engine, EPON OLT and ONU and cage 0's Ethernet port included: 39.9K ALMs (85 %), 337 of 358 M20K, setup slack +0.003 ns
+HSMC card pins placed, flow engine, EPON OLT and ONU, cage 0's Ethernet port and the sniffer included: 40.8K ALMs (87 %), 348 of 358 M20K, setup slack +0.014 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 With the HPS: `de25-standard/ghrd/` brings Terasic's DE25-Standard reference design (GHRD, not in this
 repository: `GHRD=<its folder> agilex5/gts/fit.sh <folder outside the repository> ghrd`) to Quartus 26.1, removes
 its JTAG debug masters and shrinks its on-chip RAM to make room, and wires PonBoard in: its three register
-windows on the HPS lightweight bridge (+0x100000 OLT, +0x101000 ONU, +0x102000 Ethernet), its 17 interrupts on
-f2h_irq1 bits 0-16, its management clock the GHRD's 100 MHz; it fitted on 2026-11-02 with 41.7K ALMs (89 %), 336 of
-358 M20K, setup slack +0.001 ns; the same flow now stops in Quartus 26.1.1's DR programming step (internal error 22912,
-also for that version): open. The HPS DDR settings were upgraded by Quartus: to check on the board.
+windows on the HPS lightweight bridge (+0x100000 OLT, +0x101000 ONU, +0x102000 Ethernet), its 18 interrupts on
+f2h_irq1 bits 0-17, its management clock the GHRD's 100 MHz: 42.9K ALMs (92 %), 352 of 358 M20K,
+setup slack +0.005 ns. A fit folder holding an earlier fit made Quartus 26.1.1 crash (internal error 22912) or fail where a fresh
+one passed, so fit.sh empties its own folder and refuses any other non-empty one. The HPS DDR settings were upgraded by Quartus: to check on the board.
 
 ## License
 

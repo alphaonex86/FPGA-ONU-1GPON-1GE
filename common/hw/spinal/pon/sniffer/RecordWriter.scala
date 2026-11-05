@@ -24,7 +24,7 @@ case class RecordEntry(extraBytes: Int) extends Bundle {
 /** One record source. The bytes pushed on `data` since the last `close` (that clock's included) are the payload after
   * `extra`. Out, a byte stream, one fragment per record: 0xA0 | kind, flags, payload length (16 LE), time (64 LE),
   * payload. The header is queued when the record closes, so the data FIFO holds a whole record. A record that starts
-  * with no header entry free is dropped whole; dataDepth + extraBytes < 65536. */
+  * with fewer than three header entries free is dropped whole (headDepth >= 3); dataDepth + extraBytes < 65536. */
 case class RecordWriter(extraBytes: Int, dataDepth: Int, headDepth: Int) extends Component {
   val io = new Bundle {
     val data = slave Flow (Bits(8 bits))
@@ -42,17 +42,23 @@ case class RecordWriter(extraBytes: Int, dataDepth: Int, headDepth: Int) extends
   val truncated = Reg(Bool())
   val count = Reg(UInt(16 bits))
   val starting = idle && (io.data.valid || io.close.valid)
-  val keep = starting ? (heads.io.availability =/= 0) | kept
+  // the head is pushed a clock after the close (timing); room is a clock old: at most two pushes since, one entry left
+  val room = RegNext(heads.io.availability > 2) init (False)
+  val keep = starting ? room | kept
   val cutBefore = !starting && truncated
   val push = io.data.valid && keep && !cutBefore
   val cutNow = cutBefore || (push && !datas.io.push.ready)
   val countNow = (starting ? U(0, 16 bits) | count) + (push && datas.io.push.ready).asUInt
   datas.io.push.valid := push && datas.io.push.ready
   datas.io.push.payload := io.data.payload
-  heads.io.push.valid := io.close.valid && keep
-  heads.io.push.head := io.close.payload
-  heads.io.push.head.flags(7) := cutNow
-  heads.io.push.length := countNow + extraBytes
+  val head = Flow(RecordEntry(extraBytes))
+  head.valid := io.close.valid && keep
+  head.head := io.close.payload
+  head.head.flags(7) := cutNow
+  head.length := countNow + extraBytes
+  val headStaged = head.stage()
+  heads.io.push.valid := headStaged.valid
+  heads.io.push.payload := headStaged.payload
   when(io.data.valid || io.close.valid) {
     idle := io.close.valid
     kept := keep

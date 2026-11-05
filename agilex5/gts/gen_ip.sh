@@ -40,13 +40,14 @@ deploy altera_iopll helper_pll gui_reference_clock_frequency=50.0 gui_number_of_
 # Cage 0's tx_clkout, through pon_clocks, clocks every PON lane's core (hsmc_lanes).
 gen sfp0 duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON enable_port_rx_set_locktoref=1 $SWAP
 gen onu duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON $SWAP
-gen ben_tx duplex_mode=tx pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON
+# burst enable lanes: their receiver is the upstream sniffer (bursts, not inverted: undone at the limiting amp input)
+gen ben_tx duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON enable_port_rx_set_locktoref=1
 gen sfp1 duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH $SWAP
 # The PON lanes' second profiles, switched with sfp0 / onu + ben_tx by the DR controller: cage 0 EPON OLT or
 # Ethernet (1000BASE-X or SGMII) module, ONU BOSA EPON ONU and its burst enable
 gen sfp0_1g25 duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH enable_port_rx_set_locktoref=1 $SWAP
 gen onu_1g25 duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH $SWAP
-gen ben_1g25 duplex_mode=tx pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH
+gen ben_1g25 duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH enable_port_rx_set_locktoref=1
 # A PON side's core clock from its active DR profile's tx_clkout, before pon_clocks; switched while that side is reset
 deploy intelclkctrl clock_mux NUM_CLOCKS=2 GLITCH_FREE_SWITCHOVER=false
-deploy intel_dr_gts dr_ctrl DR_XCVR_CHANNELS=3 DR_PROFILES=6 DR_CSR_CLK_MHZ=100.0 # last: fit.sh's up-to-date mark
+deploy intel_dr_gts dr_ctrl DR_XCVR_CHANNELS=3 DR_PROFILES=6 DR_CSR_CLK_MHZ=100.0
