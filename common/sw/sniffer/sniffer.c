@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: CERN-OHL-S-2.0
 #include "sniffer.h"
+#include "omci.h"
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -117,19 +118,6 @@ static void say_omci(struct sniffer *s, const uint8_t *m)
         m[2] & 0x20 ? " ak" : "", be16(m + 4), be16(m + 6));
 }
 
-// From the message type to the contents' end (TCI and trailer left out), 0 when malformed.
-static unsigned omci_body(const struct sniffer_omci *m)
-{
-    if (m->length < 10)
-        return 0;
-    if (m->bytes[3] == 0x0A) // baseline: 32 bytes of contents
-        return m->length >= 40 ? 38 : 0;
-    unsigned contents = be16(m->bytes + 8);
-    if (m->bytes[3] == 0x0B) // extended: its contents length
-        return m->length >= 10 + contents ? 8 + contents : 0;
-    return 0;
-}
-
 // One line per new pair: request body, answer body, the request's name and ME (the loader keeps the last answer).
 static void profile_pair(struct sniffer *s, const struct sniffer_omci *request, const struct sniffer_omci *answer)
 {
@@ -137,7 +125,7 @@ static void profile_pair(struct sniffer *s, const struct sniffer_omci *request, 
     unsigned length = 0;
     for (int side = 0; side < 2; side++) {
         const struct sniffer_omci *m = side ? answer : request;
-        unsigned body = omci_body(m);
+        unsigned body = omci_body(m->bytes, m->length);
         for (unsigned i = 0; i < body; i++)
             length += (unsigned)sprintf(line + length, "%02x", m->bytes[2 + i]);
         line[length++] = side ? '\0' : ' ';
@@ -166,7 +154,7 @@ static void profile_pair(struct sniffer *s, const struct sniffer_omci *request, 
 // A whole OMCI message: the OLT's requests wait for the answer with their TCI and type.
 static void omci_message(struct sniffer *s, int upstream, const struct sniffer_omci *m)
 {
-    if (!omci_body(m)) {
+    if (!omci_body(m->bytes, m->length)) {
         fprintf(stderr, "sniffer: malformed %s OMCI message (%u bytes)\n", upstream ? "US" : "DS", m->length);
         return;
     }

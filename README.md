@@ -150,6 +150,8 @@ burst reset offset, writes raw records (`-w`, keep dumps out of this repo) and a
 through UIO (`-u`, overlay from `de25-standard/ghrd/uio_overlay.sh`) or polls `/dev/mem`;
 each burst is split by its matched grants into PLOAMu, DBRu and GEM frames, so the stock ONU's OMCI answers sit next
 to the OLT's requests; `-P` writes them as an OMCI profile (whole messages paired by TCI: request, answer).
+`common/sw/omci` (portable C, `make test`) loads such a profile and answers a request from it with the request's
+TCI and a new trailer (AAL5 CRC-32): the clone path for MEs our ONU lacks.
 Both sides checked in simulation, fit together on the DE25-Standard with the
 HSMC card pins placed, flow engine, EPON OLT and ONU, cage 0's Ethernet port and the sniffer included: 40.5K ALMs (87 %), 308 of 358 M20K, setup slack +0.034 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
