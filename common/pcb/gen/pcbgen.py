@@ -17,7 +17,7 @@ BGA_C = (32.0, 26.0)
 VIA_D, VIA_HOLE = 0.45, 0.2
 POWER_PREFIX = ('+', 'GND')
 PLANE_NETS = ('GND', '+3V3', '+1V1')   # In1 GND, In2 +3V3 with a +1V1 island
-HV_PREFIX, HV_CLEAR = 'HV_', 0.2   # APD bias nets, up to 55 V
+HV_PREFIX, HV_CLEAR = 'HV_', 0.2   # APD bias nets (<prefix>HV_*), up to 61 V
 SUB_RAILS = ('+1V1_SD', '+2V5')   # SerDes 1.1 V (~0.2 A) and VCCAUX 2.5 V (~50 mA): 0.2 mm, ~17 mV over 35 mm
 
 def fp_dir(lib):
@@ -67,6 +67,7 @@ def finish_footprint(fp):
 class Layout:
     def __init__(self, bd, width, height):
         self.bd, self.w, self.h = bd, width, height
+        self.notch = None   # (x, y): the corner west of x and south of y cut away
         self.pcb = pcbnew.BOARD()
         self.pcb.SetCopperLayerCount(4)
         for layer in (pcbnew.In1_Cu, pcbnew.In2_Cu):  # planes: vias only, never traces
@@ -211,6 +212,9 @@ class Layout:
 
     def outline(self):
         pts = [(0, 0), (self.w, 0), (self.w, self.h), (0, self.h)]
+        if self.notch:
+            x, y = self.notch
+            pts[3:] = [(x, self.h), (x, y), (0, y)]
         for a, b in zip(pts, pts[1:] + pts[:1]):
             s = pcbnew.PCB_SHAPE(self.pcb)
             s.SetShape(pcbnew.SHAPE_T_SEGMENT)
@@ -322,8 +326,9 @@ def write_project(path, bd):
                                                 [{'netclass': 'Sub', 'pattern': n} for n in sub] +
                                                 [{'netclass': 'SerDes', 'pattern': p} for p in
                                                  ('TX0_*', 'RX0_*', 'BEN_*', 'ONU_TD_*', 'ONU_RD_*', 'ONU_BEN_*', 'LD_*', 'TIA_*', 'RIN_*',
-                                                  'ONU_TX_*', 'ONU_RX_*', 'OLT_TD_*', 'OLT_RD_*', 'ETH_TD_*', 'ETH_RD_*', 'GTS_*')] +
-                                                [{'netclass': 'HV', 'pattern': HV_PREFIX + '*'}]}
+                                                  'ONU_TX_*', 'ONU_RX_*', 'SFP0_TD_*', 'SFP0_RD_*', 'SFP1_TD_*', 'SFP1_RD_*', 'GTS_*', 'US_TIA_*', 'US_DIN_*',
+                                                  'US_LA_*', 'US_RX_*')] +
+                                                [{'netclass': 'HV', 'pattern': '*' + HV_PREFIX + '*'}]}
     json.dump(pro, open(path, 'w'), indent=2, sort_keys=True)
 
 
@@ -369,7 +374,7 @@ def plane_vias(lay, clear=0.12):
                 d = math.hypot(g[0][0] - x, g[0][1] - y) - g[1] - r
             else:
                 d = seg_dist((x, y), g[0], g[1]) - g[2] - r
-            if d < (0.25 + r if via and kind == 'circle' else clear + (HV_CLEAR - 0.1 if n.startswith(HV_PREFIX) else 0)):
+            if d < (0.25 + r if via and kind == 'circle' else clear + (HV_CLEAR - 0.1 if HV_PREFIX in n else 0)):
                 return False
         return True
     keepouts = [z for z in lay.pcb.Zones() if z.GetIsRuleArea() and z.GetDoNotAllowVias()]

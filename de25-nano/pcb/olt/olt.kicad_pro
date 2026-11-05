@@ -285,27 +285,43 @@
       },
       {
         "netclass": "SerDes",
-        "pattern": "OLT_TD_*"
+        "pattern": "SFP0_TD_*"
       },
       {
         "netclass": "SerDes",
-        "pattern": "OLT_RD_*"
+        "pattern": "SFP0_RD_*"
       },
       {
         "netclass": "SerDes",
-        "pattern": "ETH_TD_*"
+        "pattern": "SFP1_TD_*"
       },
       {
         "netclass": "SerDes",
-        "pattern": "ETH_RD_*"
+        "pattern": "SFP1_RD_*"
       },
       {
         "netclass": "SerDes",
         "pattern": "GTS_*"
       },
       {
+        "netclass": "SerDes",
+        "pattern": "US_TIA_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "US_DIN_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "US_LA_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "US_RX_*"
+      },
+      {
         "netclass": "HV",
-        "pattern": "HV_*"
+        "pattern": "*HV_*"
       }
     ]
   },

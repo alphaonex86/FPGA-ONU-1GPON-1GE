@@ -323,7 +323,7 @@ def sfp_cage(b, name, td, rd, vcc='+3V3'):
     through series R so the FPGA keeps them hi-Z until the module is identified."""
     b.block = f'sfp:{name}'
     t, r = f'+3V3_{name}T', f'+3V3_{name}R'
-    b.add('J', LIB, 'SFP_HOST', f'SFP+ {name}', 'Connector:Connector_SFP_and_Cage',
+    b.add('J', LIB, 'SFP_HOST', f'{name} cage', 'Connector:Connector_SFP_and_Cage',
           {'VeeT': 'GND', 'VeeR': 'GND', 'CAGE': 'GND', 'TX_FAULT': f'{name}_TX_FAULT', 'TX_DISABLE': f'{name}_TX_DIS',
            'SDA': f'{name}_SDA', 'SCL': f'{name}_SCL', 'MOD_ABS': f'{name}_MOD_ABS', 'RS0': f'{name}_P7', 'RX_LOS': f'{name}_LOS',
            'RS1': f'{name}_P9', 'RD+': f'{rd}_P', 'RD-': f'{rd}_N', 'VccR': r, 'VccT': t, 'TD+': f'{td}_P', 'TD-': f'{td}_N'},
@@ -336,14 +336,15 @@ def sfp_cage(b, name, td, rd, vcc='+3V3'):
     for n in ('TX_FAULT', 'TX_DIS', 'LOS', 'MOD_ABS', 'SCL', 'SDA'):
         b.r('4.7k', f'{name}_{n}', vcc)
 
-def receiver(b, p, bosa, coupling):
-    """BOSA receive can -> SY88349NDL -> ECP5 SerDes RX <p>RX_P/N; the laser is never connected.
-    SD mode, auto reset, JAM = SD (squelched between bursts); SD to the ECP5 as the burst envelope."""
+def receiver(b, p, bosa, coupling, swap=False):
+    """BOSA receive can -> SY88349NDL -> SerDes RX <p>RX_P/N; the laser is never connected.
+    SD mode, auto reset, JAM = SD (squelched between bursts); SD to the FPGA as the burst envelope.
+    swap: TIA+ to the LA's DIN- (and - to +) where the layout needs it; the data comes out inverted."""
     b.block = f'rx:{p}'
     vcc = f'+3V3_{p}OPT'
     b.fb('+3V3', vcc); b.decouple(vcc, 3, 1)
     b.add('U', LIB, *bosa, {'VCC': vcc, 'VAPD': f'{p}HV_APD', 'OUT+': f'{p}TIA_P', 'OUT-': f'{p}TIA_N', 'GND': 'GND'})
-    for t, i in (('P', 'DIN_P'), ('N', 'DIN_N')):   # AC coupled, each input 50 ohm to VREF (datasheet pin 1/4)
+    for t, i in (('P', 'DIN_N'), ('N', 'DIN_P')) if swap else (('P', 'DIN_P'), ('N', 'DIN_N')):   # AC coupled, each input 50 ohm to VREF (pin 1/4)
         b.c(coupling, f'{p}TIA_{t}', f'{p}{i}')
         b.r('49.9', f'{p}{i}', f'{p}VREF')
     b.c('100n', f'{p}VREF')
@@ -400,17 +401,18 @@ def sniffer():
     return b
 
 # HSMC GTS lanes (DE25-Standard: 4, lanes 0-3) and the even-row single-ended pins (bank 2 north, bank 3 south)
-HSMC_LANES = {3: ('OLT_TD', 'OLT_RD'), 2: ('ETH_TD', 'ETH_RD'), 1: ('ONU_TX', 'ONU_RX'), 0: ('ONU_BEN', None)}
-HSMC_SWAP = {'OLT_RD', 'ETH_RD', 'ONU_RX', 'ONU_TX'}   # P/N swapped at the connector for a planar route: GTS polarity
-                                                      # inversion on these (ONU_TX: undoes the DIN swap, so not inverted)
-HSMC_IO = {'OLT': [42, 44, 48, 50, 54, 56, 60, 62], 'ETH': [66, 68, 72, 74, 78, 80, 84, 86],
-           'ONU': [102, 104, 108, 110, 114, 116, 120, 122]}
+HSMC_LANES = {3: ('SFP0_TD', 'SFP0_RD'), 2: ('SFP1_TD', 'SFP1_RD'), 1: ('ONU_TX', 'ONU_RX'), 0: ('ONU_BEN', 'US_RX')}
+HSMC_SWAP = {'SFP0_RD', 'SFP1_RD', 'ONU_RX', 'ONU_TX', 'US_RX'}   # P/N swapped at the connector for a planar route: GTS polarity
+                                                      # inversion on these (ONU_TX, US_RX: undo the DIN swap, so not inverted)
+HSMC_IO = {'SFP0': [42, 44, 48, 50, 54, 56, 60, 62], 'SFP1': [66, 68, 72, 74, 78, 80, 84, 86],
+           'ONU': [102, 104, 108, 110, 114, 116, 120, 122, 126]}
 
 def hsmc():
-    """DE25-Standard HSMC card: OLT SFP+ cage, Ethernet SFP+ cage (copper 1000BASE-T SFP over SGMII, 10G later),
-    GPON ONU optics (BOSA of the X100DG). Power: HSMC 3.3 V (1.5 A) for the logic and optics, HSMC 12 V (1 A; the board's
+    """DE25-Standard HSMC card: two SFP+ cages (SFP0: a GPON or EPON OLT module or an Ethernet one, SFP1: Ethernet, a
+    1000BASE-X module or a copper 1000BASE-T SFP over SGMII; 10G later), GPON ONU optics (BOSA of the X100DG), an upstream
+    sniffer receiver (1310 nm receive can on the burst enable lane's free RX, beside the ONU BOSA on a splitter). Power: HSMC 3.3 V (1.5 A) for the logic and optics, HSMC 12 V (1 A; the board's
     HSMC 12V Power Header must be set to pins 2-3, default off) through a buck for the two cages (10G / XGS-PON modules up to ~1.1 A each)."""
-    b = Bridge('hsmc', 'HSMC card for DE25-Standard: OLT SFP+, Ethernet SFP+, GPON ONU BOSA')
+    b = Bridge('hsmc', 'HSMC card for DE25-Standard: OLT/Ethernet and Ethernet SFP+ cages, GPON ONU BOSA, upstream sniffer')
     b.serdes_w = 0.3   # all lanes left to the router: ~55 ohm on the JLC outer layers
     fn = hsmc_pinout()
     pin_of = {f: p for p, f in fn.items()}
@@ -425,9 +427,8 @@ def hsmc():
                 p, n = ('N', 'P') if net in HSMC_SWAP else ('P', 'N')
                 conn.update({str(pin_of[f'XCVR_{d}p{lane}']): f'{net}_{p}', str(pin_of[f'XCVR_{d}n{lane}']): f'{net}_{n}'})
     conn.update({'6': 'GTS_REFCLK_P', '8': 'GTS_REFCLK_N', '2': 'GTS_RXREF_P', '4': 'GTS_RXREF_N'})   # XCVR_RX6 / RX7
-    io = {'OLT': [f'OLT_{n}' for n in ('TX_DIS', 'TX_FAULT', 'LOS', 'MOD_ABS', 'SCL', 'SDA', 'RS0', 'RS1')],
-          'ETH': [f'ETH_{n}' for n in ('TX_DIS', 'TX_FAULT', 'LOS', 'MOD_ABS', 'SCL', 'SDA', 'RS0', 'RS1')],
-          'ONU': ['LASER_DIS_FPGA', 'RX_SD', 'ONU_SCL', 'ONU_SDA', 'VCXO_PWM', 'BURST_CUT', 'BEN_IO', 'VCXO156_PWM']}
+    io = {cage: [f'{cage}_{n}' for n in ('TX_DIS', 'TX_FAULT', 'LOS', 'MOD_ABS', 'SCL', 'SDA', 'RS0', 'RS1')] for cage in ('SFP0', 'SFP1')}
+    io['ONU'] = ['LASER_DIS_FPGA', 'RX_SD', 'ONU_SCL', 'ONU_SDA', 'VCXO_PWM', 'BURST_CUT', 'BEN_IO', 'VCXO156_PWM', 'US_SD']
     for group, nets in io.items():
         conn.update({str(p): n for p, n in zip(HSMC_IO[group], nets)})
     b.block = 'hsmc'
@@ -455,8 +456,8 @@ def hsmc():
     for _ in range(2): b.c('10u', '+12V', fp=C0805, MPN='10 uF 25 V X5R 0805')
     b.c('100n', '+12V', fp=C0603, MPN='100 nF 25 V')
     b.decouple('+3V3_SFP', 0, 0, 3)
-    sfp_cage(b, 'OLT', 'OLT_TD', 'OLT_RD', '+3V3_SFP')
-    sfp_cage(b, 'ETH', 'ETH_TD', 'ETH_RD', '+3V3_SFP')
+    for cage in ('SFP0', 'SFP1'):
+        sfp_cage(b, cage, f'{cage}_TD', f'{cage}_RD', '+3V3_SFP')
     optics(b, 'ONU_TX', 'ONU_RX', None)
     b.r('4.7k', 'ONU_SCL', '+3V3'); b.r('4.7k', 'ONU_SDA', '+3V3')
     b.r('0', 'BEN_IO', 'LD_BEN', dnp=True)   # fallback if the GTS TX cannot drive BEN DC-coupled: fit it, remove the LVDS receiver
@@ -477,6 +478,14 @@ def hsmc():
           {'1': 'LASER_DIS_FPGA', '2': 'BURST_CUT', '4': 'LASER_DIS', 'VCC': '+3V3', 'GND': 'GND'}, MPN='SN74LVC1G32DBVR')
     b.decouple('+3V3', 1)
     b.r('4.7k', 'LASER_DIS_FPGA', '+3V3')   # FPGA unconfigured: laser off
+    # upstream sniffer (operator 2026-11-04): bursts AC coupled as on the sniffer board, trims on a second AD5593R (0x11)
+    receiver(b, 'US_', ('BOSA_RX', 'XL-BCB2111-LS-02, RX can only', 'bridge:BOSA_RX_TO46'), '220p', swap=True)
+    apd_bias(b, 'US_', '330k')   # XL-BCB2111 Vbr up to 60 V: 330k gives 19..61 V over the DAC range
+    b.block = 'ddm:US_'
+    b.add('U', 'Analog', 'AD5593R', 'AD5593RBRUZ', 'Package_SO:TSSOP-16_4.4x5mm_P0.65mm',
+          {'~{RESET}': 'DDM_RESET', 'A0': '+3V3', 'V_{DD}': '+3V3', 'V_{LOGIC}': '+3V3', 'V_{REF}': 'US_DDM_VREF', 'GND': 'GND',
+           'SDA': 'ONU_SDA', 'SCL': 'ONU_SCL', 'IO0': 'US_APD_ADJ', 'IO1': 'US_APD_MON'}, MPN='AD5593RBRUZ')
+    b.c('100n', 'US_DDM_VREF'); b.decouple('+3V3', 1)
     b.block = 'mech'
     for _ in range(2):
         b.add('H', 'Mechanical', 'MountingHole', 'M3', 'MountingHole:MountingHole_3.2mm_M3', {})

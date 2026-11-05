@@ -38,7 +38,7 @@ Developed and proven on an FPGA, the final target is an ASIC that holds everythi
   shared parts library (`pcb/gen`, `pcb/lib`).
 - `agilex5/`: common to the Agilex 5 boards (Quartus benches, GTS lane variants).
 - `de25-standard/`: Terasic DE25-Standard, our HSMC card (`pcb/hsmc`: two SFP+
-  cages, the ONU BOSA and an upstream sniffer receiver; not yet ordered).
+  cages, the ONU BOSA and an upstream sniffer receiver; placed and routed, DRC/ERC clean, not yet ordered).
 - `de25-nano/`: Terasic DE25-Nano, ECP5 SerDes bridge boards (alternative).
 
 ## Status

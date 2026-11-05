@@ -189,12 +189,15 @@ def sniffer_serdes(lay):
         lay.track(net, [(xy[0], ybot - 0.6), pad_of_net(lay, part_on(lay, net, 'C'), net)], SERDES_W)
     return {'Y5', 'Y6', 'Y7', 'Y8'}
 
-HSMC_W, HSMC_H = 80.0, 78.0
+HSMC_W, HSMC_H, HSMC_HOST = 80.0, 88.0, (16.0, 78.0)   # the host overlap strip ends at y = 78: south of it, the corner is cut
 
 def hsmc_layout():
     """The card hangs east of the DE25-Standard: connector on the bottom along the west edge (bank 1 north, odd row
-    west, as on the open Zipper HSMC card), SFP+ cages and the BOSA fiber out of the east edge, bottom empty over the host."""
+    west, as on the open Zipper HSMC card), SFP+ cages and the BOSA fiber out of the east edge, bottom empty over the host;
+    the upstream sniffer in a south strip past the host's edge, its receive can's fibre out of the south edge."""
     lay = Layout(hsmc(), HSMC_W, HSMC_H)
+    lay.notch = HSMC_HOST
+    lay.keepout['F'].append((0, HSMC_HOST[1], HSMC_HOST[0], HSMC_H))
     lay.bga = None
     j = refs(lay, 'HSMC_CARD')[0]
     fp = lay.fps[j]
@@ -209,10 +212,10 @@ def hsmc_layout():
     else:
         raise RuntimeError('HSMC orientation')
     lay.rects['B'].append(lay.rect(fp))
-    lay.keepout['B'].append((0, 0, 16, HSMC_H))
-    olt, eth = refs(lay, 'SFP_HOST')
-    lay.place(olt, HSMC_W - 41.6, 10.0, 180)    # front at the east edge (footprint PCB edge mark at x = -41.6)
-    lay.place(eth, HSMC_W - 41.6, 28.6, 180)
+    lay.keepout['B'].append((0, 0, HSMC_HOST[0], HSMC_H))
+    cage0, cage1 = refs(lay, 'SFP_HOST')
+    lay.place(cage0, HSMC_W - 41.6, 10.0, 180)    # front at the east edge (footprint PCB edge mark at x = -41.6)
+    lay.place(cage1, HSMC_W - 41.6, 28.6, 180)
     bx, by = HSMC_W - 16.0, 62.0                  # BOSA: fiber over the east edge
     lay.place(refs(lay, 'BOSA_GPON')[0], bx, by)
     lay.place(refs(lay, 'SY88236L')[0], bx - 8.5, by)
@@ -224,16 +227,30 @@ def hsmc_layout():
     vcxo = {'VCXO156_P' in lay.parts[r].conns.values(): r for r in refs(lay, 'VCXO_LVDS_3225')}
     lay.place(vcxo[False], 14.0, 9.0)    # 155.52 MHz at XCVR_RX7 (pins 2/4)
     lay.place(vcxo[True], 14.0, 15.0)    # 156.25 MHz at XCVR_RX6 (pins 6/8)
-    lay.place(refs(lay, 'TPS563201')[0], 46.0, 40.5)   # 12 V buck for the cages, under the Ethernet cage
+    lay.place(refs(lay, 'TPS563201')[0], 46.0, 40.5)   # 12 V buck for the cages, under cage 1
+    # upstream sniffer: RX can 5 mm from the south edge, rotated so the BOSA body (east at 0, as on the sniffer board)
+    # and its fibre go over that edge; its limiting amp west of it, outputs west towards the pair
+    sx, sy = 59.0, HSMC_H - 6.0
+    lay.place(refs(lay, 'BOSA_RX')[0], sx + 8.0, HSMC_H - 5.0, 270)
+    lay.place(refs(lay, 'SY88349NDL')[0], sx, sy, 180)
+    # its inputs (swapped: no crossing from the can's pads): coupling caps between the can and the pins, the 50 ohm
+    # terminations to VREF right north and south of them
+    for net, dy in (('US_DIN_N', -1.0), ('US_DIN_P', 1.0)):
+        put_pair(lay, [(part_on(lay, net, 'C'), sx + 4.0, sy + dy)], 180)
+    for net, dy, rot in (('US_DIN_N', -2.6, 90), ('US_DIN_P', 2.6, 270)):   # DIN pad towards the LA
+        put_pair(lay, [(part_on(lay, net, 'R'), sx + 3.0, sy + dy)], rot)
+    lay.place(refs(lay, 'TPS61391')[1], 71.0, sy - 5.5)
+    lay.place(refs(lay, 'D_Schottky')[1], 75.5, sy - 5.5)
+    lay.place_near(refs(lay, 'AD5593R')[1], 36.0, sy + 1.0)
     hsmc_pairs(lay)
-    # Ethernet cage parts on +3V3_SFP: under the cage, on that plane; beside the cage pins they fall across the ONU RX pair
+    # cage 1 parts on +3V3_SFP: under the cage, on that plane; beside the cage pins they fall across the ONU RX pair
     for r, p in lay.parts.items():
-        if p.block == 'sfp:ETH' and '+3V3_SFP' in p.conns.values():
+        if p.block == 'sfp:SFP1' and '+3V3_SFP' in p.conns.values():
             lay.place_near(r, 60.0, 40.5, within=(52.0, 37.2, 72.0, 43.8))
     lay.place_near(refs(lay, '74LVC1G123')[0], bx - 24.0, by + 10.0)
     lay.place_near(refs(lay, '74LVC1G97')[0], bx - 28.0, by + 10.0)
     lay.place_near(refs(lay, '74LVC1G32')[0], bx - 32.0, by + 10.0)
-    for k, y in enumerate((41.5, 74.5)):
+    for k, y in enumerate((41.5, HSMC_H - 3.5)):
         lay.place(refs(lay, 'MountingHole')[k], HSMC_W - 4.5, y)
     return lay
 
@@ -242,7 +259,7 @@ def hsmc_planes(lay):
     full = [(e, e), (w - e, e), (w - e, h - e), (e, h - e)]
     lay.zone('GND', pcbnew.In1_Cu, full)
     lay.zone('+3V3', pcbnew.In2_Cu, full)
-    # cages (~2.2 A): east of where the OLT / Ethernet RX pairs leave B.Cu and clear of ONU RX (B.Cu), so no pair crosses
+    # cages (~2.2 A): east of where the cage RX pairs leave B.Cu and clear of ONU RX (B.Cu), so no pair crosses
     # the plane split
     lay.zone('+3V3_SFP', pcbnew.In2_Cu, [(27.0, e), (w - e, e), (w - e, 47.0), (48.5, 47.0), (27.0, 25.5)], priority=1)
 
@@ -290,7 +307,7 @@ def hsmc_pairs(lay):
     lane, side by side on the connector rows, never cross. The left line of each pair is the north connector pin; P/N are
     swapped in the netlist (HSMC_SWAP) where the destination order needs it. Corridors are kept free of passives."""
     j = refs(lay, 'HSMC_CARD')[0]
-    olt, eth = refs(lay, 'SFP_HOST')
+    cage0, cage1 = refs(lay, 'SFP_HOST')
     u = refs(lay, 'SY88236L')[0]
     pad = lambda ref, n: lay.pad_xy(ref, n)
     net = lambda ref, n: next(p.GetNetname() for p in lay.fps[ref].Pads() if p.GetNumber() == n)
@@ -321,15 +338,15 @@ def hsmc_pairs(lay):
         return nl, nr
     def to_sfp(cage, nets, nums):   # left line on the north pad of the cage pair
         assert [net(cage, n) for n in nums] == list(nets), (cage, nets)
-    # OLT and Ethernet TX straight onto the cage pads (TD+ north, 0.8 mm pitch)
-    for pin, cage, x_turn in ((17, olt, 28.0), (21, eth, 20.0)):
+    # cage TX straight onto the cage pads (TD+ north, 0.8 mm pitch)
+    for pin, cage, x_turn in ((17, cage0, 28.0), (21, cage1, 20.0)):
         y0 = pad(j, str(pin))[1] + 0.1
         t, b = pad(cage, '18'), pad(cage, '19')
         ye = (t[1] + b[1]) / 2
         to_sfp(cage, tx(pin, [(x_turn, y0), (x_turn + abs(ye - y0), ye), (t[0], ye)], ([], [])), ('18', '19'))
-    # OLT and Ethernet RX: B.Cu out of the connector, up to F.Cu (past the TX pairs, west of the +3V3_SFP plane)
+    # cage RX: B.Cu out of the connector, up to F.Cu (past the TX pairs, west of the +3V3_SFP plane)
     # onto RD- (north) / RD+
-    for pin, cage, x_turn, x_up in ((18, olt, 22.0, 25.0), (22, eth, 29.6, 25.5)):
+    for pin, cage, x_turn, x_up in ((18, cage0, 22.0, 25.0), (22, cage1, 29.6, 25.5)):
         y0 = pad(j, str(pin))[1] + 0.25
         t, b = pad(cage, '12'), pad(cage, '13')
         ye = (t[1] + b[1]) / 2
@@ -385,6 +402,22 @@ def hsmc_pairs(lay):
                  [(cr[0], ye + 0.7 + xm - 0.4 - cr[0]), (cr[0], cr[1] - 1.1)]))
     for n, c in ((nl, cl), (nr, cr)):
         via(n, (c[0], c[1] - 1.1), pcbnew.F_Cu, c)
+    # upstream sniffer RX: B.Cu parallel to the ONU RX pair on its south-west side (2.5 mm apart), south past the
+    # ONU optics, east to vias at its AC caps, which sit at the SY88349 output pins 9 (LA-, north) / 12 (LA+)
+    la = refs(lay, 'SY88349NDL')[0]
+    (xn, yn), (xp, yp) = pad(la, '9'), pad(la, '12')
+    assert yn < yp and xn < pad(la, '1')[0]
+    cn, cp = part_on(lay, 'US_LA_N', 'C'), part_on(lay, 'US_LA_P', 'C')
+    put_pair(lay, [(cn, xn - 3.0, yn), (cp, xp - 3.0, yp)], 180)
+    y0 = pad(j, '30')[1] + 0.25
+    ym = (yn + yp) / 2
+    nl, nr = rx(30, [(y0 - 3.7, y0), (48.0, 48.0 + 3.7), (48.0, ym - 4.0), (52.0, ym), (52.6, ym)], ([], []))
+    assert (nl, nr) == ('US_RX_N', 'US_RX_P')
+    for n, xy, c, pin in ((nl, (52.6, ym - 0.4), cn, (xn, yn)), (nr, (52.6, ym + 0.4), cp, (xp, yp))):
+        via(n, xy, pcbnew.F_Cu, pad_of_net(lay, c, n))
+        la_net = net(la, '9' if c == cn else '12')
+        pts = [pad_of_net(lay, c, la_net), pin]
+        lay.track(la_net, pts, 2 * NECK_W, locked=True); keep_free(lay, 'F', pts)
 
 def put_pair(lay, refs_xy, rot):
     """Place 0402 parts of a pair exactly: [(ref, x, y)]."""

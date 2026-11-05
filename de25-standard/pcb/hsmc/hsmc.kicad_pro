@@ -201,22 +201,6 @@
       },
       {
         "netclass": "Power",
-        "pattern": "+3V3_ETHR"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "+3V3_ETHT"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "+3V3_OLTR"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "+3V3_OLTT"
-      },
-      {
-        "netclass": "Power",
         "pattern": "+3V3_OPT"
       },
       {
@@ -226,6 +210,34 @@
       {
         "netclass": "Power",
         "pattern": "+3V3_SFP"
+      },
+      {
+        "netclass": "Power",
+        "pattern": "+3V3_SFP0R"
+      },
+      {
+        "netclass": "Power",
+        "pattern": "+3V3_SFP0T"
+      },
+      {
+        "netclass": "Power",
+        "pattern": "+3V3_SFP1R"
+      },
+      {
+        "netclass": "Power",
+        "pattern": "+3V3_SFP1T"
+      },
+      {
+        "netclass": "Power",
+        "pattern": "+3V3_US_APD"
+      },
+      {
+        "netclass": "Power",
+        "pattern": "+3V3_US_APDA"
+      },
+      {
+        "netclass": "Power",
+        "pattern": "+3V3_US_OPT"
       },
       {
         "netclass": "Power",
@@ -281,27 +293,43 @@
       },
       {
         "netclass": "SerDes",
-        "pattern": "OLT_TD_*"
+        "pattern": "SFP0_TD_*"
       },
       {
         "netclass": "SerDes",
-        "pattern": "OLT_RD_*"
+        "pattern": "SFP0_RD_*"
       },
       {
         "netclass": "SerDes",
-        "pattern": "ETH_TD_*"
+        "pattern": "SFP1_TD_*"
       },
       {
         "netclass": "SerDes",
-        "pattern": "ETH_RD_*"
+        "pattern": "SFP1_RD_*"
       },
       {
         "netclass": "SerDes",
         "pattern": "GTS_*"
       },
       {
+        "netclass": "SerDes",
+        "pattern": "US_TIA_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "US_DIN_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "US_LA_*"
+      },
+      {
+        "netclass": "SerDes",
+        "pattern": "US_RX_*"
+      },
+      {
         "netclass": "HV",
-        "pattern": "HV_*"
+        "pattern": "*HV_*"
       }
     ]
   },
