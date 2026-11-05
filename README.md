@@ -146,7 +146,8 @@ entries and GEM fragments (still ciphered) and its descrambled bursts, timestamp
 the laser and cage 0's transmitter are held off while it records, and the module gets its burst reset before each
 burst, planned from the captured BWmap; checked in simulation. HPS tool `common/sw/sniffer` (`make test`, `make
 CC=aarch64-linux-gnu-gcc`): configures it from the exchange (ONU-ID, Alloc-IDs, OMCI Port-ID, delimiter), learns the
-burst reset offset, writes raw records (`-w`, keep dumps out of this repo) and a decoded log, replays a dump (`-r`);
+burst reset offset, writes raw records (`-w`, keep dumps out of this repo) and a decoded log, replays a dump (`-r`), waits on its interrupt
+through UIO (`-u`, overlay from `de25-standard/ghrd/uio_overlay.sh`) or polls `/dev/mem`;
 each burst is split by its matched grants into PLOAMu, DBRu and GEM frames, so the stock ONU's OMCI answers sit next
 to the OLT's requests.
 Both sides checked in simulation, fit together on the DE25-Standard with the
