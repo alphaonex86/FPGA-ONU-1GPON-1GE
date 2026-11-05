@@ -144,7 +144,9 @@ optics pins with the laser held off until both lanes are up. Sniffer (ONU side, 
 OLT module in cage 0 that ONU's bursts): one ONU's PLOAMs, BWmap
 entries and GEM fragments (still ciphered) and its descrambled bursts, timestamped, read by the CPU as records;
 the laser and cage 0's transmitter are held off while it records, and the module gets its burst reset before each
-burst, planned from the captured BWmap; checked in simulation.
+burst, planned from the captured BWmap; checked in simulation. HPS tool `common/sw/sniffer` (`make test`, `make
+CC=aarch64-linux-gnu-gcc`): configures it from the exchange (ONU-ID, Alloc-IDs, OMCI Port-ID, delimiter), learns the
+burst reset offset, writes raw records (`-w`, keep dumps out of this repo) and a decoded log, replays a dump (`-r`).
 Both sides checked in simulation, fit together on the DE25-Standard with the
 HSMC card pins placed, flow engine, EPON OLT and ONU, cage 0's Ethernet port and the sniffer included: 40.5K ALMs (87 %), 308 of 358 M20K, setup slack +0.034 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
