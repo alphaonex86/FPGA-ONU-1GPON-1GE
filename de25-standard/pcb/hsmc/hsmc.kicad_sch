@@ -5002,7 +5002,7 @@
     (effects (font (size 1.27 1.27)) (justify left))
     (uuid "2be11dc8-c580-56cd-8c9d-3a6b30509413"))
   (global_label
-    "GTS_REFCLK_P"
+    "GTS_REFCLK_AC_P"
     (shape passive)
     (at 121.92 163.83 270)
     (effects (font (size 1.27 1.27)) (justify right))
@@ -5068,7 +5068,7 @@
     (effects (font (size 1.27 1.27)) (justify left))
     (uuid "a03c5205-66f9-5641-80b8-c07913872d4f"))
   (global_label
-    "GTS_REFCLK_N"
+    "GTS_REFCLK_AC_N"
     (shape passive)
     (at 160.02 163.83 270)
     (effects (font (size 1.27 1.27)) (justify right))
@@ -5326,7 +5326,7 @@
     (effects (font (size 1.27 1.27)) (justify left))
     (uuid "596f18a7-613e-5b6a-aec2-a176a2392d5c"))
   (global_label
-    "GTS_RXREF_P"
+    "GTS_RXREF_AC_P"
     (shape passive)
     (at 337.82 163.83 270)
     (effects (font (size 1.27 1.27)) (justify right))
@@ -5392,7 +5392,7 @@
     (effects (font (size 1.27 1.27)) (justify left))
     (uuid "594c2f70-2f0a-511e-9e50-54b14931d975"))
   (global_label
-    "GTS_RXREF_N"
+    "GTS_RXREF_AC_N"
     (shape passive)
     (at 375.92 163.83 270)
     (effects (font (size 1.27 1.27)) (justify right))
@@ -10565,305 +10565,437 @@
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "7a67166b-88b2-5120-a50d-fbf2f534b1cb"))
   (symbol
+    (lib_id "Device:R")
+    (at 40.64 629.92 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid "c063af23-2522-5a03-8117-272b1d737b8c")
+    (property "Reference" "R58" (at 40.64 622.3 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "20" (at 40.64 637.54 0) (effects (font (size 1.27 1.27))))
+    (property
+      "Footprint"
+      "Resistor_SMD:R_0402_1005Metric"
+      (at 40.64 629.92 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 40.64 629.92 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (pin "1" (uuid "1a2d62c0-addd-587c-ab26-58bb2711b31e"))
+    (pin "2" (uuid "c103346a-83e0-51f5-bb29-9ab6fd236d16"))
+    (instances
+      (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "R58") (unit 1)))))
+  (global_label
+    "GTS_REFCLK_AC_P"
+    (shape passive)
+    (at 40.64 626.11 90)
+    (effects (font (size 1.27 1.27)) (justify left))
+    (uuid "5a6de6cd-acb4-5021-9780-b21ef9da1400"))
+  (global_label
+    "GTS_REFCLK_P"
+    (shape passive)
+    (at 40.64 633.73 270)
+    (effects (font (size 1.27 1.27)) (justify right))
+    (uuid "e33a2f29-3a48-5128-8edc-d5ee191f0870"))
+  (symbol
+    (lib_id "Device:R")
+    (at 60.96 629.92 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid "862cb7b0-8716-5df0-b2ab-43576b6bba1b")
+    (property "Reference" "R59" (at 60.96 622.3 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "20" (at 60.96 637.54 0) (effects (font (size 1.27 1.27))))
+    (property
+      "Footprint"
+      "Resistor_SMD:R_0402_1005Metric"
+      (at 60.96 629.92 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 60.96 629.92 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (pin "1" (uuid "f292f712-96a6-5293-a99c-5c98e4ce4af4"))
+    (pin "2" (uuid "ceecfd3e-c07d-5d07-afbe-4d3e858a74c0"))
+    (instances
+      (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "R59") (unit 1)))))
+  (global_label
+    "GTS_REFCLK_AC_N"
+    (shape passive)
+    (at 60.96 626.11 90)
+    (effects (font (size 1.27 1.27)) (justify left))
+    (uuid "bc4490f2-b6c3-50b4-9d4a-d39774b1a927"))
+  (global_label
+    "GTS_REFCLK_N"
+    (shape passive)
+    (at 60.96 633.73 270)
+    (effects (font (size 1.27 1.27)) (justify right))
+    (uuid "5488ecd0-ec3e-5a25-8d14-e1e7e8688513"))
+  (symbol
+    (lib_id "Device:R")
+    (at 78.74 629.92 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid "4e80b977-12d8-569e-9016-58255a222b6a")
+    (property "Reference" "R60" (at 78.74 622.3 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "20" (at 78.74 637.54 0) (effects (font (size 1.27 1.27))))
+    (property
+      "Footprint"
+      "Resistor_SMD:R_0402_1005Metric"
+      (at 78.74 629.92 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 78.74 629.92 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (pin "1" (uuid "d4a7dbf1-dd56-51db-95ec-2454296be469"))
+    (pin "2" (uuid "7578f578-bf53-5689-b67a-f4ae48220361"))
+    (instances
+      (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "R60") (unit 1)))))
+  (global_label
+    "GTS_RXREF_AC_P"
+    (shape passive)
+    (at 78.74 626.11 90)
+    (effects (font (size 1.27 1.27)) (justify left))
+    (uuid "1da5886d-839e-5018-9529-2191f8c02ce8"))
+  (global_label
+    "GTS_RXREF_P"
+    (shape passive)
+    (at 78.74 633.73 270)
+    (effects (font (size 1.27 1.27)) (justify right))
+    (uuid "a83c1978-3d87-51d1-a29f-8b0ac875b2c6"))
+  (symbol
+    (lib_id "Device:R")
+    (at 99.06 629.92 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid "8a226cba-415c-59c1-bc00-1024f6012467")
+    (property "Reference" "R61" (at 99.06 622.3 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "20" (at 99.06 637.54 0) (effects (font (size 1.27 1.27))))
+    (property
+      "Footprint"
+      "Resistor_SMD:R_0402_1005Metric"
+      (at 99.06 629.92 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 99.06 629.92 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (pin "1" (uuid "eb3d95f9-2b03-5026-863d-d5807cff72a5"))
+    (pin "2" (uuid "d23705d3-c209-532a-8bd3-c016339e76a6"))
+    (instances
+      (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "R61") (unit 1)))))
+  (global_label
+    "GTS_RXREF_AC_N"
+    (shape passive)
+    (at 99.06 626.11 90)
+    (effects (font (size 1.27 1.27)) (justify left))
+    (uuid "a32c8ba6-e6d9-511c-89e9-1f57634ff7cf"))
+  (global_label
+    "GTS_RXREF_N"
+    (shape passive)
+    (at 99.06 633.73 270)
+    (effects (font (size 1.27 1.27)) (justify right))
+    (uuid "7fefaf89-4219-5a52-b0c4-7ce6b232f2b4"))
+  (symbol
     (lib_id "Mechanical:MountingHole")
-    (at 40.64 627.38 0)
+    (at 40.64 670.56 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board yes)
     (dnp no)
     (uuid "a767f35b-1336-572e-9e71-b145420135a5")
-    (property "Reference" "H1" (at 40.64 623.57 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "M3" (at 40.64 631.19 0) (effects (font (size 1.27 1.27))))
+    (property "Reference" "H1" (at 40.64 666.75 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "M3" (at 40.64 674.37 0) (effects (font (size 1.27 1.27))))
     (property
       "Footprint"
       "MountingHole:MountingHole_3.2mm_M3"
-      (at 40.64 627.38 0)
+      (at 40.64 670.56 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 40.64 627.38 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 40.64 670.56 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "H1") (unit 1)))))
   (symbol
     (lib_id "Mechanical:MountingHole")
-    (at 60.96 627.38 0)
+    (at 60.96 670.56 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board yes)
     (dnp no)
     (uuid "6d052516-c93c-5c1b-b8f6-724016809350")
-    (property "Reference" "H2" (at 60.96 623.57 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "M3" (at 60.96 631.19 0) (effects (font (size 1.27 1.27))))
+    (property "Reference" "H2" (at 60.96 666.75 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "M3" (at 60.96 674.37 0) (effects (font (size 1.27 1.27))))
     (property
       "Footprint"
       "MountingHole:MountingHole_3.2mm_M3"
-      (at 60.96 627.38 0)
+      (at 60.96 670.56 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 60.96 627.38 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 60.96 670.56 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "H2") (unit 1)))))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 30.48 662.94 0)
+    (at 30.48 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "c6461150-c51d-5e28-af4f-86c762592644")
-    (property "Reference" "#FLG01" (at 30.48 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 30.48 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 30.48 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 30.48 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG01" (at 30.48 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 30.48 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 30.48 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 30.48 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "8762dcf0-1003-589c-b29e-a656b01dfd5d"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG01") (unit 1)))))
   (global_label
     "+12V"
     (shape passive)
-    (at 30.48 662.94 270)
+    (at 30.48 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "ee3d587e-3a57-59f6-8522-4fcc699005ae"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 60.96 662.94 0)
+    (at 60.96 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "48a74df7-bcaa-5dd2-8f0b-3ec9bc78ae6a")
-    (property "Reference" "#FLG02" (at 60.96 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 60.96 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 60.96 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 60.96 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG02" (at 60.96 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 60.96 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 60.96 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 60.96 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "d34705c8-d7ab-5fb0-80ae-70531a03940a"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG02") (unit 1)))))
   (global_label
     "+3V3_APD"
     (shape passive)
-    (at 60.96 662.94 270)
+    (at 60.96 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "24252e3d-33f4-5373-a69b-46199b5a8056"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 88.9 662.94 0)
+    (at 88.9 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "e7170b9b-959d-5379-a599-585a5b32b7f9")
-    (property "Reference" "#FLG03" (at 88.9 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 88.9 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 88.9 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 88.9 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG03" (at 88.9 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 88.9 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 88.9 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 88.9 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "1155e22a-bb39-586a-b1e3-ec54f609f8f5"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG03") (unit 1)))))
   (global_label
     "+3V3_APDA"
     (shape passive)
-    (at 88.9 662.94 270)
+    (at 88.9 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "56316c94-8c2d-552a-89c6-e446d411cbe7"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 119.38 662.94 0)
+    (at 119.38 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "a0067dee-cd77-5bcd-b317-e5d19d48a2d7")
-    (property "Reference" "#FLG04" (at 119.38 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 119.38 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 119.38 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 119.38 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG04" (at 119.38 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 119.38 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 119.38 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 119.38 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "15a3ce9e-0b42-5ff8-af32-91c229fdac7e"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG04") (unit 1)))))
   (global_label
     "+3V3_OPT"
     (shape passive)
-    (at 119.38 662.94 270)
+    (at 119.38 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "d4c9b128-c640-533e-a418-8630fc6ce7dd"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 149.86 662.94 0)
+    (at 149.86 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "17fbae50-e44d-5715-b897-307d02491574")
-    (property "Reference" "#FLG05" (at 149.86 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 149.86 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 149.86 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 149.86 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG05" (at 149.86 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 149.86 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 149.86 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 149.86 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "55abe7ba-6055-5931-aa91-bfde7d08ff47"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG05") (unit 1)))))
   (global_label
     "+3V3_RX"
     (shape passive)
-    (at 149.86 662.94 270)
+    (at 149.86 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "d5d93fcf-0399-552d-82c2-479770f44dd6"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 180.34 662.94 0)
+    (at 180.34 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "6aad8dae-e17e-532b-875b-391f1cf1f1ee")
-    (property "Reference" "#FLG06" (at 180.34 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 180.34 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 180.34 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 180.34 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG06" (at 180.34 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 180.34 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 180.34 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 180.34 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "ed00a1e6-6794-585e-9535-037600408d74"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG06") (unit 1)))))
   (global_label
     "+3V3_SFP"
     (shape passive)
-    (at 180.34 662.94 270)
+    (at 180.34 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "fd152e58-77be-5bfe-ac5f-e272a2ff4e66"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 210.82 662.94 0)
+    (at 210.82 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "42b165e2-1ab5-54ab-81b4-c45dd61ce10c")
-    (property "Reference" "#FLG07" (at 210.82 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 210.82 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 210.82 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 210.82 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG07" (at 210.82 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 210.82 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 210.82 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 210.82 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "f4f3b96e-e0b5-5218-acac-ca580f77a53e"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG07") (unit 1)))))
   (global_label
     "+3V3_SFP0R"
     (shape passive)
-    (at 210.82 662.94 270)
+    (at 210.82 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "7d16689e-299b-5c63-a883-e47b58cc5418"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 238.76 662.94 0)
+    (at 238.76 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "4356c31a-0c3f-5a61-af85-f292de8e63ca")
-    (property "Reference" "#FLG08" (at 238.76 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 238.76 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 238.76 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 238.76 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG08" (at 238.76 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 238.76 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 238.76 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 238.76 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "87993b7e-167e-543c-8d5a-ac2003c7a082"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG08") (unit 1)))))
   (global_label
     "+3V3_SFP0T"
     (shape passive)
-    (at 238.76 662.94 270)
+    (at 238.76 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "c12af368-4b8d-5a55-a78b-7f28a934b1b3"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 269.24 662.94 0)
+    (at 269.24 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "372c809f-f413-5edf-b585-cec56f064598")
-    (property "Reference" "#FLG09" (at 269.24 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 269.24 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 269.24 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 269.24 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG09" (at 269.24 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 269.24 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 269.24 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 269.24 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "8dc050ab-e2ff-5991-8d58-ae0c5c51cc10"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG09") (unit 1)))))
   (global_label
     "+3V3_SFP1R"
     (shape passive)
-    (at 269.24 662.94 270)
+    (at 269.24 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "68209baa-6953-51b0-93f7-6c4a4a807a6f"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 299.72 662.94 0)
+    (at 299.72 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "8666c738-341c-5186-a5f6-65814c6c967b")
-    (property "Reference" "#FLG10" (at 299.72 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 299.72 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 299.72 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 299.72 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG10" (at 299.72 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 299.72 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 299.72 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 299.72 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "6bc91d15-bf68-5a75-89d5-209d55d221f1"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG10") (unit 1)))))
   (global_label
     "+3V3_SFP1T"
     (shape passive)
-    (at 299.72 662.94 270)
+    (at 299.72 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "50bd187a-899e-51c6-91dd-90623f6baa87"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 330.2 662.94 0)
+    (at 330.2 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "010b3db8-0ef1-5b8e-85e8-f309dad9b69b")
-    (property "Reference" "#FLG11" (at 330.2 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 330.2 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 330.2 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 330.2 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG11" (at 330.2 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 330.2 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 330.2 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 330.2 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "eb304cb2-e9f9-59b6-b118-d1b4c3491d71"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG11") (unit 1)))))
   (global_label
     "+3V3_XO"
     (shape passive)
-    (at 330.2 662.94 270)
+    (at 330.2 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "8a8f5bd0-1c57-5b1c-ace3-91921aadc388"))
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 360.68 662.94 0)
+    (at 360.68 706.12 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom no)
     (on_board no)
     (dnp no)
     (uuid "8c8a982c-d7c3-588e-a658-2b0c23fc9202")
-    (property "Reference" "#FLG12" (at 360.68 657.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Value" "PWR_FLAG" (at 360.68 655.94 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "" (at 360.68 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "Datasheet" "" (at 360.68 662.94 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Reference" "#FLG12" (at 360.68 701.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PWR_FLAG" (at 360.68 699.12 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 360.68 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 360.68 706.12 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "888b40be-a173-504b-83e9-1b9de44a0bc3"))
     (instances
       (project "hsmc" (path "/e8841bbb-bfb6-59f3-aac1-446c8bd68bf0" (reference "#FLG12") (unit 1)))))
   (global_label
     "GND"
     (shape passive)
-    (at 360.68 662.94 270)
+    (at 360.68 706.12 270)
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "aeef7141-ef60-55ad-b77d-6dcdacecb47c"))
   (sheet_instances (path "/" (page "1")))

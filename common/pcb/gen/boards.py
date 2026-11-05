@@ -444,7 +444,7 @@ def hsmc():
               {'VIN': f'{v}_VC', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': f'{v}_P', 'OUT-': f'{v}_N'},
               MPN=f'SiT3821AI-1B2-33N{pull}{mhz}0000')
         for d in 'PN':   # LVPECL emitter load: ~1.6 Vpp, LVDS falls under the GTS 0.6 Vpp minimum
-            b.r('150', f'{v}_{d}', 'GND'); b.c('100n', f'{v}_{d}', f'{ref}_{d}')
+            b.r('150', f'{v}_{d}', 'GND'); b.c('100n', f'{v}_{d}', f'{ref}_AC_{d}')
         b.r('10k', f'{v}_PWM', f'{v}_RC'); b.c('1u', f'{v}_RC')
         b.r('10k', f'{v}_RC', f'{v}_VC'); b.c('1u', f'{v}_VC')
     b.fb('+3V3', '+3V3_XO'); b.decouple('+3V3_XO', 2, 1)
@@ -480,6 +480,12 @@ def hsmc():
           {'1': 'LASER_DIS_FPGA', '2': 'BURST_CUT', '4': 'LASER_DIS', 'VCC': '+3V3', 'GND': 'GND'}, MPN='SN74LVC1G32DBVR')
     b.decouple('+3V3', 1)
     b.r('4.7k', 'LASER_DIS_FPGA', '+3V3')   # FPGA unconfigured: laser off
+    # Refclk series 20 ohm into the GTS 100 ohm termination: LVPECL 1.2-2.0 Vpp -> 0.86-1.43 Vpp, inside the GTS
+    # 0.6-1.7 Vpp and 0.85 V abs max. Added last so the routed board keeps its reference numbers.
+    b.block = 'clock'
+    for ref in ('GTS_REFCLK', 'GTS_RXREF'):
+        for d in 'PN':
+            b.r('20', f'{ref}_AC_{d}', f'{ref}_{d}')
     b.block = 'mech'
     for _ in range(2):
         b.add('H', 'Mechanical', 'MountingHole', 'M3', 'MountingHole:MountingHole_3.2mm_M3', {})

@@ -17,3 +17,4 @@ __pycache__/
 fp-info-cache
 _autosave-*
 .history/
+**/pcb/*/fab/

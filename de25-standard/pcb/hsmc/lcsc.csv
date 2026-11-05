@@ -1,0 +1,56 @@
+value,footprint,mpn,lcsc,note
+100n,Capacitor_SMD:C_0402_1005Metric,,C1525,CL05B104KO5NNNC 16 V X7R
+10u,Capacitor_SMD:C_0603_1608Metric,,C19702,CL10A106KP8NNNC 10 V X5R
+22u,Capacitor_SMD:C_0805_2012Metric,,C45783,CL21A226MAQNNNE 25 V X5R
+1u,Capacitor_SMD:C_0402_1005Metric,,C52923,CL05A105KA5NQNC 25 V X5R
+10u,Capacitor_SMD:C_0805_2012Metric,10 uF 25 V X5R 0805,C15850,CL21A106KAYNNNE
+100n,Capacitor_SMD:C_0603_1608Metric,100 nF 25 V,C14663,CC0603KRX7R9BB104 50 V X7R
+100n,Capacitor_SMD:C_0603_1608Metric,100 V X7R,C15725,CL10B104KC8NNNC
+220p,Capacitor_SMD:C_0603_1608Metric,100 V X7R,C307502,CL10C221JC8NNNC 100 V C0G
+47n,Capacitor_SMD:C_0402_1005Metric,,C307434,CL05B473KO5NNNC
+2.2u,Capacitor_SMD:C_0603_1608Metric,,C23630,CL10A225KO8NNNC 16 V X5R
+10p,Capacitor_SMD:C_0402_1005Metric,,C32949,CL05C100JB5NNNC C0G
+100n,Capacitor_SMD:C_0603_1608Metric,100 nF 50 V X7R 0603,C14663,CC0603KRX7R9BB104
+47p,Capacitor_SMD:C_0402_1005Metric,,C84706,CL05C470JB5NNNC C0G
+BAT46WJ,Diode_SMD:D_SOD-323F,BAT46WJ (100 V),C114696,
+120R@100MHz,Inductor_SMD:L_0603_1608Metric,BLM18PG121SN1D,C14709,
+ASP-122952-01,bridge:HSMC_ASP-122952-01,Samtec ASP-122952-01,C5183845,bottom side
+SFP0 cage,Connector:Connector_SFP_and_Cage,SFP+ cage (SFF-8432) + 20-pin host connector (SFF-8083),C305914,TE 1888247-1 connector; the TE 2227302-1 press-fit cage (C589577) is bought with the parts and pressed in by hand
+SFP1 cage,Connector:Connector_SFP_and_Cage,SFP+ cage (SFF-8432) + 20-pin host connector (SFF-8083),C305914,TE 1888247-1 connector; the TE 2227302-1 press-fit cage (C589577) is bought with the parts and pressed in by hand
+2.2u,Inductor_SMD:L_Cenker_CKCS4020,"2.2 uH, Isat >= 4 A, 4020",C354584,CKCS4030-2.2uH/M (Isat 4.4 A; same 4x4 land, 3 mm high)
+1u,Inductor_SMD:L_0805_2012Metric,"1 uH >= 1 A, low DCR",C370021,MPH201210S1R0MT (Isat 1.3 A)
+4.7u,Inductor_SMD:L_Cenker_CKCS252012,"4.7 uH, Isat >= 1 A, 2520",C275675,SLO252012F4R7MTT (Isat 1.73 A)
+150,Resistor_SMD:R_0402_1005Metric,,C25082,
+10k,Resistor_SMD:R_0402_1005Metric,,C25744,
+33.2k,Resistor_SMD:R_0402_1005Metric,,C122548,
+33,Resistor_SMD:R_0402_1005Metric,,C25105,
+330,Resistor_SMD:R_0402_1005Metric,,C25104,
+4.7k,Resistor_SMD:R_0402_1005Metric,,C25900,
+5.1k,Resistor_SMD:R_0402_1005Metric,,C25905,
+6.2k,Resistor_SMD:R_0402_1005Metric,,C25915,
+20k,Resistor_SMD:R_0402_1005Metric,,C25765,
+12k,Resistor_SMD:R_0402_1005Metric,,C25752,
+5.6k,Resistor_SMD:R_0402_1005Metric,,C25908,
+3.9k,Resistor_SMD:R_0402_1005Metric,,C51721,
+1.5k,Resistor_SMD:R_0402_1005Metric,,C25867,
+1k,Resistor_SMD:R_0402_1005Metric,,C11702,
+10,Resistor_SMD:R_0402_1005Metric,,C25077,
+15,Resistor_SMD:R_0402_1005Metric,,C25083,
+100,Resistor_SMD:R_0402_1005Metric,,C25076,
+300k,Resistor_SMD:R_0603_1608Metric,,C23024,
+33k,Resistor_SMD:R_0402_1005Metric,,C25779,
+3.01k,Resistor_SMD:R_0402_1005Metric,,C25889,
+0,Resistor_SMD:R_0402_1005Metric,,C17168,DNP fallback
+15k,Resistor_SMD:R_0402_1005Metric,,C25756,
+20,Resistor_SMD:R_0402_1005Metric,,C25089,
+TPS563201DDCR,Package_TO_SOT_SMD:SOT-23-6,TPS563201DDCR,C116592,
+SY88236LMG,Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.1x3.1mm_ThermalVias,SY88236LMG,consign,obsolete; LCSC C3664673 has no stock: buy from a broker and consign (or JLC global sourcing)
+SN65LVDT2DBVR,Package_TO_SOT_SMD:SOT-23-5,SN65LVDT2DBVR,C130020,
+BOSA GPON (X100DG),bridge:BOSA_GPON,desoldered from an X100DG; pad order to measure,hand,soldered by hand after assembly; lead order and spacing not measured
+TPS61391RTER,Package_DFN_QFN:WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm_ThermalVias,TPS61391RTER,C1852151,
+AD5593RBRUZ,Package_SO:TSSOP-16_4.4x5mm_P0.65mm,AD5593RBRUZ,C207507,
+SN74LVC1G123DCUR,Package_SO:VSSOP-8_2.3x2mm_P0.5mm,SN74LVC1G123DCUR,C352969,
+SN74LVC1G97DBVR,Package_TO_SOT_SMD:SOT-23-6,SN74LVC1G97DBVR,C128411,
+SN74LVC1G32DBVR,Package_TO_SOT_SMD:SOT-23-5,SN74LVC1G32DBVR,C10096,
+SiT3821 156.25 MHz,Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm,SiT3821AI-1B2-33NH156.250000,consign,SiTime programmable: order this exact code (DigiKey/SiTime) and consign
+SiT3821 155.52 MHz,Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm,SiT3821AI-1B2-33NE155.520000,consign,SiTime programmable: order this exact code (DigiKey/SiTime) and consign
