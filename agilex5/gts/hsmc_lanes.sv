@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: CERN-OHL-S-2.0
-// Fit check of the HSMC card lanes on the DE25-Standard: every GTS lane at its rate, from its refclk pin. The OLT
-// lane's tx_clkout through the clock divider (311.04 and 155.52 MHz) clocks every PON lane's core, as the MACs run;
+// Fit check of the HSMC card lanes on the DE25-Standard: every GTS lane at its rate, from its refclk pin. Cage 0's
+// tx_clkout through the clock divider (311.04 and 155.52 MHz) clocks every PON lane's core, as the MACs run;
 // Ethernet keeps its own clocks. Counters keep the datapaths alive.
 module hsmc_lanes (
     input  wire       pon_refclk,   // VCXO 155.52 MHz (HSMC_GTS_RX_REF)
     input  wire       eth_refclk,   // XO 156.25 MHz (HSMC_GTS_REFCLK)
     input  wire       reset,
-    output wire       olt_tx_p,
-    output wire       olt_tx_n,
-    input  wire       olt_rx_p,
-    input  wire       olt_rx_n,
-    output wire       eth_tx_p,
-    output wire       eth_tx_n,
-    input  wire       eth_rx_p,
-    input  wire       eth_rx_n,
+    output wire       sfp0_tx_p,
+    output wire       sfp0_tx_n,
+    input  wire       sfp0_rx_p,
+    input  wire       sfp0_rx_n,
+    output wire       sfp1_tx_p,
+    output wire       sfp1_tx_n,
+    input  wire       sfp1_rx_p,
+    input  wire       sfp1_rx_n,
     output wire       onu_tx_p,
     output wire       onu_tx_n,
     input  wire       onu_rx_p,
@@ -41,18 +41,18 @@ module hsmc_lanes (
     always @(posedge eth_rx_clk) rx_bit[2] <= ^eth_rx[9:0];
     assign status = {us_count[7:3], rx_bit};
 
-    olt olt (.i_rx_cdr_refclk_p(pon_refclk), .i_tx_pll_refclk_p(pon_refclk), .i_pma_cu_clk(cu_clk), .i_tx_reset(reset),
+    sfp0 sfp0 (.i_rx_cdr_refclk_p(pon_refclk), .i_tx_pll_refclk_p(pon_refclk), .i_pma_cu_clk(cu_clk), .i_tx_reset(reset),
         .i_rx_reset(reset), .o_tx_reset_ack(), .o_rx_reset_ack(), .o_tx_ready(), .o_rx_ready(),
         .i_tx_coreclkin(ds_clk), .i_rx_coreclkin(ds_clk), .o_tx_clkout(olt_clk), .o_rx_clkout(),
-        .i_src_rs_grant(grant[0]), .o_src_rs_req(req[0]), .o_tx_serial_data(olt_tx_p), .o_tx_serial_data_n(olt_tx_n),
-        .i_rx_serial_data(olt_rx_p), .i_rx_serial_data_n(olt_rx_n), .o_tx_pll_locked(), .o_rx_is_lockedtodata(),
+        .i_src_rs_grant(grant[0]), .o_src_rs_req(req[0]), .o_tx_serial_data(sfp0_tx_p), .o_tx_serial_data_n(sfp0_tx_n),
+        .i_rx_serial_data(sfp0_rx_p), .i_rx_serial_data_n(sfp0_rx_n), .o_tx_pll_locked(), .o_rx_is_lockedtodata(),
         .o_rx_is_lockedtoref(), .i_rx_set_locktoref(1'b0), .i_tx_parallel_data({72'b0, ds_count}),
         .o_rx_parallel_data(olt_rx));
-    eth eth (.i_rx_cdr_refclk_p(eth_refclk), .i_tx_pll_refclk_p(eth_refclk), .i_pma_cu_clk(cu_clk), .i_tx_reset(reset),
+    sfp1 sfp1 (.i_rx_cdr_refclk_p(eth_refclk), .i_tx_pll_refclk_p(eth_refclk), .i_pma_cu_clk(cu_clk), .i_tx_reset(reset),
         .i_rx_reset(reset), .o_tx_reset_ack(), .o_rx_reset_ack(), .o_tx_ready(), .o_rx_ready(),
         .i_tx_coreclkin(eth_tx_clk), .i_rx_coreclkin(eth_rx_clk), .o_tx_clkout(eth_tx_clk), .o_rx_clkout(eth_rx_clk),
-        .i_src_rs_grant(grant[1]), .o_src_rs_req(req[1]), .o_tx_serial_data(eth_tx_p), .o_tx_serial_data_n(eth_tx_n),
-        .i_rx_serial_data(eth_rx_p), .i_rx_serial_data_n(eth_rx_n), .o_tx_pll_locked(), .o_rx_is_lockedtodata(),
+        .i_src_rs_grant(grant[1]), .o_src_rs_req(req[1]), .o_tx_serial_data(sfp1_tx_p), .o_tx_serial_data_n(sfp1_tx_n),
+        .i_rx_serial_data(sfp1_rx_p), .i_rx_serial_data_n(sfp1_rx_n), .o_tx_pll_locked(), .o_rx_is_lockedtodata(),
         .o_rx_is_lockedtoref(), .i_tx_parallel_data({72'b0, eth_count}), .o_rx_parallel_data(eth_rx));
     onu onu (.i_rx_cdr_refclk_p(pon_refclk), .i_tx_pll_refclk_p(pon_refclk), .i_pma_cu_clk(cu_clk), .i_tx_reset(reset),
         .i_rx_reset(reset), .o_tx_reset_ack(), .o_rx_reset_ack(), .o_tx_ready(), .o_rx_ready(),

@@ -27,7 +27,7 @@ deploy() {   # COMPONENT NAME PARAM=VALUE...
 }
 gen() { local name=$1; shift; deploy intel_directphy_gts "$name" $COMMON "$@"; }
 deploy intel_srcss_gts srcss NUM_LANES_SHORELINE=4   # one reset request/grant per lane
-# PON core clocks 311.04 / 155.52 MHz from the OLT tx_clkout: the clock network divider keeps them aligned and timed
+# PON core clocks 311.04 / 155.52 MHz from a PON lane's tx_clkout: the clock network divider keeps them aligned and timed
 # together (the GTS tx_clkout2 is asynchronous to tx_clkout in the IP constraints)
 deploy intelclkctrl pon_clocks CLOCK_DIVIDER=1 CLOCK_DIVIDER_OUTPUTS=2
 # VCXO loop helper clocks (VcxoTracker DDMTD): 50 MHz x 87 / 28 = 155.357 MHz, 1.05e-3 below the halved 311.04 (GPON);
@@ -37,14 +37,14 @@ deploy altera_iopll helper_pll gui_reference_clock_frequency=50.0 gui_number_of_
     gui_operation_mode=direct gui_use_locked=true
 # Every PON lane is duplex at 2488.32: the 1244.16 Gb/s direction is 2x oversampled (TX bits doubled, RX every
 # other bit), same waveform on the fiber, no dual simplex group (Quartus refuses TX and RX variants on one channel).
-# The OLT lane's tx_clkout, through pon_clocks, clocks every PON lane's core.
-gen olt duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON enable_port_rx_set_locktoref=1 $SWAP
+# Cage 0's tx_clkout, through pon_clocks, clocks every PON lane's core (hsmc_lanes).
+gen sfp0 duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON enable_port_rx_set_locktoref=1 $SWAP
 gen onu duplex_mode=duplex pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON $SWAP
 gen ben_tx duplex_mode=tx pma_data_rate=2488.32 pma_width=8 tx_pll_refclk_freq_mhz=$PON rx_pll_refclk_freq_mhz=$PON
-gen eth duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH $SWAP
-# The PON lanes' second profiles, switched with olt / onu + ben_tx by the DR controller: OLT cage EPON OLT or
-# 1000BASE-X module, ONU BOSA EPON ONU and its burst enable
-gen olt_1g25 duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH enable_port_rx_set_locktoref=1 $SWAP
+gen sfp1 duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH $SWAP
+# The PON lanes' second profiles, switched with sfp0 / onu + ben_tx by the DR controller: cage 0 EPON OLT or
+# Ethernet (1000BASE-X or SGMII) module, ONU BOSA EPON ONU and its burst enable
+gen sfp0_1g25 duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH enable_port_rx_set_locktoref=1 $SWAP
 gen onu_1g25 duplex_mode=duplex pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH $SWAP
 gen ben_1g25 duplex_mode=tx pma_data_rate=1250 pma_width=10 tx_pll_refclk_freq_mhz=$ETH rx_pll_refclk_freq_mhz=$ETH
 # A PON side's core clock from its active DR profile's tx_clkout, before pon_clocks; switched while that side is reset

@@ -69,14 +69,9 @@ case class EthBoardCore(anSpeedup: Boolean = false) extends Component {
 
   val queuesDomain = ClockDomain.current.copy(reset = ClockDomain.current.readResetWire || RegNext(!board.io.alive).init(True))
   val queues = queuesDomain(gpon.GemCpuQueues(txCd, rxCd))
-  val cpuTx = queues.io.tx.translateWith {
-    val f = Fragment(Bits(8 bits))
-    f.fragment := queues.io.tx.fragment.data
-    f.last := queues.io.tx.last
-    f
-  }
   val txTo = txCd(BufferCC(board.io.bridge, U(0, 2 bits))) // static while frames flow
   val rxTo = rxCd(BufferCC(board.io.bridge, U(0, 2 bits)))
+  val cpuTx = EthCpuQueues(queues, port, rxTo === 0)
   val sources = Seq(cpuTx, io.olt.tx, io.onu.tx)
   for ((source, k) <- sources.zipWithIndex) source.ready := port.io.tx.ready && txTo === k
   port.io.tx.valid := sources.zipWithIndex.map { case (source, k) => source.valid && txTo === k }.orR
@@ -86,16 +81,29 @@ case class EthBoardCore(anSpeedup: Boolean = false) extends Component {
     f.rx.payload := port.io.rx.payload
     f.rxBad := port.io.rxBad
   }
-  val rx = queues.io.rx
-  val bad = port.io.rx.last && port.io.rxBad
-  rx.valid := port.io.rx.valid && rxTo === 0
-  rx.last := port.io.rx.last && !bad
-  rx.allocId := 0
-  rx.gem.portId := 0
-  rx.gem.pti := B"001"
-  rx.gem.data := port.io.rx.fragment
-  queues.io.rxCut := port.io.rx.valid && bad
   io.frameIrq := queues.io.irq
 
   HpsBridge(io.axi, Seq(board.io.apb -> True, queues.io.apb -> board.io.alive))
+}
+
+/** Frame queues (GemCpuQueues: Port-ID 0, one fragment per frame) on an Ethernet port: the port's frames into the RX
+  * queue while `toCpu`, a bad frame as cut; returns the TX queue's packets as port frames. */
+object EthCpuQueues {
+  def apply(queues: gpon.GemCpuQueues, port: EthPort, toCpu: Bool): Stream[Fragment[Bits]] = {
+    val rx = queues.io.rx
+    val bad = port.io.rx.last && port.io.rxBad
+    rx.valid := port.io.rx.valid && toCpu
+    rx.last := port.io.rx.last && !bad
+    rx.allocId := 0
+    rx.gem.portId := 0
+    rx.gem.pti := B"001"
+    rx.gem.data := port.io.rx.fragment
+    queues.io.rxCut := port.io.rx.valid && bad
+    queues.io.tx.translateWith {
+      val f = Fragment(Bits(8 bits))
+      f.fragment := queues.io.tx.fragment.data
+      f.last := queues.io.tx.last
+      f
+    }
+  }
 }

@@ -8,7 +8,8 @@ import pon.gpon.GtcDsTest.check
 /** OltBoardCore management path: HPS bridge -> board registers and, across to the PON clocks, the OltMac registers;
   * an error answer while the lane is down, pins and pin events; an Ethernet frame through the bridge to the MAC.
   * Then the lane in its 1.25 Gb/s profile (125 MHz): the EponOltMac registers instead of the OltMac's, an Ethernet
-  * frame to its LLID, received back through the RX clock crossing (lane looped back); the DR controller window. */
+  * frame to its LLID, received back through the RX clock crossing (lane looped back); the DR controller window.
+  * Last, an Ethernet module on that profile: the port's PCS synchronized, frames CPU -> lane -> CPU (0xA00 queues). */
 object OltBoardTest extends App {
   val BOARD = 0x100
   val GTS_STATUS = BOARD + 4
@@ -22,8 +23,14 @@ object OltBoardTest extends App {
   val PROFILE = BOARD + 28
   val EPON = 0x800
   val DR = 0x900
+  val ETHQ = 0xA00 // EthBoardTest's frame queue offsets
+  val TX_HEAD = ETHQ
+  val TX_DATA = ETHQ + 4
+  val RX_DESC_0 = ETHQ + 8
+  val RX_DESC_1 = ETHQ + 12
+  val RX_DATA = ETHQ + 16
 
-  SimConfig.compile { val c = OltBoardCore(); c.pon.mac.io.gem.simPublic(); c.epon.mac.io.dataTx.simPublic(); c }.doSim { dut =>
+  SimConfig.compile { val c = OltBoardCore(anSpeedup = true); c.pon.mac.io.gem.simPublic(); c.epon.mac.io.dataTx.simPublic(); c }.doSim { dut =>
     val io = dut.io
     val mgmt = dut.clockDomain
     mgmt.forkStimulus(10)
@@ -169,6 +176,30 @@ object OltBoardTest extends App {
     mgmt.waitSampling(500)
     check(frames == Seq((0x123, false, 104)), s"Ethernet frame -> bridge -> EPON OLT MAC: LLID 0x123, 100 bytes + FCS ($frames)")
     check(read(EPON + r.COUNTS(0).addr.toInt)._1 == 1, "the frame received back (RX_GOOD; no registered ONU: not forwarded)")
+
+    val ETH = BOARD + dut.board.ETH.addr.toInt
+    check(read(TX_HEAD)._2 == SLVERR, "Ethernet port queues while the profile carries the EPON OLT: error")
+    io.lane.txReady #= false // a module change: the lane reset meanwhile
+    io.lane.rxReady #= false
+    mgmt.waitSampling(20)
+    write(ETH, 1)
+    io.lane.txReady #= true
+    io.lane.rxReady #= true
+    mgmt.waitSamplingWhere(200000)((read(ETH)._1 & 0xC) == 0xC)
+    check((read(ETH)._1 & 0xC) == 0xC && read(EPON)._2 == SLVERR, "Ethernet port: PCS synced, autonegotiation complete, EPON MAC off")
+    val rnd = new scala.util.Random(5)
+    val sent = Seq(64, 1500, 200).map(n => Seq.fill(n)(rnd.nextInt(256)))
+    for (f <- sent) {
+      write(TX_HEAD, f.length << 16)
+      for (g <- f.grouped(4)) write(TX_DATA, (g ++ Seq.fill(4 - g.length)(0)).foldLeft(0L)((a, b) => (a << 8) | b))
+    }
+    val got = for (_ <- sent) yield {
+      mgmt.waitSamplingWhere(200000)((read(RX_DESC_0)._1 >> 31) == 1)
+      val d1 = read(RX_DESC_1)._1
+      val words = (0 until ((d1 >> 16) & 0x7FF).toInt).map(_ => read(RX_DATA)._1)
+      words.flatMap(w => (3 to 0 by -1).map(i => (w >> (8 * i) & 0xFF).toInt)).take((d1 & 0xFFF).toInt)
+    }
+    check(got == sent, s"${sent.length} frames CPU -> cage 0 Ethernet port -> lane -> CPU, whole")
   }
   println("PASS OltBoardTest")
 }

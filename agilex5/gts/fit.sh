@@ -15,27 +15,27 @@ top=${2:-hsmc_lanes}
 mkdir -p "$1"
 dir=$(cd "$1" && pwd)
 [ "$dir/ip/dr_ctrl.ip" -nt "$src/gen_ip.sh" ] || "$src/gen_ip.sh" "$dir/ip" # variants older than their script: regenerated
-ips="srcss olt onu ben_tx eth pon_clocks helper_pll" # divider after its source
+ips="srcss sfp0 onu ben_tx sfp1 pon_clocks helper_pll" # divider after its source
 case $top in
     hsmc_lanes) verilog=$src/hsmc_lanes.sv ;;
     PonBoard|ghrd)
         (cd "$repo" && "${SBT:-sbt}" -batch "runMain pon.PonBoardVerilog") > "$dir/sbt.log" 2>&1 || die "sbt, see $dir/sbt.log"
         verilog=$repo/out/rtl/PonBoard.v
         sources=$(cat "$repo/out/rtl/PonBoard.sources") # black box RTL (taxi); the DR profiles (dr_top) from quartus_tlg's qip
-        ips="srcss olt olt_1g25 onu onu_1g25 ben_tx ben_1g25 dr_ctrl eth clock_mux pon_clocks helper_pll" ;;
+        ips="srcss sfp0 sfp0_1g25 onu onu_1g25 ben_tx ben_1g25 dr_ctrl sfp1 clock_mux pon_clocks helper_pll" ;;
     *) die "unknown top $top" ;;
 esac
 project=$top
 [ $top != ghrd ] || { project=golden_top; [ -n "${GHRD:-}" ] || die "ghrd: set GHRD to the Terasic GHRD directory"; }
 # DE25-Standard user manual, HSMC GTS table (P pins; N follows)
-pins="pon_refclk:AT120 eth_refclk:AP120 ben_tx_p:AU129 onu_tx_p:AR129 eth_tx_p:AN129 olt_tx_p:AL129
-      onu_rx_p:AP135 eth_rx_p:AM135 olt_rx_p:AK135"
+pins="pon_refclk:AT120 eth_refclk:AP120 ben_tx_p:AU129 onu_tx_p:AR129 sfp1_tx_p:AN129 sfp0_tx_p:AL129
+      onu_rx_p:AP135 sfp1_rx_p:AM135 sfp0_rx_p:AK135"
 # HSMC card IO (common/pcb/gen/boards.py HSMC_IO -> hsmcpins.de25_name -> manual HSMC_D table), 3.3 V by JP5
-io_pins="sfp_txDisable:F34 sfp_txFault:H37 sfp_los:Y34 sfp_modAbs:Y15 sfp_scl:AL32 sfp_sda:AK21 sfp_rs0:AL29
-         sfp_rs1:AJ1 onuPins_laserDisable:AG36 onuPins_rxSd:Y24 onuPins_scl:AB24 onuPins_sda:T8 vcxoPwm:AG21 vcxo156Pwm:R2
+io_pins="sfp0_txDisable:F34 sfp0_txFault:H37 sfp0_los:Y34 sfp0_modAbs:Y15 sfp0_scl:AL32 sfp0_sda:AK21 sfp0_rs0:AL29
+         sfp0_rs1:AJ1 onuPins_laserDisable:AG36 onuPins_rxSd:Y24 onuPins_scl:AB24 onuPins_sda:T8 vcxoPwm:AG21 vcxo156Pwm:R2
          onuPins_burstCut:T18 onuPins_benIo:AJ2
-         ethSfp_txDisable:AK25 ethSfp_txFault:Y8 ethSfp_los:AG13 ethSfp_modAbs:AB4 ethSfp_scl:AH4 ethSfp_sda:AD2
-         ethSfp_rs0:T15 ethSfp_rs1:Y4"
+         sfp1_txDisable:AK25 sfp1_txFault:Y8 sfp1_los:AG13 sfp1_modAbs:AB4 sfp1_scl:AH4 sfp1_sda:AD2
+         sfp1_rs0:T15 sfp1_rs1:Y4"
 clock_pins="clock_50:D8" # board oscillator CLOCK1_50, bank 6C at 1.8 V (manual); to the helper PLL over a global clock
 cd "$dir"
 p="" # PonBoard's hierarchy prefix in fit.sdc
@@ -57,15 +57,16 @@ fi
     echo "set_global_assignment -name SYSTEMVERILOG_FILE $verilog"
     for f in ${sources:-}; do echo "set_global_assignment -name SYSTEMVERILOG_FILE $f"; done
     for ip in $ips; do echo "set_global_assignment -name IP_FILE ip/$ip.ip"; done
-    if [ $top != hsmc_lanes ]; then # the DR group, profile:id:channel:combinations (the ONU's
-        # burst enable lane switches with it); both sides GPON at startup
-        for profile in olt:1:0:1,3 olt_1g25:2:0:2,4 onu:3:1:1,2 onu_1g25:4:1:3,4 ben_tx:5:2:1,2 ben_1g25:6:2:3,4; do
-            IFS=: read -r name id channel combinations <<< "$profile"
+    if [ $top != hsmc_lanes ]; then # the DR group, profile:id:channel:combination: 1 all GPON (startup), 2 OLT 1.25 Gb/s,
+        # 3 ONU 1.25 Gb/s (its burst enable lane with it). Quartus 26.1.1 crashes (22912) on an IP in two combinations and
+        # rejects (23098) partial ones of startup IPs: back to GPON is combination 1, which also resets the other side's
+        for profile in sfp0:1:0:1 sfp0_1g25:2:0:2 onu:3:1:1 onu_1g25:4:1:3 ben_tx:5:2:1 ben_1g25:6:2:3; do
+            IFS=: read -r name id channel combination <<< "$profile"
             i=${name}_inst
             echo "set_instance_assignment -name DR_IP_INSTANCE -to $i -section_id dr_top $name"
             echo "set_instance_assignment -name DR_GROUP_RECONFIG_ID $id -to $i -section_id dr_top"
             echo "set_instance_assignment -name DR_COMBINATION_IP_INSTANCE_RELATIVE_LOCATION -to $i -section_id dr_top $channel"
-            for c in ${combinations/,/ }; do echo "set_instance_assignment -name DR_COMBINATION -section_id dr_top -to $i $c"; done
+            echo "set_instance_assignment -name DR_COMBINATION -section_id dr_top -to $i $combination"
         done
         echo "set_global_assignment -name DR_GROUP_STARTUP_COMBINATION -section_id dr_top 1"
     fi
@@ -116,13 +117,13 @@ fi
         echo '  set_clock_groups -asynchronous -group clk -group [remove_from_collection [all_clocks] [get_clocks clk]]'
         echo '}'
     fi
-    echo 'set eth_tx [get_clocks -nowarn {*eth*tx_clkout*}]' # Ethernet lane: tx and rx clocks unrelated (taxi, queues CDC)
-    echo 'set eth_rx [get_clocks -nowarn {*eth*rx_clkout*}]'
+    echo 'set eth_tx [get_clocks -nowarn {*sfp1*tx_clkout*}]' # Ethernet lane: tx and rx clocks unrelated (taxi, queues CDC)
+    echo 'set eth_rx [get_clocks -nowarn {*sfp1*rx_clkout*}]'
     echo 'if {[get_collection_size $eth_tx] > 0 && [get_collection_size $eth_rx] > 0} {'
     echo '  set_clock_groups -asynchronous -group $eth_tx -group $eth_rx'
     echo '}'
     echo 'set_false_path -to [get_keepers -nowarn {*buffercc*|buffers_0* *bufferCC*|buffers_0*}]' # Spinal synchronizers
-    echo 'set dr_rx [get_clocks -nowarn {*olt*_inst_period*|*rx_*}]' # DR: each profile's RX words on its rx_clkout, then FIFOs
+    echo 'set dr_rx [get_clocks -nowarn {*sfp0*_inst_period*|*rx_*}]' # DR: each profile's RX words on its rx_clkout, then FIFOs
     echo 'if {[get_collection_size $dr_rx] > 0} {'
     echo '  set_clock_groups -asynchronous -group $dr_rx'
     echo '}'
@@ -131,8 +132,8 @@ fi
     echo '    -source [get_node_info -name [get_clock_info -master_clock_pin $c]] -multiply_by 3125 -divide_by 7776 \'
     echo '    -add [get_node_info -name [get_clock_info -targets $c]]' # took the GPON clock on the shared node, x1: 125 MHz
     echo '}'
-    echo 'foreach side {olt onu} {'
-    echo '  set gpon [get_clocks -nowarn "${p}${side}Side_clocks|*${side}_inst_period*"]' # EPON logic: reset while the core clock is GPON
+    echo 'foreach {side lane} {olt sfp0 onu onu} {'
+    echo '  set gpon [get_clocks -nowarn "${p}${side}Side_clocks|*${lane}_inst_period*"]' # 1.25 Gb/s logic: reset while the core clock is GPON
     echo '  set epon_logic [get_keepers -nowarn "${p}${side}Core|epon_* ${p}${side}Core|eponCC|*"]'
     echo '  if {[get_collection_size $gpon] == 0 || [get_collection_size $epon_logic] == 0} {'
     echo '    post_message -type error "fit.sdc: no GPON clock or EPON logic for $side"'
@@ -141,7 +142,7 @@ fi
     echo '    set_false_path -from $epon_logic -to $gpon'
     echo '  }'
     echo '}'
-    echo 'foreach {gpon epon} {olt olt_1g25 onu onu_1g25 ben_tx ben_1g25} {' # every clock of one DR profile (lane, mux, divider) vs the other's
+    echo 'foreach {gpon epon} {sfp0 sfp0_1g25 onu onu_1g25 ben_tx ben_1g25} {' # every clock of one DR profile (lane, mux, divider) vs the other's
     echo '  set dr_gpon [get_clocks -nowarn "*${gpon}_inst_period*"]'
     echo '  set dr_1g25 [get_clocks -nowarn "*${epon}_inst_period*"]'
     echo '  if {[get_collection_size $dr_gpon] == 0 || [get_collection_size $dr_1g25] == 0} {'

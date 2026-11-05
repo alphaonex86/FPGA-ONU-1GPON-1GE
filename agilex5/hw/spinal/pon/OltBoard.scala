@@ -23,7 +23,8 @@ case class SfpPins() extends Bundle with IMasterSlave {
   }
 }
 
-/** OLT board registers (APB3, management domain): OLT GTS lane, SFP cage pins, bit-banged module I2C. */
+/** OLT board registers (APB3, management domain): cage 0 GTS lane, SFP cage pins, bit-banged module I2C, the user of
+  * the lane's 1.25 Gb/s profile (EPON OLT MAC or Ethernet port) and that port's PCS. */
 case class OltBoardRegs() extends Component {
   val io = new Bundle {
     val apb = slave(Apb3(Apb3Config(addressWidth = 8, dataWidth = 32)))
@@ -32,6 +33,8 @@ case class OltBoardRegs() extends Component {
     val sfp = master(SfpPins())
     val burstReset = in Bool () // the MAC's rxReset, for an RS pin in burst reset mode
     val epon = in Bool () // the lane runs its 1.25 Gb/s profile
+    val eth, sgmii = out Bool () // that profile carries the Ethernet port, SGMII
+    val anComplete, synced = in Bool () // the Ethernet port's PCS (lane clock domains)
     val alive = out Bool () // the PON clocks run: the MAC registers answer
     val irq = out Bool ()
   }
@@ -44,6 +47,11 @@ case class OltBoardRegs() extends Component {
   REFCLK.field(Bits(8 bits), AccessType.RO, 0, "fail: per reference clock")(SymbolName("fail")) := BufferCC(io.refclkFail, B(0, 8 bits))
   val PROFILE = busif.newReg("OLT lane profile, switched by the DR controller (0x900) while the lane is reset")
   PROFILE.field(Bool(), AccessType.RO, 0, "epon: 1.25 Gb/s, EPON OLT MAC (0x800), else GPON (0x000)")(SymbolName("epon")) := io.epon
+  val ETH = busif.newReg("1.25 Gb/s profile user (set while the lane is reset): an EPON OLT module or an Ethernet module")
+  io.eth := ETH.field(Bool(), AccessType.RW, 0, "eth: the Ethernet port (frame queues 0xA00), else the EPON OLT MAC")(SymbolName("eth"))
+  io.sgmii := ETH.field(Bool(), AccessType.RW, 0, "sgmii: SGMII (copper SFP), else 1000BASE-X")(SymbolName("sgmii"))
+  for ((name, pin) <- Seq("anComplete" -> synced(io.anComplete), "synced" -> synced(io.synced)))
+    ETH.field(Bool(), AccessType.RO, 0, name)(SymbolName(name)) := pin
 
   busif.accept(DocCHeader("olt_board_regs", "OLT_BOARD")) // olt_board_regs.h next to the Verilog
 }
@@ -99,14 +107,15 @@ case class DrHost() extends Bundle with IMasterSlave {
 /** OLT side of the board without the vendor blocks: 0x000 OltMac registers (across to the upstream domain), 0x100
   * board registers, 0x200 GEM CPU queues (OMCI; EPON: frames with their FCS, Port-ID = LLID), 0x300 Ethernet bridge,
   * 0x400 / 0x500 its LAN / WAN frame queues, 0x600 / 0x700 their control frames (bridgeIrq: same order), 0x800
-  * EponOltMac registers, 0x900 the lane's DR controller. The lane runs GPON or, after a DR switch (`epon`, changed
-  * only while the lane is reset), 1.25 Gb/s for the EPON OLT MAC: its tx clock (311.04 / 125 MHz) and half clock
-  * clock the MACs, each reset until the lane is ready in its mode; the received words cross from the profile's
-  * rx clock. MACs and queues answer an error while the PON clocks are down (a MAC also outside its mode), the bridge
+  * EponOltMac registers, 0x900 the lane's DR controller, 0xA00 the Ethernet port's frame queues (GemCpuQueues as in
+  * EthBoardCore). The lane (SFP cage 0) runs GPON or, after a DR switch (`epon`, changed only while the lane is
+  * reset), 1.25 Gb/s for the EPON OLT MAC or, with ETH.eth, an Ethernet port (1000BASE-X or SGMII module; its frames
+  * to the CPU only): its tx clock (311.04 / 125 MHz) and half clock clock the MACs and the port, each reset until the
+  * lane is ready in its mode; the received words cross from the profile's rx clock (the port runs on it). MACs and queues answer an error while the PON clocks are down (a MAC also outside its mode), the bridge
   * also while the Ethernet lane is down. Upstream GEM (EPON: LLID frames, EponGem) goes through the bridge's Port-ID
   * lookup (by default to the CPU, also while the Ethernet lane is down); downstream, the CPU packets before the
   * bridged ones. */
-case class OltBoardCore() extends Component {
+case class OltBoardCore(anSpeedup: Boolean = false) extends Component {
   val io = new Bundle {
     val axi = slave(Axi4(HpsBridge.axiConfig))
     val dsClk, usClk = in Bool ()
@@ -119,11 +128,12 @@ case class OltBoardCore() extends Component {
     val eponRxWord = in Bits (10 bits)
     val refclkFail = in Bits (8 bits)
     val sfp = master(SfpPins())
-    val ponIrq, boardIrq, gemIrq = out Bool ()
+    val ponIrq, boardIrq, gemIrq, ethPortIrq = out Bool ()
     val bridgeIrq = out Bits (4 bits) // LAN, WAN, LAN control, WAN control frame queues
     val ethTxClk, ethRxClk, ethDown = in Bool () // the Ethernet lane: clocks, not ready (asynchronous)
     val eth = master(EthFrames())
   }
+  val mgmt = ClockDomain.current
   val board = OltBoardRegs()
   io.lane <> board.io.lane
   board.io.refclkFail := io.refclkFail
@@ -134,7 +144,7 @@ case class OltBoardCore() extends Component {
   val down = !io.lane.txReady
   val domains = PonDomains(io.dsClk, io.usClk, down)
   val gponDomains = PonDomains(io.dsClk, io.usClk, down || io.epon)
-  val eponDomain = PonDomains(io.dsClk, io.usClk, down || !io.epon).ds
+  val eponDomain = PonDomains(io.dsClk, io.usClk, down || !io.epon || board.io.eth).ds
   val pon = new ClockingArea(gponDomains.ds) {
     val lanes = GtsPonLanes()
     lanes.io.usClk := io.usClk
@@ -158,9 +168,22 @@ case class OltBoardCore() extends Component {
     val mac = EponOltMac()
     val rx = RxWordCC(10)
     rx.io.rxClk := io.eponRxClk
-    rx.io.down := !io.lane.rxReady || !io.epon
+    rx.io.down := !io.lane.rxReady || !io.epon || board.io.eth
     rx.io.rxWord := io.eponRxWord
     mac.io.rxCode := rx.io.word
+
+    // Ethernet module instead: the port on the lane clocks (in this area: fit.sdc false-paths it under GPON clocks)
+    val ethTx = PonDomains(io.dsClk, io.usClk, down || !io.epon || !board.io.eth).ds
+    val ethRx = ClockDomain(io.eponRxClk, ClockDomain(io.eponRxClk)(BufferCC(!io.lane.rxReady || !io.epon || !board.io.eth)))
+    val eth = EthPort(ethTx, ethRx)
+    eth.io.rawRx := io.eponRxWord
+    eth.io.sgmii := ethTx(BufferCC(board.io.sgmii, False))
+    eth.io.anSpeedup := Bool(anSpeedup)
+    board.io.anComplete := eth.io.anComplete
+    board.io.synced := eth.io.synced
+    val ethAlive = mgmt(board.io.alive && synced(io.lane.rxReady) && synced(io.epon) && board.io.eth)
+    val ethQueues = mgmt.copy(reset = mgmt.readResetWire || mgmt(RegNext(!ethAlive).init(True)))(gpon.GemCpuQueues(ethTx, ethRx))
+    eth.io.tx << EthCpuQueues(ethQueues, eth, True)
   }
   board.io.burstReset := io.epon ? epon.mac.io.rxReset | pon.mac.io.rxReset
   io.ponIrq := BufferCC(pon.mac.io.irq, False) || BufferCC(epon.mac.io.irq, False)
@@ -188,7 +211,8 @@ case class OltBoardCore() extends Component {
     val toMac = StreamDemux(packets, eponMode.asUInt, 2)
     pon.mac.io.gem << toMac(0).s2mPipe().m2sPipe() // registered both ways at 311.04 MHz
     epon.mac.io.dataTx << EponGem.toFrames(toMac(1))
-    io.txWord := eponMode ? epon.mac.io.txCode | pon.lanes.io.oltTxWord.resized
+    val ethMode = BufferCC(board.io.eth, False)
+    io.txWord := eponMode ? (ethMode ? epon.eth.io.rawTx | epon.mac.io.txCode) | pon.lanes.io.oltTxWord.resized
   }
   val bridgeUp = board.io.alive && !BufferCC(io.ethDown, True)
   val bridgeQueues = BridgeQueues(bridge, !bridgeUp)
@@ -201,7 +225,8 @@ case class OltBoardCore() extends Component {
   val drApb = Apb3(Apb3Config(addressWidth = 8, dataWidth = 32))
   io.dr.fromApb(drApb)
   val eponMode = synced(io.epon)
+  io.ethPortIrq := epon.ethQueues.io.irq
   HpsBridge(io.axi, Seq(gponCC.io.input -> (board.io.alive && !eponMode), board.io.apb -> True, queues.io.apb -> board.io.alive,
     bridge.io.apb -> bridgeUp) ++ bridgeQueues.slaves(bridgeUp) ++
-    Seq(eponCC.io.input -> (board.io.alive && eponMode), drApb -> True))
+    Seq(eponCC.io.input -> (board.io.alive && eponMode && !board.io.eth), drApb -> True, epon.ethQueues.io.apb -> epon.ethAlive))
 }

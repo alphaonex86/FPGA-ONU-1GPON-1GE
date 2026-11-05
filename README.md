@@ -10,7 +10,8 @@ Developed and proven on an FPGA, the final target is an ASIC that holds everythi
 - GPON ONU MAC: GTC framing, FEC, AES-128 decryption, PLOAM, OMCI, upstream
   burst mode with DBA. EPON MAC (MPCP, OAM) and the OLT role of both.
 - 1000BASE-T Ethernet port, PHY integrated in the target ASIC (FPGA phase: a
-  copper SFP in an SFP+ cage on our HSMC card for the DE25-Standard).
+  copper SFP in an SFP+ cage on our HSMC card for the DE25-Standard; its other
+  cage takes an OLT module or a normal SFP).
 - SFP cage autodetects the module (EEPROM): 1000BASE-X, EPON OLT or GPON OLT.
 - BOSA on board; all optics control (burst, APC, LOS, DDM) in the FPGA/ASIC
   logic; outside only analog: discrete RF transistors, a small ADC/DAC, the APD
@@ -36,8 +37,8 @@ Developed and proven on an FPGA, the final target is an ASIC that holds everythi
 - `common/`: board-neutral parts: RTL and tests (`hw/`), KiCad generator and
   shared parts library (`pcb/gen`, `pcb/lib`).
 - `agilex5/`: common to the Agilex 5 boards (Quartus benches, GTS lane variants).
-- `de25-standard/`: Terasic DE25-Standard, our HSMC card (`pcb/hsmc`: placed and
-  routed, DRC/ERC clean, not yet ordered).
+- `de25-standard/`: Terasic DE25-Standard, our HSMC card (`pcb/hsmc`: two SFP+
+  cages, the ONU BOSA and an upstream sniffer receiver; not yet ordered).
 - `de25-nano/`: Terasic DE25-Nano, ECP5 SerDes bridge boards (alternative).
 
 ## Status
@@ -115,12 +116,18 @@ on the DE25-Standard FPGA at 125 MHz: ONU 1.3K ALMs (211 MHz), OLT 2.5K ALMs
 (141 MHz). With the same Ethernet bridges as GPON (`EponGem.scala`: the LLID is
 the Port-ID, Port-ID 0xFFF the broadcast LLID; the ONU's REPORT from its queues),
 Ethernet frames cross OLT port -> ONU port and back in simulation.
-HSMC card GTS lanes (OLT, ONU, burst enable, Ethernet) fit in Quartus at their
+HSMC card GTS lanes (two SFP cages, ONU, burst enable) fit in Quartus at their
 line rates from their refclk pins (`agilex5/gts/fit.sh`). One GTS dynamic
-reconfiguration controller switches each PON side on its own at run time between
-GPON and 1.25 Gb/s, each profile on its own refclk: the OLT cage lane (EPON OLT
-or 1000BASE-X module) and the ONU BOSA lane with its burst enable lane (EPON
-ONU). In the board top the EPON MACs run on those profiles with the same bridges
+reconfiguration controller switches cage 0 and the ONU each on its own at run time
+between GPON and 1.25 Gb/s, each profile on its own refclk: the cage 0 lane (GPON
+OLT, or EPON OLT, 1000BASE-X or SGMII module) and the ONU BOSA lane with its
+burst enable lane (EPON ONU); back to GPON goes through the all-GPON
+combination, which also resets the other side's lane if it runs at 1.25 Gb/s (a Quartus
+26.1.1 limit). Cage 0 with a normal SFP: the OLT core's own
+Ethernet port replaces the EPON OLT MAC on the 1.25 Gb/s profile (`olt_board_regs.h`
+ETH, set while the lane is reset; frames to the CPU queues at 0xA00), checked in
+simulation through the lane; software picks the mode from the module's EEPROM.
+Cage 1 is the Ethernet port's. In the board top the EPON MACs run on those profiles with the same bridges
 and CPU queues, their registers on each side's bridge slave (0x800, the DR
 controller's at 0x900 on the OLT's); the OLT's received words cross from each
 profile's rx clock; the EPON ONU is loop-timed like the GPON one, by its own
@@ -135,14 +142,15 @@ detector on a helper PLL, 6.7 ps steps, PI, sigma-delta: 0.03 bit of upstream
 phase wander in simulation, the OLT tolerating 4), GEM CPU queues for OMCI,
 optics pins with the laser held off until both lanes are up.
 Both sides checked in simulation, fit together on the DE25-Standard with the
-HSMC card pins placed, flow engine and EPON OLT and ONU included: 39.1K ALMs (83 %), 332 of 358 M20K, setup slack +0.01 ns
+HSMC card pins placed, flow engine, EPON OLT and ONU and cage 0's Ethernet port included: 39.9K ALMs (85 %), 337 of 358 M20K, setup slack +0.003 ns
 (`agilex5/gts/fit.sh out/pon_board PonBoard`).
 With the HPS: `de25-standard/ghrd/` brings Terasic's DE25-Standard reference design (GHRD, not in this
 repository: `GHRD=<its folder> agilex5/gts/fit.sh <folder outside the repository> ghrd`) to Quartus 26.1, removes
 its JTAG debug masters and shrinks its on-chip RAM to make room, and wires PonBoard in: its three register
-windows on the HPS lightweight bridge (+0x100000 OLT, +0x101000 ONU, +0x102000 Ethernet), its 16 interrupts on
-f2h_irq1 bits 0-15, its management clock the GHRD's 100 MHz; fits with 41.7K ALMs (89 %), 336 of 358 M20K,
-setup slack +0.001 ns. The HPS DDR settings were upgraded by Quartus: to check on the board.
+windows on the HPS lightweight bridge (+0x100000 OLT, +0x101000 ONU, +0x102000 Ethernet), its 17 interrupts on
+f2h_irq1 bits 0-16, its management clock the GHRD's 100 MHz; it fitted on 2026-11-02 with 41.7K ALMs (89 %), 336 of
+358 M20K, setup slack +0.001 ns; the same flow now stops in Quartus 26.1.1's DR programming step (internal error 22912,
+also for that version): open. The HPS DDR settings were upgraded by Quartus: to check on the board.
 
 ## License
 
