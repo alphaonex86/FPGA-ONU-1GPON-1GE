@@ -186,3 +186,6 @@ summary=$project.fit.summary
 alm=$(sed -n -E 's/.*Logic utilization \(in ALMs\) *: *([0-9,]+) .*/\1/p' $summary | tr -d ,)
 echo "$top fit: $alm ALMs, worst setup slack $setup ns, hold $hold ns"
 awk -v s="$setup" -v h="$hold" 'BEGIN { exit !(s >= 0 && h >= 0) }' || die "negative slack, see $dir/sta.log"
+# usage pictures of the board image, rewritten on every fit so they never go stale
+case $top in PonBoard) report=PonBoard name=pon_board ;; ghrd) report=output_files/golden_top name=ghrd ;; *) report= ;; esac
+[ -z "$report" ] || python3 "$src/usage_svg.py" "$dir/$report" $name "$repo/de25-standard/fpga-usage" || die "usage pictures"
