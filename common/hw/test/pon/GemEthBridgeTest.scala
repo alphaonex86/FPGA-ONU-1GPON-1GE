@@ -14,7 +14,8 @@ import pon.gpon.GtcDsTest.check
   * pop, S-tag push); table writes back to back across the clocks; offloaded flows each way (NAPT, PPPoE added and
   * stripped, VLAN pushed and popped, own Port-ID and queue), a port or a TTL of 1 missing them; in flows mode the
   * misses to the CPU each way, the CPU's own frames out of both sides; a snapshot of a flow's lookup; NAPT, L2 and
-  * VLAN bypassed to the CPU; trap actions (L2-bridged ARP to the control queue, to the data queue, dropped). */
+  * VLAN bypassed to the CPU; trap actions (L2-bridged ARP to the control queue, to the data queue, dropped); a flow
+  * counter (packets, IP bytes) read and cleared. */
 object GemEthBridgeTest extends App {
   val PORT_ACTION = 0x00
   val VLAN_MAP = 0x04
@@ -48,6 +49,7 @@ object GemEthBridgeTest extends App {
   val TRAP_WAN = 0x88
   val SNAP_ARM = 0x8C
   val SNAP_PORTS = 0x90 // SRC, DST, L2, RESULT, ACTION follow
+  val FLOW_COUNT_QUERY = 0xA8 // FLOW_PACKETS, FLOW_BYTES, FLOW_COUNT follow
   import FlowRewriteTest.{be, l4Sum, sum, words}
   /** An IPv4 TCP frame with valid checksums. */
   def ipFrame(macs: (Long, Long), tags: Seq[Int], session: Option[Int], src: Long, dst: Long, sport: Int, dport: Int,
@@ -231,14 +233,15 @@ object GemEthBridgeTest extends App {
       s"runt; not the drop action), Ethernet -> PON ${drops >> 16} (invalid, unmapped, bad, queue full)")
 
     // offloaded flows: LAN 192.168.1.10:5000 -> 8.8.8.8:443 as WAN 100.64.0.2:40000, PPPoE session 0x1234 in VLAN 35
-    def flow(ponToEth: Boolean, k: FlowTableTest.Key, natSrc: Boolean, ip: Long, port: Int, egress: Int): Unit = {
+    def flow(ponToEth: Boolean, k: FlowTableTest.Key, natSrc: Boolean, ip: Long, port: Int, egress: Int,
+             counter: Int = 0): Unit = {
       apb.write(FLOW_PORTS, k.dport | (k.sport.toLong << 16))
       apb.write(FLOW_DST, k.dst)
       apb.write(FLOW_SRC, k.src)
       apb.write(FLOW_L2, k.session | (k.vid << 16) | (k.udp.compare(false) << 28) | (k.pppoe.compare(false) << 29) |
         (k.tagged.compare(false) << 30))
       apb.write(FLOW_NAT_IP, ip)
-      apb.write(FLOW_NAT, port | (egress << 16) | (natSrc.compare(false) << 24))
+      apb.write(FLOW_NAT, port | (egress << 16) | (natSrc.compare(false) << 24) | (counter.toLong << 25))
       apb.write(FLOW_WRITE, k.bucket(10) | (1 << 17) | (if (ponToEth) 1L << 31 else 0L))
     }
     def egress(ponToEth: Boolean, index: Int, da: Long, sa: Long, vlan: Int, portId: Int, queue: Int, session: Option[Int]): Unit = {
@@ -430,6 +433,21 @@ object GemEthBridgeTest extends App {
     check(wanControl.drop(wanControlBefore).toSeq == Seq((0x100, arp)) && ethOut.length == ethBefore4 &&
       lanCpu.drop(lanCpuBefore2).toSeq == Seq((0, arp)) && dropsAfter == dropsBefore + 1,
       s"traps: ARP from the PON to the control queue, from Ethernet to the data queue, then dropped and counted")
+
+    // flow counter 5 on the LAN flow: two frames, then read and cleared
+    flow(ponToEth = false, usKey, natSrc = true, wanIp, 40000, 3, counter = 5)
+    mgmt.waitSampling(50)
+    send(usIn); send(usIn)
+    mgmt.waitSampling(2000)
+    def count(ponToEth: Boolean, counter: Int): Seq[Long] = {
+      apb.write(FLOW_COUNT_QUERY, counter | (if (ponToEth) 1L << 31 else 0L))
+      mgmt.waitSampling(30)
+      (0 until 3).map(k => apb.read(FLOW_COUNT_QUERY + 4 + 4 * k).toLong)
+    }
+    val ipBytes = usIn.length - 14
+    val counted = Seq(count(false, 5), count(false, 5), count(true, 5))
+    check(counted == Seq(Seq(2L, 2L * ipBytes, 1L << 31), Seq(0L, 0L, 1L << 31), Seq(0L, 0L, 1L << 31)),
+      s"flow counter: 2 packets, ${2 * ipBytes} IP bytes, then cleared; the other direction's untouched $counted")
   }
   println("PASS GemEthBridgeTest")
 }

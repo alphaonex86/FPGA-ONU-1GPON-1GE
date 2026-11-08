@@ -39,6 +39,9 @@ Every vendor driver also gates each engine behind a switch (HW NAT, HW PPPoE) an
    lookup / found / taken, trap, reason, egress, new port, TTL).
 4. **Flow counters and age**: a counter index per flow (packets, bytes), 2-bit age with hardware re-arm on hit,
    software sweep; feeds Linux flowtable stats and conntrack timeouts.
+   Done: a pool of 63 counters per direction (packets, IP bytes; FLOW_COUNT_QUERY reads and clears), the flow's
+   action picks one (luna and Cortina also share a small pool: one counter per flow would cost ~40 M20K here). Age
+   is the existing hit bit: hardware sets it on use, FLOW_HIT_QUERY is the software sweep (2 bits would add nothing).
 5. **Egress interface table**: MTU check (bigger -> CPU), PPPoE replace, S-tag + C-tag with PCP, DSCP remark,
    stream (T-CONT queue) per flow.
 6. **VLAN classifier for ME 171**: a rule table (match on tags, PCP, EtherType, ingress port or GEM; action push /

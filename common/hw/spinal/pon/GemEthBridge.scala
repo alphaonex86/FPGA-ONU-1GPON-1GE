@@ -144,6 +144,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   val flowEgress = staged(FLOW_NAT, UInt(6 bits), "egress", "egress entry")
   FLOW_NAT.reserved(2 bits)
   val flowNatSrc = staged(FLOW_NAT, Bool(), "natSrc", "source address and port replaced, else destination")
+  val flowCounter = staged(FLOW_NAT, UInt(6 bits), "counter", "the counter it adds to, 1-63 (0 none)")
   val FLOW_WRITE = busif.newReg("Write: the staged flow into a bucket's way; bucket = low bits of CRC-16-CCITT " +
     "(0x1021, init 0xFFFF, MSB first) of the key's 16 bytes, key bit 126 (tagged) first, bit 127 zero")
   FLOW_WRITE.field(UInt(16 bits), AccessType.WO, 0, s"bucket, 0-${(1 << flowBucketBits) - 1}")(SymbolName("bucket"))
@@ -218,6 +219,13 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   val SNAP_L2 = busif.newReg("Snapshot: as FLOW_L2, bit 31 IPv6")
   val SNAP_RESULT = busif.newReg("Snapshot: lookup and decision")
   val SNAP_ACTION = busif.newReg("Snapshot: the flow found")
+  val FLOW_COUNT_QUERY = busif.newReg("Write: read and clear a flow counter (packets, IP bytes), answered in FLOW_PACKETS")
+  FLOW_COUNT_QUERY.field(UInt(6 bits), AccessType.WO, 0, "counter, 1-63")(SymbolName("counter"))
+  FLOW_COUNT_QUERY.reserved(25 bits)
+  FLOW_COUNT_QUERY.field(Bool(), AccessType.WO, 0, "direction: 0 Ethernet -> PON, 1 PON -> Ethernet")(SymbolName("ponToEth"))
+  val FLOW_PACKETS = busif.newReg("The last FLOW_COUNT_QUERY's packets")
+  val FLOW_BYTES = busif.newReg("Its IP bytes bits 31-0")
+  val FLOW_COUNT = busif.newReg("Its IP bytes bits 39-32, done")
   /** The register's writes into the table's domain, one in flight (busy); the sending side resets with the table's
     * domain, so a domain going down does not hold the bus. */
   val busies = scala.collection.mutable.ArrayBuffer[Bool]()
@@ -250,6 +258,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   flow.entry.action.ip := flowIp
   flow.entry.action.port := flowPort
   flow.entry.action.egress := flowEgress
+  flow.entry.action.counter := flowCounter
   val flow6 = FlowWrite(flowBucketBits6, 128)
   flow6.bucket := flow.bucket.resized
   flow6.way := flow.way
@@ -277,6 +286,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     flows.io.hitQuery << tableWrite(FLOW_HIT_QUERY.hitDoWrite && mine,
       (ipv6 ## busif.writeData(flowBucketBits - 1 downto 0) ## busif.writeData(16)).asUInt, cd)
     flows.io.snapArm << tableWrite(SNAP_ARM.hitDoWrite && mine, True, cd)
+    flows.io.countQuery << tableWrite(FLOW_COUNT_QUERY.hitDoWrite && mine, busif.writeData(5 downto 0).asUInt, cd)
   }
   /** The static BYPASS and trap configuration into a classifier's domain (called there); the bypass bits back. */
   def configure(flows: FlowClassifier, trap: Bits): Bits = {
@@ -673,6 +683,13 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val back = FlowCCByToggle(s, cd, ClockDomain.current)
     when(back.valid) { snap := back.payload; snapDone := True }
   }
+  val count = Reg(FlowCount())
+  val countDone = RegInit(False)
+  when(FLOW_COUNT_QUERY.hitDoWrite)(countDone := False)
+  for ((a, cd) <- Seq(ponToEth.flows.io.countAnswer -> ponQueueCd, ethToPon.flows.io.countAnswer -> ethRxCd)) {
+    val back = FlowCCByToggle(a, cd, ClockDomain.current)
+    when(back.valid) { count := back.payload; countDone := True }
+  }
   def show[T <: BaseType](reg: RegInst, value: T, name: String, doc: String): Unit =
     reg.field(cloneOf(value), AccessType.RO, 0, doc)(SymbolName(name)) := value
   show(SNAP_PORTS, snap.dport, "dport", "destination port")
@@ -697,6 +714,11 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   show(SNAP_ACTION, snap.egress, "egress", "egress entry")
   SNAP_ACTION.reserved(2 bits)
   show(SNAP_ACTION, snap.ttl, "ttl", "TTL or hop limit")
+  show(FLOW_PACKETS, count.packets, "packets", "packets")
+  show(FLOW_BYTES, count.bytes(31 downto 0), "bytes", "IP bytes bits 31-0")
+  show(FLOW_COUNT, count.bytes(39 downto 32), "bytes", "IP bytes bits 39-32")
+  FLOW_COUNT.reserved(23 bits)
+  FLOW_COUNT.field(Bool(), AccessType.RO, 0, "done: the answer is there")(SymbolName("done")) := countDone
 
   val ponDrops = Reg(UInt(16 bits)) init (0)
   val ethDrops = Reg(UInt(16 bits)) init (0)

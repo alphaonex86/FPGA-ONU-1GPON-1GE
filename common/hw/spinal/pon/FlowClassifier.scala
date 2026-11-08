@@ -32,6 +32,12 @@ case class FlowDecision() extends Bundle {
 
 object FlowClassifier { val latency = 12 }
 
+/** A flow counter: packets and their IP bytes (IPv4 total length, IPv6 40 + payload length). */
+case class FlowCount() extends Bundle {
+  val packets = UInt(32 bits)
+  val bytes = UInt(40 bits)
+}
+
 /** Acceleration layers turned off (an ASIC bug must have a way around): a table not looked up, or a hit needing NAT,
   * a PPPoE add/strip or a VLAN rewrite taken as a miss. */
 case class FlowBypass() extends Bundle { val flows, flows6, nat, pppoe, vlan = Bool() }
@@ -58,7 +64,8 @@ case class FlowSnapshot() extends Bundle {
   * A hit sets its entry's hit bit; a hit query (IPv6 ## bucket ## way) answers the bit two clocks later and clears it
   * (a hit at that clock wins, so the bit may stay set). Trap (2 bits per TrapReason from code 1): 0 as the rules say
   * (the control queue if it reaches the CPU), 1 to the CPU's control queue, 2 to its data queue, 3 dropped; a trapped
-  * frame takes no flow. snapArm: the next decision is copied to snap. */
+  * frame takes no flow. snapArm: the next decision is copied to snap. A taken flow adds to its counter; a counter
+  * query (index) answers the counter and clears it. Age: the hit bit (a query is the software's sweep). */
 case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
   assert(bucketBits6 <= bucketBits)
   val io = new Bundle {
@@ -73,6 +80,8 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
     val trap = in Bits (2 * TrapReason.names.size bits) // static
     val snapArm = slave Flow (Bool()) // payload unused
     val snap = master Flow (FlowSnapshot())
+    val countQuery = slave Flow (UInt(6 bits))
+    val countAnswer = master Flow (FlowCount())
   }
   val parser = FrameParser()
   parser.io.input << io.input
@@ -174,4 +183,29 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
   snap.found := hit; snap.hit := accepted; snap.toCpu := d.toCpu; snap.drop := d.drop; snap.reason := h.reason
   snap.bucket := (index >> 1).resized; snap.way := index(0 downto 0); snap.egress := action.egress; snap.ttl := h.ttl
   snap.port := action.port
+
+  // counters: one read-add-write (or read-clear for a query) at a time over 3 clocks; frames are >= 64 clocks apart
+  // and the flow's action and header hold that long
+  val counts = Mem(FlowCount(), 64) initBigInt (Seq.fill(64)(BigInt(0)))
+  counts.addTag(ReadDuringWriteFree) // one access in flight: never read and written at once
+  val updatePending, queryPending = RegInit(False)
+  val queryIndex = Reg(UInt(6 bits))
+  when(io.decision.valid && accepted && action.counter =/= 0)(updatePending := True)
+  when(io.countQuery.valid) { queryPending := True; queryIndex := io.countQuery.payload }
+  val read1, read2 = RegInit(False)
+  val start = (updatePending || queryPending) && !read1 && !read2
+  val countIndex = updatePending ? action.counter | queryIndex
+  when(start) { when(updatePending)(updatePending := False) otherwise (queryPending := False) }
+  read1 := start
+  read2 := read1
+  val clear1 = RegNext(!updatePending)
+  val clear2 = RegNext(clear1)
+  val countIndex1 = RegNext(countIndex)
+  val old = counts.readSync(countIndex, start)
+  val next = FlowCount()
+  next.packets := old.packets + 1
+  next.bytes := old.bytes + h.totalLength
+  counts.write(RegNext(countIndex1), RegNext(clear1 ? next.getZero | next), read2)
+  io.countAnswer.valid := read2 && clear2
+  io.countAnswer.payload := RegNext(old)
 }

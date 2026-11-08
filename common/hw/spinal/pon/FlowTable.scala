@@ -15,12 +15,14 @@ case class FlowKey(addressBits: Int = 32) extends Bundle {
   val tagged = Bool()
 }
 
-/** NAPT of a flow: its source (else destination) address and port replaced; egress: how it leaves. */
+/** NAPT of a flow: its source (else destination) address and port replaced; egress: how it leaves; counter: the
+  * FlowClassifier counter it adds to (1-63, 0 none). */
 case class FlowAction() extends Bundle {
   val natSrc = Bool()
   val ip = Bits(32 bits)
   val port = UInt(16 bits)
   val egress = UInt(6 bits)
+  val counter = UInt(6 bits)
 }
 
 case class FlowEntry(addressBits: Int) extends Bundle {
