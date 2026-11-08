@@ -629,7 +629,8 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
       val left = Reg(UInt(12 bits)) init (0)
       val keep = Reg(Bool())
       val head = Reg(PonDesc())
-      val room = Vec(queues.map(q => q.data.io.availability >= desc.bytes && q.descs.io.availability =/= 0))
+      // availability registered (311.04 MHz): a clock old, at most the previous frame's last byte too high
+      val room = Vec(queues.map(q => RegNext(q.data.io.availability) > desc.bytes && q.descs.io.availability =/= 0))
       desc.ready := left === 0
       when(desc.fire) { left := desc.bytes; keep := desc.good && !desc.cpu && room(desc.payload.queue); head := desc.payload }
       dropped := RegNext(desc.fire && desc.good && !desc.cpu && !room(desc.payload.queue)) init (False)
