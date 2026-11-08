@@ -22,7 +22,8 @@ case class EgressWrite() extends Bundle {
 
 case class FlowDecision() extends Bundle {
   val hit = Bool()
-  val control = Bool() // a control protocol frame (FrameHeader.control)
+  val control = Bool() // to the CPU's control queue if it goes to the CPU (a trap reason, action 0 or 1)
+  val toCpu, drop = Bool() // trapped: to the CPU whatever the rules say, or dropped
   val job = RewriteJob() // enabled on a hit
   val vlan = VlanTreatment()
   val portId = UInt(12 bits)
@@ -31,12 +32,33 @@ case class FlowDecision() extends Bundle {
 
 object FlowClassifier { val latency = 12 }
 
+/** Acceleration layers turned off (an ASIC bug must have a way around): a table not looked up, or a hit needing NAT,
+  * a PPPoE add/strip or a VLAN rewrite taken as a miss. */
+case class FlowBypass() extends Bundle { val flows, flows6, nat, pppoe, vlan = Bool() }
+
+/** A frame's parse, lookup and decision, for bring-up: software recomputes the hash and compares. */
+case class FlowSnapshot() extends Bundle {
+  val sport, dport = UInt(16 bits)
+  val src, dst = Bits(32 bits) // IPv6: bits 31-0
+  val session = UInt(16 bits)
+  val vid = UInt(12 bits)
+  val tagged, pppoe, udp, ipv6, ipv4, offloadable, lookup, found, hit, toCpu, drop = Bool()
+  val reason = UInt(4 bits)
+  val bucket = UInt(16 bits)
+  val way = UInt(1 bits)
+  val egress = UInt(6 bits)
+  val ttl = UInt(8 bits)
+  val port = UInt(16 bits) // the flow's new port
+}
+
 /** The flow engine of one direction at its input: parses each frame, looks its flow up at its end (offloadable,
   * TTL > 1; IPv4 and IPv6 tables, IPv6 routed only), reads the flow's egress (64 entries) and builds its rewrite job
   * with the updated checksums; the decision
   * comes FlowClassifier.latency clocks after the frame's last byte, so a frame may follow right after another.
   * A hit sets its entry's hit bit; a hit query (IPv6 ## bucket ## way) answers the bit two clocks later and clears it
-  * (a hit at that clock wins, so the bit may stay set). */
+  * (a hit at that clock wins, so the bit may stay set). Trap (2 bits per TrapReason from code 1): 0 as the rules say
+  * (the control queue if it reaches the CPU), 1 to the CPU's control queue, 2 to its data queue, 3 dropped; a trapped
+  * frame takes no flow. snapArm: the next decision is copied to snap. */
 case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
   assert(bucketBits6 <= bucketBits)
   val io = new Bundle {
@@ -47,6 +69,10 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
     val egressWrite = slave Flow (EgressWrite())
     val hitQuery = slave Flow (UInt(bucketBits + 2 bits))
     val hitAnswer = master Flow (Bool())
+    val bypass = in(FlowBypass()) // static
+    val trap = in Bits (2 * TrapReason.names.size bits) // static
+    val snapArm = slave Flow (Bool()) // payload unused
+    val snap = master Flow (FlowSnapshot())
   }
   val parser = FrameParser()
   parser.io.input << io.input
@@ -59,8 +85,8 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
   val p = parser.io.header
   val h = RegNextWhen(p, ended)
   val tagged = p.vlans =/= 0
-  for ((t, ip) <- Seq(table -> p.ipv4, table6 -> p.ipv6)) {
-    t.io.lookup.valid := ended && p.offloadable && ip && p.ttl > 1
+  for ((t, ip, off) <- Seq((table, p.ipv4, io.bypass.flows), (table6, p.ipv6, io.bypass.flows6))) {
+    t.io.lookup.valid := ended && p.offloadable && ip && p.ttl > 1 && !off
     val key = t.io.lookup.payload
     key.dport := p.dport; key.sport := p.sport; key.dst := p.dst.resized; key.src := p.src.resized
     key.udp := p.proto === 17; key.session := p.pppoe ? p.session | U(0); key.pppoe := p.pppoe
@@ -77,6 +103,8 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
   val (result, result6) = (table.io.result, table6.io.result)
   val found = result.valid && result.hit || result6.valid && result6.hit
   val hit = RegNextWhen(found, looked)
+  val lookedUp = RegNextWhen(table.io.lookup.valid || table6.io.lookup.valid, ended)
+  val index = RegNextWhen(result6.valid ? result6.index.resize(bucketBits + 1) | result.index, looked)
   val foundAction = result6.valid ? result6.action | result.action
   val action = RegNextWhen(foundAction, looked)
   val e = RegNext(egresses.readSync(foundAction.egress, looked)) // registered RAM output
@@ -100,16 +128,26 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
     ((h.ttl - 1).asBits ## h.proto.asBits) +: halves(action.ip))
   val l4Updated = Checksum.update(h.l4Checksum, halves(oldIp) :+ oldPort, halves(action.ip) :+ action.port.asBits)
   val noUdpChecksum = udp && h.l4Checksum === 0
+  val vlan = VlanTreatment.resolve(e.vlan, h.vlans =/= 0, h.outerPcp)
+  val natUsed = !h.ipv6 && (action.ip =/= oldIp || action.port.asBits =/= oldPort)
+  val pppoeChange = h.pppoe =/= e.pppoe
+  val bypassed = RegNext(io.bypass.nat && natUsed || io.bypass.pppoe && pppoeChange ||
+    io.bypass.vlan && (vlan.remove || vlan.add)) // e settled 3 clocks before the decision
+  val trapActions = Vec((B"00" +: io.trap.subdivideIn(2 bits).toSeq).padTo(16, B"00"))
+  val trap = RegNext(trapActions(h.reason))
+  val accepted = hit && !bypassed && trap === 0
 
   io.decision.valid := Delay(ended, FlowClassifier.latency - 1, init = False)
   val d = io.decision.payload
-  d.hit := hit
-  d.control := h.control
-  d.vlan := VlanTreatment.resolve(e.vlan, h.vlans =/= 0, h.outerPcp)
+  d.hit := accepted
+  d.control := h.reason =/= 0 && trap =/= 2
+  d.toCpu := trap === 1 || trap === 2
+  d.drop := trap === 3
+  d.vlan := vlan
   d.portId := e.portId
   d.queue := e.queue
   val j = d.job
-  j.enable := hit
+  j.enable := accepted
   j.da := e.da
   j.sa := e.sa
   j.l2End := (U(12, 5 bits) + (h.vlans << 2)).resized
@@ -125,4 +163,15 @@ case class FlowClassifier(bucketBits: Int, bucketBits6: Int) extends Component {
   j.ipChecksum := ipChecksum
   j.ipv6 := h.ipv6
   j.l4Checksum := noUdpChecksum ? B(0, 16 bits) | ((udp && l4Updated === 0) ? B"16'xFFFF" | l4Updated)
+
+  val armed = RegInit(False)
+  when(io.snapArm.valid)(armed := True) elsewhen (io.snap.valid)(armed := False)
+  io.snap.valid := io.decision.valid && armed
+  val snap = io.snap.payload
+  snap.sport := h.sport; snap.dport := h.dport; snap.src := h.src(31 downto 0); snap.dst := h.dst(31 downto 0)
+  snap.session := h.session; snap.vid := h.outerVid; snap.tagged := h.vlans =/= 0; snap.pppoe := h.pppoe
+  snap.udp := udp; snap.ipv6 := h.ipv6; snap.ipv4 := h.ipv4; snap.offloadable := h.offloadable; snap.lookup := lookedUp
+  snap.found := hit; snap.hit := accepted; snap.toCpu := d.toCpu; snap.drop := d.drop; snap.reason := h.reason
+  snap.bucket := (index >> 1).resized; snap.way := index(0 downto 0); snap.egress := action.egress; snap.ttl := h.ttl
+  snap.port := action.port
 }

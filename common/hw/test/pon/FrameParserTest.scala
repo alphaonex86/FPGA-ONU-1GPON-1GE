@@ -12,7 +12,7 @@ import pon.gpon.GtcDsTest.check
 object FrameParserTest extends App {
   case class Expect(vlans: Seq[Int], session: Option[Int], ipv4: Boolean, ipv6: Boolean, l3Offset: Int, ttl: Int,
                     proto: Int, src: BigInt, dst: BigInt, sport: Int, dport: Int, offloadable: Boolean, da: Long,
-                    pcp: Int, totalLength: Int, ipChecksum: Int, l4Checksum: Int, control: Boolean)
+                    pcp: Int, totalLength: Int, ipChecksum: Int, l4Checksum: Int, reason: Int)
   val rnd = new scala.util.Random(4)
   def be(v: Long, n: Int): Seq[Int] = (n - 1 to 0 by -1).map(k => ((v >> (8 * k)) & 0xFF).toInt)
   def frame(): (Seq[Int], Expect) = {
@@ -55,8 +55,14 @@ object FrameParserTest extends App {
     val ip = v4 || kind == 6
     (bytes, Expect(vlans, session, v4, kind == 6, l2.length, ttl, proto, src, dst, sport, dport,
       ip && (proto == 17 || proto == 6 && (flags & 0x07) == 0), da, pcps.headOption.getOrElse(0), totalLength, ipChecksum, l4Checksum,
-      kind == 7 && (session.isDefined || controlTypes.contains(ether)) || ipv4 && proto == 2 ||
-        kind == 6 && (proto == 58 || proto == 0) || ip && proto == 17 && controlPorts.contains(dport)))
+      TrapReason(
+        if (kind == 7 && session.isDefined) "pppControl"
+        else if (kind == 7) TrapReason.etherTypes.toMap.getOrElse(ether, "")
+        else if (ipv4 && proto == 2) "igmp"
+        else if (kind == 6 && proto == 58) "icmp6"
+        else if (kind == 6 && proto == 0) "hopByHop"
+        else if (ip && proto == 17 && controlPorts.contains(dport)) (if (kind == 6) "dhcp6" else "dhcp")
+        else "")))
   }
 
   SimConfig.compile(FrameParser()).doSim { dut =>
@@ -81,7 +87,7 @@ object FrameParserTest extends App {
       val v6 = e.ipv6
       val mask = (BigInt(1) << (if (v6) 128 else 32)) - 1
       val got = Seq(h.vlans.toInt == e.vlans.length, e.vlans.headOption.forall(_ == h.outerVid.toInt),
-        e.vlans.isEmpty || h.outerPcp.toInt == e.pcp, h.control.toBoolean == e.control,
+        e.vlans.isEmpty || h.outerPcp.toInt == e.pcp, h.reason.toInt == e.reason,
         e.vlans.drop(1).headOption.forall(_ == h.innerVid.toInt), h.pppoe.toBoolean == e.session.isDefined,
         e.session.forall(_ == h.session.toInt), h.ipv4.toBoolean == e.ipv4, h.ipv6.toBoolean == e.ipv6,
         h.da.toLong == e.da, h.offloadable.toBoolean == e.offloadable) ++
@@ -92,7 +98,7 @@ object FrameParserTest extends App {
       if (got.contains(false)) wrong += s"frame $k: $e checks $got"
       cd.waitSampling(rnd.nextInt(3))
     }
-    check(wrong.isEmpty, s"$n frames: VLANs, PPPoE session, IP fields, ports, offload and control verdicts ${wrong.take(2)}")
+    check(wrong.isEmpty, s"$n frames: VLANs, PPPoE session, IP fields, ports, offload verdict and trap reason ${wrong.take(2)}")
   }
   println("PASS FrameParserTest")
 }

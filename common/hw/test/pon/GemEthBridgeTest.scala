@@ -13,7 +13,8 @@ import pon.gpon.GtcDsTest.check
   * appended; two queues by Port-ID, a full one dropping while the other flows; VLAN treatments each way (translate,
   * pop, S-tag push); table writes back to back across the clocks; offloaded flows each way (NAPT, PPPoE added and
   * stripped, VLAN pushed and popped, own Port-ID and queue), a port or a TTL of 1 missing them; in flows mode the
-  * misses to the CPU each way, the CPU's own frames out of both sides. */
+  * misses to the CPU each way, the CPU's own frames out of both sides; a snapshot of a flow's lookup; NAPT, L2 and
+  * VLAN bypassed to the CPU; trap actions (L2-bridged ARP to the control queue, to the data queue, dropped). */
 object GemEthBridgeTest extends App {
   val PORT_ACTION = 0x00
   val VLAN_MAP = 0x04
@@ -42,6 +43,11 @@ object GemEthBridgeTest extends App {
   val FLOW_DST_1 = 0x60 // _2, _3 follow, then FLOW_SRC_1-3
   val CONTROL_RATE = 0x78
   val CONTROL_DROPS = 0x7C
+  val BYPASS = 0x80
+  val TRAP_LAN = 0x84
+  val TRAP_WAN = 0x88
+  val SNAP_ARM = 0x8C
+  val SNAP_PORTS = 0x90 // SRC, DST, L2, RESULT, ACTION follow
   import FlowRewriteTest.{be, l4Sum, sum, words}
   /** An IPv4 TCP frame with valid checksums. */
   def ipFrame(macs: (Long, Long), tags: Seq[Int], session: Option[Int], src: Long, dst: Long, sport: Int, dport: Int,
@@ -376,6 +382,54 @@ object GemEthBridgeTest extends App {
       "IPv6 flow, Ethernet -> PON: routed (hop limit), PPPoE (0x0057) and VLAN 35 added, its Port-ID")
     def hit6(): Long = { apb.write(FLOW_HIT_QUERY, key6.bucket(8) | (1L << 30)); mgmt.waitSampling(30); apb.read(FLOW_HIT).toLong }
     check(Seq(hit6(), hit6()) == Seq(0x80000001L, 0x80000000L), "IPv6 flow hit bit: set, then cleared")
+
+    // snapshot of the next Ethernet -> PON frame: the IPv4 flow found in its bucket
+    def snapshot(ponToEth: Boolean)(send: => Unit): Seq[Long] = {
+      apb.write(SNAP_ARM, if (ponToEth) 1L << 31 else 0L)
+      mgmt.waitSampling(30)
+      send
+      mgmt.waitSampling(2000)
+      (0 until 6).map(k => apb.read(SNAP_PORTS + 4 * k).toLong)
+    }
+    val snap = snapshot(ponToEth = false)(send(usIn))
+    val result = snap(4)
+    check(snap.take(3) == Seq(443 | (5000L << 16), hostIp, server) && (result & 0xFFFF) == usKey.bucket(10) &&
+      (result >> 16 & 0xFF) == 0xCE && (result >> 24 & 0xF) == 0 && (result >> 31) == 1 &&
+      snap(5) == (40000 | (3L << 16) | (64L << 24)), s"snapshot: ports, addresses, bucket, way 0 found and taken, " +
+      s"egress 3, port, TTL ${snap.map(_.toHexString)}")
+    ponOut(1).clear()
+
+    // bypassed layers: to the CPU instead (the untagged entry in flows mode, VLAN 100 not)
+    val (lanCpuBefore, wanCpuBefore) = (lanCpu.length, wanCpu.length)
+    apb.write(BYPASS, 1 << 2) // NAPT
+    val natSnap = snapshot(ponToEth = false)(send(usIn))
+    apb.write(BYPASS, 1 << 4) // VLAN rewrites
+    send(us20); send(q)
+    apb.write(BYPASS, 1 << 5) // L2
+    send(q); gem(0x100, Seq(withFcs(ds40)))
+    apb.write(BYPASS, 0)
+    mgmt.waitSampling(3000)
+    check((natSnap(4) >> 16 & 0x1F) == 0x06 && lanCpu.drop(lanCpuBefore).toSeq == Seq((0, usIn), (0, us20), (0, q)) &&
+      ponOut(1).isEmpty && ponOut(0).last == ((0x200, 204, withFcs(q))) && wanCpu.drop(wanCpuBefore).toSeq == Seq((0x100, ds40)),
+      "bypass: the NAPT flow found but missed, the VLAN translation, the L2-bridged frames each way to the CPU")
+
+    // traps: an ARP bridged from the PON to the CPU's control queue; from Ethernet to its data queue, then dropped
+    val arp = be(0xFFFFFFFFFFFFL, 6) ++ be(gw, 6) ++ Seq(0x08, 0x06) ++ Seq.fill(46)(rnd.nextInt(256))
+    val arpCode = TrapReason("arp")
+    val (wanControlBefore, lanCpuBefore2, ethBefore4) = (wanControl.length, lanCpu.length, ethOut.length)
+    apb.write(TRAP_WAN, 1L << (2 * arpCode - 2))
+    apb.write(TRAP_LAN, 2L << (2 * arpCode - 2))
+    gem(0x100, Seq(withFcs(arp)))
+    send(arp)
+    mgmt.waitSampling(2000)
+    val dropsBefore = apb.read(DROPS).toLong >> 16
+    apb.write(TRAP_LAN, 3L << (2 * arpCode - 2))
+    send(arp)
+    mgmt.waitSampling(2000)
+    val dropsAfter = apb.read(DROPS).toLong >> 16
+    check(wanControl.drop(wanControlBefore).toSeq == Seq((0x100, arp)) && ethOut.length == ethBefore4 &&
+      lanCpu.drop(lanCpuBefore2).toSeq == Seq((0, arp)) && dropsAfter == dropsBefore + 1,
+      s"traps: ARP from the PON to the control queue, from Ethernet to the data queue, then dropped and counted")
   }
   println("PASS GemEthBridgeTest")
 }

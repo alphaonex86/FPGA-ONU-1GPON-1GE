@@ -26,11 +26,17 @@ Every vendor driver also gates each engine behind a switch (HW NAT, HW PPPoE) an
 1. **Bypass per layer** (goal): one register bit each for flow lookup, NAT rewrite, PPPoE rewrite, VLAN rewrite,
    checksum update, L2 bridge; a disabled layer sends its frames to the CPU (or passes them unchanged where that is
    still correct). A global "everything to the CPU" mode. Cheap, needed before anything else.
+   Done: bridge BYPASS (flows, flows6, nat, pppoe, vlan, l2); a bypassed flow is a miss (CPU in flows mode), l2 and
+   vlan send the bridged frames to the CPU. No global mode: the Port-ID actions and VLAN entries already give it.
 2. **Trap table instead of fixed control detection** (goal): per reason (own MAC, ARP, DHCP, ICMP, IGMP/MLD, PPPoE
    discovery and LCP, TTL expired, MTU exceeded, fragment, TCP SYN/FIN/RST, miss, OMCI) an action {to CPU, drop,
    forward}, a CPU queue and a rate. Generalises today's control queue and token bucket.
+   Done: FrameParser gives a TrapReason (ARP, PPPoE discovery, PPP control, EAPOL, LLDP, slow, IGMP, DHCP, DHCPv6,
+   ICMPv6, hop-by-hop); TRAP_LAN / TRAP_WAN per reason: as the rules say, CPU control queue, CPU data queue, drop.
 3. **Debug snapshot**: registers holding the last parsed key, the hash indices, hit/miss and the action taken, per
    direction; software computes the same hash from it. Cheap, essential for ASIC bring-up.
+   Done: SNAP_ARM (direction) copies the next frame into SNAP_* (ports, addresses bits 31-0, L2 key, bucket, way,
+   lookup / found / taken, trap, reason, egress, new port, TTL).
 4. **Flow counters and age**: a counter index per flow (packets, bytes), 2-bit age with hardware re-arm on hit,
    software sweep; feeds Linux flowtable stats and conntrack timeouts.
 5. **Egress interface table**: MTU check (bigger -> CPU), PPPoE replace, S-tag + C-tag with PCP, DSCP remark,

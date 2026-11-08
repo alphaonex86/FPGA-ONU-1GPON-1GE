@@ -39,7 +39,9 @@ case class EthFrames() extends Bundle with IMasterSlave {
   * follows them, or in flows mode (Port-ID action 3, VLAN entry flows bit) goes to the CPU: lanToCpu (frames from
   * Ethernet), wanToCpu (from the PON, with their Port-ID), control protocol frames (FrameHeader.control) instead to
   * lanControlToCpu / wanControlToCpu through a token bucket each (CONTROL_RATE), so a flood of misses cannot delay
-  * them nor a control flood load the CPU. The CPU's own frames: cpuToLan before the bridged ones to
+  * them nor a control flood load the CPU; TRAP_LAN / TRAP_WAN override that per TrapReason (CPU control or data
+  * queue, drop). BYPASS turns acceleration layers off (FlowBypass; l2: the bridged frames to the CPU), SNAP_* show
+  * one frame's parse and decision. The CPU's own frames: cpuToLan before the bridged ones to
   * Ethernet, cpuToWan before them in the queue of their Port-ID. Tables written by the CPU.
   * Clocks: the Port-ID lookup and the CPU stream on ponRxCd (reset with the PON side only: the CPU keeps its GEM
   * while the Ethernet lane is down); the queues on ponQueueCd (ponRxCd's clock), ponTxCd, ethTxCd and ethRxCd, all
@@ -97,7 +99,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
   val untagged = UNTAGGED.field(Bits(18 bits), AccessType.RW, 0, "as VLAN_MAP bits 29-12")(SymbolName("entry"))
   val untaggedPcp = UNTAGGED.field(Bits(3 bits), AccessType.RW, 0, "PCP for the mapper")(SymbolName("pcp"))
   val untaggedFlows = UNTAGGED.field(Bool(), AccessType.RW, 0, "flows, as VLAN_MAP bit 30")(SymbolName("flows"))
-  val DROPS = busif.newReg("Frames dropped (bad, queue full, unmapped), counts")
+  val DROPS = busif.newReg("Frames dropped (bad, queue full, unmapped, trapped to drop), counts")
   val PCP_MAP = busif.newReg("Ethernet -> PON: write sets a mapper's Port-ID for a PCP")
   PCP_MAP.field(UInt(12 bits), AccessType.WO, 0, "Port-ID")(SymbolName("portId"))
   PCP_MAP.field(UInt(3 bits), AccessType.WO, 0, "PCP")(SymbolName("pcp"))
@@ -194,6 +196,28 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     burst ## rate
   }
   val CONTROL_DROPS = busif.newReg("Control frames over their rate, dropped: counts")
+  val BYPASS = busif.newReg("Acceleration layers off (an engine bug): a flow needing one is taken as a miss")
+  val bypassBits = Vec(Seq("flows" -> "IPv4 flows: no lookup", "flows6" -> "IPv6 flows: no lookup",
+    "nat" -> "flows translating an address or port", "pppoe" -> "flows adding or stripping PPPoE",
+    "vlan" -> "flows and bridged frames rewriting a VLAN tag (bridged ones: to the CPU)",
+    "l2" -> "bridged frames (valid L2 rule, no flow): to the CPU").map { case (name, doc) =>
+    BYPASS.field(Bool(), AccessType.RW, 0, doc)(SymbolName(name)) }).asBits
+  def trapReg(name: String, side: String): Bits = {
+    val reg = busif.newReg(s"Trap actions, frames from $side: 0 as the rules say, 1 CPU control queue, 2 CPU data " +
+      "queue, 3 drop")(SymbolName(name))
+    TrapReason.names.map(n => reg.field(Bits(2 bits), AccessType.RW, 0, n)(SymbolName(n))).reverse.reduce(_ ## _)
+  }
+  val trapLan = trapReg("TRAP_LAN", "Ethernet")
+  val trapWan = trapReg("TRAP_WAN", "the PON")
+  val SNAP_ARM = busif.newReg("Write: copy the next frame's parse, lookup and decision into SNAP_*")
+  SNAP_ARM.reserved(31 bits)
+  SNAP_ARM.field(Bool(), AccessType.WO, 0, "direction: 0 Ethernet -> PON, 1 PON -> Ethernet")(SymbolName("ponToEth"))
+  val SNAP_PORTS = busif.newReg("Snapshot: L4 ports, as FLOW_PORTS")
+  val SNAP_SRC = busif.newReg("Snapshot: source address bits 31-0")
+  val SNAP_DST = busif.newReg("Snapshot: destination address bits 31-0")
+  val SNAP_L2 = busif.newReg("Snapshot: as FLOW_L2, bit 31 IPv6")
+  val SNAP_RESULT = busif.newReg("Snapshot: lookup and decision")
+  val SNAP_ACTION = busif.newReg("Snapshot: the flow found")
   /** The register's writes into the table's domain, one in flight (busy); the sending side resets with the table's
     * domain, so a domain going down does not hold the bus. */
   val busies = scala.collection.mutable.ArrayBuffer[Bool]()
@@ -252,7 +276,18 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     flows.io.egressWrite << tableWrite(EGRESS_WRITE.hitDoWrite && mine, egress, cd)
     flows.io.hitQuery << tableWrite(FLOW_HIT_QUERY.hitDoWrite && mine,
       (ipv6 ## busif.writeData(flowBucketBits - 1 downto 0) ## busif.writeData(16)).asUInt, cd)
+    flows.io.snapArm << tableWrite(SNAP_ARM.hitDoWrite && mine, True, cd)
   }
+  /** The static BYPASS and trap configuration into a classifier's domain (called there); the bypass bits back. */
+  def configure(flows: FlowClassifier, trap: Bits): Bits = {
+    val bypass = BufferCC(bypassBits, B(0, bypassBits.getWidth bits))
+    val b = flows.io.bypass
+    b.flows := bypass(0); b.flows6 := bypass(1); b.nat := bypass(2); b.pppoe := bypass(3); b.vlan := bypass(4)
+    flows.io.trap := BufferCC(trap, B(0, trap.getWidth bits))
+    bypass
+  }
+  /** Bridged by the L2 rules but sent to the CPU: L2 bypassed, or a VLAN rewrite with VLAN bypassed. */
+  def l2ToCpu(bypass: Bits, vlan: VlanTreatment): Bool = bypass(5) || bypass(4) && (vlan.remove || vlan.add)
 
   /** Treatments 1-15 (written: index 3-0, then remove, add, pcpCopy, sTag, TCI); 0 stays transparent. */
   case class Treatments(write: Flow[Bits]) extends Area {
@@ -352,11 +387,12 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     flows.io.input.fragment := in.gem.data
     flows.io.input.last := ends
     val decision = flows.io.decision.payload
+    val bypass = configure(flows, trapWan)
     ethDescs.io.push.valid := later.valid
     ethDescs.io.push.bytes := later.bytes
     ethDescs.io.push.portId := later.portId
-    ethDescs.io.push.good := later.good
-    ethDescs.io.push.cpu := later.cpu && !decision.hit
+    ethDescs.io.push.good := later.good && !decision.drop
+    ethDescs.io.push.cpu := (later.cpu || l2ToCpu(bypass, later.vlan)) && !decision.hit || decision.toCpu
     ethDescs.io.push.control := decision.control
     ethDescs.io.push.vlan := decision.hit ? decision.vlan | later.vlan
     ethDescs.io.push.job := decision.job
@@ -368,7 +404,7 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
       bytes := push.bytes
     }
     when(ends)(open := False)
-    val dropped = ends && (skipNow || !push.good)
+    val dropped = ends && (skipNow || !push.good) || later.valid && later.good && decision.drop // >= 64 clocks apart
   }
 
   /** A frame byte for the CPU queues (GemCpuQueues.rx): one fragment per frame. */
@@ -511,14 +547,16 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     flows.io.input.fragment := rx.fragment
     flows.io.input.last := rx.last
     val decision = flows.io.decision.payload
+    val bypass = configure(flows, trapLan)
     val laterOk = Delay(frameOk, FlowClassifier.latency)
     val hit = decision.hit
+    val toCpu = (later.cpu || l2ToCpu(bypass, later.vlan) && later.good) && !hit || decision.toCpu
     ponDescs.io.push.valid := later.valid
     ponDescs.io.push.bytes := later.bytes
     ponDescs.io.push.portId := hit ? decision.portId | later.portId
     ponDescs.io.push.payload.queue := hit ? decision.queue.resize(queueBits) | later.payload.queue
-    ponDescs.io.push.good := (hit || later.cpu) ? laterOk | later.good
-    ponDescs.io.push.cpu := later.cpu && !hit
+    ponDescs.io.push.good := ((hit || toCpu) ? laterOk | later.good) && !decision.drop
+    ponDescs.io.push.cpu := toCpu
     ponDescs.io.push.control := decision.control
     ponDescs.io.push.vlan := hit ? decision.vlan | later.vlan
     ponDescs.io.push.job := decision.job
@@ -626,6 +664,38 @@ case class GemEthBridge(ponRxCd: ClockDomain, ponQueueCd: ClockDomain, ponTxCd: 
     val back = FlowCCByToggle(a, cd, ClockDomain.current)
     when(back.valid) { answer := back.payload; answered := True }
   }
+
+  val snap = Reg(FlowSnapshot())
+  val snapDone = RegInit(False)
+  when(SNAP_ARM.hitDoWrite)(snapDone := False)
+  for ((s, cd) <- Seq(ponToEth.flows.io.snap -> ponQueueCd, ethToPon.flows.io.snap -> ethRxCd)) {
+    val back = FlowCCByToggle(s, cd, ClockDomain.current)
+    when(back.valid) { snap := back.payload; snapDone := True }
+  }
+  def show[T <: BaseType](reg: RegInst, value: T, name: String, doc: String): Unit =
+    reg.field(cloneOf(value), AccessType.RO, 0, doc)(SymbolName(name)) := value
+  show(SNAP_PORTS, snap.dport, "dport", "destination port")
+  show(SNAP_PORTS, snap.sport, "sport", "source port")
+  show(SNAP_SRC, snap.src, "ip", "address")
+  show(SNAP_DST, snap.dst, "ip", "address")
+  show(SNAP_L2, snap.session, "session", "PPPoE session (pppoe set)")
+  show(SNAP_L2, snap.vid, "vid", "outer VID (tagged set)")
+  for ((v, n) <- Seq(snap.udp -> "udp", snap.pppoe -> "pppoe", snap.tagged -> "tagged", snap.ipv6 -> "ipv6"))
+    show(SNAP_L2, v, n, n)
+  show(SNAP_RESULT, snap.bucket, "bucket", "the table's bucket (looked up), as FLOW_WRITE")
+  show(SNAP_RESULT, snap.way, "way", "the way found")
+  for ((v, n, d) <- Seq((snap.lookup, "lookup", "looked up (IPv4 or IPv6 table, not bypassed)"),
+         (snap.found, "found", "a flow matched"), (snap.hit, "hit", "the flow taken (not bypassed, not trapped)"),
+         (snap.toCpu, "toCpu", "trapped to the CPU"), (snap.drop, "drop", "trapped to drop"),
+         (snap.offloadable, "offloadable", "FrameHeader.offloadable"), (snap.ipv4, "ipv4", "IPv4 without options or fragment")))
+    show(SNAP_RESULT, v, n, d)
+  show(SNAP_RESULT, snap.reason, "reason", "TrapReason, 0 none")
+  SNAP_RESULT.reserved(3 bits)
+  SNAP_RESULT.field(Bool(), AccessType.RO, 0, "done: the snapshot is there")(SymbolName("done")) := snapDone
+  show(SNAP_ACTION, snap.port, "port", "new port")
+  show(SNAP_ACTION, snap.egress, "egress", "egress entry")
+  SNAP_ACTION.reserved(2 bits)
+  show(SNAP_ACTION, snap.ttl, "ttl", "TTL or hop limit")
 
   val ponDrops = Reg(UInt(16 bits)) init (0)
   val ethDrops = Reg(UInt(16 bits)) init (0)

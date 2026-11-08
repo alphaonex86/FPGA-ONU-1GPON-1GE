@@ -22,8 +22,15 @@ case class FrameHeader() extends Bundle {
   val tcpFlags = Bits(8 bits)
   val offloadable = Bool() // TCP/UDP over IPv4 without options or fragmentation, or over IPv6 without extension
                            // headers; its L4 header read, TCP without SYN/FIN/RST
-  val control = Bool() // ARP, PPPoE discovery and non-IP PPP (LCP, IPCP...), EAPOL, LLDP, slow protocols, IGMP,
-                       // DHCP, DHCPv6, ICMPv6 and IPv6 hop-by-hop (MLD)
+  val reason = UInt(4 bits) // a control protocol (TrapReason), 0 none
+}
+
+/** Control protocols the CPU may want: each has a trap action per side (GemEthBridge TRAP_LAN / TRAP_WAN). */
+object TrapReason {
+  val names = Seq("arp", "pppoeDiscovery", "pppControl", "eapol", "lldp", "slow", "igmp", "dhcp", "dhcp6", "icmp6",
+    "hopByHop") // codes from 1
+  def apply(name: String): Int = names.indexOf(name) + 1
+  val etherTypes = Seq(0x0806 -> "arp", 0x8863 -> "pppoeDiscovery", 0x888E -> "eapol", 0x88CC -> "lldp", 0x8809 -> "slow")
 }
 
 object ParserState extends SpinalEnum { val MAC, TYPE, VLAN, PPPOE, IPV4, IPV6, L4, DONE = newElement() }
@@ -43,7 +50,7 @@ case class FrameParser() extends Component {
   val position = Reg(UInt(6 bits)) init (0) // of the current byte in the frame, up to 63
   val prev = Reg(Bits(8 bits))
   val l4Done = Reg(Bool()) // the UDP or TCP header up to its checksum
-  val controlL2 = Reg(Bool()) // a control EtherType or PPP protocol
+  val reasonL2 = Reg(UInt(4 bits)) // a control EtherType or PPP protocol
   val ip4Seen = Reg(Bool()) // an IPv4 header, options or fragment included
   val udp = h.proto === 17
   val b = io.input.fragment
@@ -58,7 +65,7 @@ case class FrameParser() extends Component {
       is(MAC) {
         when(index === 0) { // the frame's first byte: a fresh header
           h.vlans := 0; h.pppoe := False; h.ipv4 := False; h.ipv6 := False; l4Done := False
-          controlL2 := False; ip4Seen := False
+          reasonL2 := 0; ip4Seen := False
         }
         when(index < 6)(h.da := h.da(39 downto 0) ## b)
         when(index === 11)(next(TYPE))
@@ -70,7 +77,8 @@ case class FrameParser() extends Component {
           when(word === 0x8864)(next(PPPOE))
           when(word === 0x0800)(next(IPV4))
           when(word === 0x86DD)(next(IPV6))
-          controlL2 := Seq(0x0806, 0x8863, 0x888E, 0x88CC, 0x8809).map(word === _).orR
+          reasonL2 := 0
+          for ((etherType, name) <- TrapReason.etherTypes) when(word === etherType)(reasonL2 := TrapReason(name))
         }
       }
       is(VLAN) {
@@ -86,7 +94,7 @@ case class FrameParser() extends Component {
         when(index === 3)(h.session := word.asUInt)
         when(index === 7) {
           h.pppoe := True
-          controlL2 := word =/= 0x0021 && word =/= 0x0057
+          reasonL2 := (word =/= 0x0021 && word =/= 0x0057) ? U(TrapReason("pppControl"), 4 bits) | U(0)
           next(DONE)
           when(word === 0x0021)(next(IPV4))
           when(word === 0x0057)(next(IPV6))
@@ -130,7 +138,11 @@ case class FrameParser() extends Component {
   }
   h.offloadable.setAsComb() // the verdict from the fields
   h.offloadable := (h.ipv4 || h.ipv6) && l4Done && (udp || (h.tcpFlags & 0x07) === 0)
-  h.control.setAsComb()
-  val dhcp = l4Done && udp && (ip4Seen ? (h.dport === 67 || h.dport === 68) | (h.dport === 546 || h.dport === 547))
-  h.control := controlL2 || ip4Seen && h.proto === 2 || h.ipv6 && (h.proto === 58 || h.proto === 0) || dhcp
+  h.reason.setAsComb()
+  val dhcp = l4Done && udp && ip4Seen && (h.dport === 67 || h.dport === 68)
+  val dhcp6 = l4Done && udp && !ip4Seen && (h.dport === 546 || h.dport === 547)
+  h.reason := reasonL2
+  for ((hit, name) <- Seq((ip4Seen && h.proto === 2, "igmp"), (dhcp, "dhcp"), (dhcp6, "dhcp6"),
+         (h.ipv6 && h.proto === 58, "icmp6"), (h.ipv6 && h.proto === 0, "hopByHop")))
+    when(reasonL2 === 0 && hit)(h.reason := TrapReason(name))
 }
