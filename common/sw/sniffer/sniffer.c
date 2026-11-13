@@ -81,7 +81,7 @@ int sniffer_parse(const uint8_t *bytes, size_t size, struct sniffer_record *reco
 {
     if (size < 4)
         return 0;
-    if ((bytes[0] & 0xF8) != 0xA0 || (bytes[0] & 7) > SNIFFER_BURST)
+    if ((bytes[0] & 0xF8) != 0xA0 || (bytes[0] & 7) > SNIFFER_REPLY)
         return -1;
     unsigned length = bytes[2] | (unsigned)bytes[3] << 8;
     size_t total = (12 + length + 3) & ~(size_t)3;
@@ -531,6 +531,8 @@ static void handle_gem(struct sniffer *s, const struct sniffer_record *r)
 int sniffer_handle(struct sniffer *s, const struct sniffer_record *r)
 {
     static const unsigned min_length[] = {12, 7, 10, 3};
+    if (r->kind == SNIFFER_REPLY)
+        return 0;
     size_t total = (12 + r->length + 3) & ~(size_t)3;
     if (s->opt.dump && fwrite(r->payload - 12, 1, total, s->opt.dump) != total) {
         perror("sniffer: dump");

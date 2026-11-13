@@ -54,7 +54,10 @@ case class PhasePick(quietWords: Int = 4) extends Component {
     Cat((0 until 10).map(k => io.samples(19 - 2 * k)).reverse))
 }
 
-/** Locks the VCXO to the downstream. `error`: the DS crossing FIFO's fill from its middle, in words. PI loop every
+/** Locks the VCXO to the downstream. `error`: the DS crossing FIFO's fill from its middle, in words (the passive
+  * sniffer), or twice that plus one, never zero (the in-line one: a bang-bang at the middle that holds the clocks'
+  * phase, so the downstream latency, where the fill toggles; 2^10, 5, 13 with a 1 kHz RC: locked in 0.1 s, the phase
+  * within 0.1 line bit for 33 to 300 ppm over the range, FPGA-USB-GPON-sniffer/ecp5/vcxo_loop_model.py). PI loop every
   * 2^updateShift clocks, duty to a first-order sigma-delta on the VC pin's RC filter (16 Hz, two poles); a higher
   * duty raises the frequency. Off (no downstream): the duty holds. Default gains: ~0.5 Hz, damping ~1, for 100 ppm
   * over the VC range at 124.416 MHz (0.19 words/s per duty LSB). Closed-loop model (sniffer/ecp5/vcxo_loop_model.py):
@@ -97,10 +100,12 @@ case class VcxoLoop(updateShift: Int = 14, kpShift: Int = 5, kiShift: Int = 9) e
 /** The sniffer card's ECP5 fabric, vendor-neutral. Default domain: the VCXO's SerDes clock (124.416 MHz), where the
   * upstream lane is read. `ds`: the downstream lane's recovered clock. `out`: 77.76 MHz from the default domain (x5/8).
   * Lane words: 20 bits, first received bit in bit 0 (the ECP5 DCU's order). To the DE25-Nano, per `out` clock:
-  * 32 downstream and 16 upstream line bits, first bit in the MSB; the first half on the rising edge. */
-case class SnifferBridge(fifoDepth: Int = 16) extends Component {
-  val dsCd = ClockDomain.external("ds")
-  val outCd = ClockDomain.external("out")
+  * 32 downstream and 16 upstream line bits, first bit in the MSB; the first half on the rising edge.
+  * `inline`: for a repeater, the VCXO loop holds the downstream latency (see VcxoLoop); `dsLine` and `usBits` are what
+  * it sends again. */
+case class SnifferBridge(fifoDepth: Int = 16, inline: Boolean = false, dsDomain: ClockDomain = null, outDomain: ClockDomain = null) extends Component {
+  val dsCd = if (dsDomain != null) dsDomain else ClockDomain.external("ds")
+  val outCd = if (outDomain != null) outDomain else ClockDomain.external("out")
   val io = new Bundle {
     val dsWord = in Bits (20 bits) // ds domain
     val usWord = in Bits (20 bits) // 2x oversampled
@@ -108,6 +113,9 @@ case class SnifferBridge(fifoDepth: Int = 16) extends Component {
     val vcxo = out Bool ()
     val duty = out UInt (16 bits)
     val usOdd = out Bool ()
+    val dsLine = out Bits (20 bits) // the downstream in this domain, first bit in the MSB; zero while `dsValid` is not
+    val dsValid = out Bool ()
+    val usBits = out Bits (10 bits) // the picked upstream bits, first in the MSB
     val dsPins = out Bits (32 bits) // out domain
     val usPins = out Bits (16 bits)
   }
@@ -119,17 +127,21 @@ case class SnifferBridge(fifoDepth: Int = 16) extends Component {
   when(!popping && crossing.io.popOccupancy >= fifoDepth / 2)(popping := True)
   when(popping && !crossing.io.pop.valid)(popping := False)
   crossing.io.pop.ready := popping
-  val ds = (popping && crossing.io.pop.valid) ? crossing.io.pop.payload | B(0, 20 bits)
+  io.dsValid := popping && crossing.io.pop.valid
+  val ds = io.dsValid ? crossing.io.pop.payload | B(0, 20 bits)
+  io.dsLine := ds
 
-  val loop = VcxoLoop()
+  val loop = if (inline) VcxoLoop(10, 5, 13) else VcxoLoop()
+  val fill = crossing.io.popOccupancy.intoSInt - S(fifoDepth / 2)
   loop.io.enable := BufferCC(io.dsSignal, False)
-  loop.io.error := RegNext((crossing.io.popOccupancy.intoSInt - S(fifoDepth / 2)).resize(8 bits)) init (0)
+  loop.io.error := RegNext((if (inline) (fill << 1) + 1 else fill).resize(8 bits)) init (0)
   io.vcxo := loop.io.vc
   io.duty := loop.io.duty
 
   val pick = PhasePick()
   pick.io.samples := io.usWord.reversed
   io.usOdd := pick.io.odd
+  io.usBits := pick.io.bits
 
   // both gearboxes start together at the same ratio, so their words come on the same clocks
   val dsGear = Gearbox(20, 32)

@@ -7,6 +7,7 @@ layers, zone refill, dangling copper removed, DRC.
 import collections, json, os, subprocess, sys, tempfile
 import pcbnew, re
 from pcbgen import finish_footprint
+from paths import ki_lib
 from sexp import TOK
 
 UUID = re.compile(r'\(uuid "([^"]+)"\)')
@@ -82,7 +83,7 @@ def drop_items(path, uuids):
 if __name__ == '__main__':
     path = sys.argv[1]
     pcb = pcbnew.LoadBoard(path)
-    if outer_pours(pcb) | any([finish_footprint(fp) for fp in pcb.Footprints()]):
+    if outer_pours(pcb) | any([finish_footprint(fp, ki_lib(os.path.dirname(os.path.abspath(path)))) for fp in pcb.Footprints()]):
         pcbnew.SaveBoard(path, pcb, True)   # board only: the .kicad_pro stays write_project's
     errors, open_items = drop_dangling(path)
     print(f'{path}: errors {dict(errors)}, unconnected {open_items}')

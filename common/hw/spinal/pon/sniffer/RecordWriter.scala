@@ -5,7 +5,7 @@ import spinal.core._
 import spinal.lib._
 
 /** Record kinds, byte 0 of a record is 0xA0 | kind. */
-object RecordKind { val ploam = 0; val alloc = 1; val gem = 2; val burst = 3 }
+object RecordKind { val ploam = 0; val alloc = 1; val gem = 2; val burst = 3; val reply = 4 }
 
 /** What closes a record: its header fields and the first `extraBytes` payload bytes (line order).
   * Flag bit 7 is the writer's: set when the data FIFO was full and the record lost its tail. */
@@ -14,6 +14,30 @@ case class RecordHead(extraBytes: Int) extends Bundle {
   val flags = Bits(8 bits)
   val time = UInt(64 bits)
   val extra = Bits(8 * extraBytes bits)
+}
+
+object RecordHead {
+  /** The 12 header bytes of a record, in stream order. */
+  def bytes(kind: UInt, flags: Bits, length: UInt, time: UInt): Seq[Bits] =
+    Seq(B"1010_0" ## kind, flags, length.asBits(7 downto 0), length.asBits(15 downto 8)) ++
+      (0 until 8).map(i => time.asBits(8 * i + 7 downto 8 * i))
+}
+
+/** A record stream as bytes, zeros after each record to a multiple of 4 bytes (as RecordWords' last word). */
+case class RecordPad() extends Component {
+  val io = new Bundle {
+    val input = slave Stream (Fragment(Bits(8 bits)))
+    val output = master Stream (Bits(8 bits))
+  }
+  val count = Reg(UInt(2 bits)) init (0) // bytes sent, modulo 4
+  val padding = Reg(Bool()) init (False)
+  io.output.valid := padding || io.input.valid
+  io.output.payload := padding ? B(0, 8 bits) | io.input.fragment
+  io.input.ready := !padding && io.output.ready
+  when(io.output.fire) {
+    count := count + 1
+    padding := count =/= 3 && (padding || io.input.last)
+  }
 }
 
 case class RecordEntry(extraBytes: Int) extends Bundle {
@@ -76,14 +100,14 @@ case class RecordWriter(extraBytes: Int, dataDepth: Int, headDepth: Int) extends
   val headBytes = 12 + extraBytes
   val entry = heads.io.pop.payload
   val h = entry.head
-  val header = Vec(Seq(B"1010_0" ## h.kind, h.flags, entry.length.asBits(7 downto 0), entry.length.asBits(15 downto 8)) ++
-    (0 until 8).map(i => h.time.asBits(8 * i + 7 downto 8 * i)) ++
+  val header = Vec(RecordHead.bytes(h.kind, h.flags, entry.length, h.time) ++
     (extraBytes - 1 to 0 by -1).map(i => h.extra(8 * i + 7 downto 8 * i)))
   val index = Reg(UInt(16 bits)) init (0)
   val inHeader = index < headBytes
   io.output.valid := heads.io.pop.valid && (inHeader || datas.io.pop.valid)
   io.output.fragment := inHeader ? header(index.resize(log2Up(headBytes) bits)) | datas.io.pop.payload
-  io.output.last := index === entry.length + 11
+  val lastIndex = RegNextWhen(entry.length + 11, index === 0) // set before it can match: the head memory is slow to read
+  io.output.last := index =/= 0 && index === lastIndex
   datas.io.pop.ready := heads.io.pop.valid && !inHeader && io.output.ready
   heads.io.pop.ready := io.output.fire && io.output.last
   when(io.output.fire)(index := io.output.last ? U(0, 16 bits) | index + 1)

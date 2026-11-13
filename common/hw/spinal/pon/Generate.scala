@@ -17,4 +17,5 @@ object Generate extends App {
   config.generateVerilog(sniffer.SnifferDs())
   config.generateVerilog(sniffer.SnifferUs())
   config.generateVerilog(sniffer.SnifferBridge()) // in sniffer/ecp5/sniffer_ecp5.v
+  config.generateVerilog(sniffer.InlineSniffer()) // in ../FPGA-USB-GPON-sniffer/ecp5 (+ inline_regs.h)
 }

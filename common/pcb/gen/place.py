@@ -5,7 +5,7 @@ import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
 from pcbgen import Layout, BGA_C, ball_xy, P, V, plane_vias, PLANE_NETS
 from paths import board_dir
-from boards import onu, olt, hsmc, sniffer
+from boards import onu, olt, hsmc, sniffer, inline
 
 PASSIVE = ('R', 'C', 'FB', 'L', 'RN', 'TP')
 def is_passive(ref):
@@ -74,7 +74,8 @@ def passives(lay, header_rn_y):
         lay.place_near(r, sum(xs) / len(xs), header_rn_y, rot=90)
     rail_balls = {}
     if lay.bga:
-        lay.keepout['F'].append((10, 6.5, 54, BGA_C[1] - 9.8))  # bus fan-in corridor, top layer
+        if header_rn_y:
+            lay.keepout['F'].append((10, 6.5, 54, BGA_C[1] - 9.8))  # bus fan-in corridor, top layer
         # ECP5 rail decoupling: one cap per ball, cycling, on the bottom ring
         for b, n in parts[lay.bga].conns.items():
             if n.startswith('+'):
@@ -173,6 +174,66 @@ def sniffer_layout():
         lay.place(tps[p], x, y)
         lay.place(diodes[p], x, y + 3.6)
     lay.place(refs(lay, 'AD5593R')[0], 22.0, 64.0)
+    return lay
+
+def inline_layout():
+    """USB and the FT2232H north-west of the BGA, flash and JTAG west, both optical ports east with their fibres over
+    the edge (OLT port north, ONU port south), each receiver's limiting amp at its can inside a ring of shield clips.
+    A first placement: the BOSA lands are placeholders until the parts are measured."""
+    lay = Layout(inline(), 92, 86)
+    one = lambda sym: refs(lay, sym)[0]
+    by_net = lambda sym, pin: {lay.parts[r].conns[pin][:3]: r for r in refs(lay, sym)}
+    lay.bga = one('LFE5UM-45F-BG381')
+    lay.place(lay.bga, *BGA_C)
+    lay.keepout['B'].append((BGA_C[0] - 9.6, BGA_C[1] - 9.6, BGA_C[0] + 9.6, BGA_C[1] + 9.6))   # dog-bone via field
+    bucks = {lay.parts[r].block: r for r in refs(lay, 'TLV62569DBV')}
+    for rail, xy in (('+1V1', (47.5, 23.0)), ('+1V1_SD', (47.5, 32.5)), ('+3V3', (62.0, 8.0))):
+        lay.place(bucks[f'power:{rail}'], *xy, 180, True)
+        buck_cell(lay, bucks[f'power:{rail}'])
+    lay.place(one('TLV75525PDBV'), 54.0, 31.0, 0, True)
+    lay.place(one('USB_C_Receptacle_USB2.0_16P'), 16.0, 4.2, 180)   # mouth over the north edge
+    lay.place(one('USBLC6-2SC6'), 25.5, 5.0)
+    lay.place(one('FT2232HL'), 14.0, 18.0)
+    lay.place(one('Crystal_GND24'), 3.5, 27.0, 90)
+    lay.place(one('93LCxxBxxOT'), 9.0, 28.5)
+    lay.place(one('W25Q32JVSS'), 15.0, 35.0)
+    lay.place(one('Conn_01x06'), 4.0, 38.0)                          # JTAG
+    lay.place(one('LED'), 4.0, 60.0)
+    lay.place(one('VCXO_LVDS_7050'), 39.0, 42.5)                     # south of the REFCLK balls Y11/Y12
+    for hole, xy in zip(refs(lay, 'MountingHole'), ((4, 4), (88, 4), (4, 82), (88, 82))):
+        lay.place(hole, *xy)
+    # OLT port: RX can at (85.5, 47)
+    lay.place(one('BOSA_GPON'), 77.0, 47.0)
+    lay.place(one('SY88993AV'), 85.0, 40.0)
+    # ONU port: RX can at (86, 68), TX leads at x = 76
+    lay.place(one('BOSA_OLT'), 86.0, 68.0)
+    lay.place(one('SY88349NDL'), 85.0, 60.5)
+    drivers = by_net('MAX3643', '8')          # by the EN net: US_LD_DIS, DS_LASER_DIS
+    lay.place(drivers['US_'], 69.0, 47.0)
+    lay.place(drivers['DS_'], 69.0, 68.0)
+    tps, schottky = by_net('TPS61391', '5'), by_net('D_Schottky', '1')
+    for p, (x, y) in (('DS_', (56.0, 44.0)), ('US_', (56.0, 62.0))):
+        lay.place(tps[p], x, y)
+        lay.place(schottky[p], x, y + 3.6)
+    lay.place(one('74LVC1G07'), 61.5, 38.5)
+    gate, cut = sorted(refs(lay, '74LVC1G97'), key=lambda r: lay.parts[r].block != 'gate')
+    lay.place(gate, 67.0, 38.5)
+    lay.place(one('74LVC1G123'), 60.5, 53.5)
+    lay.place(cut, 66.5, 53.5)
+    lay.place(one('74LVC1G32'), 71.5, 53.5)
+    lay.place(one('TLV3501AIDBV'), 62.0, 59.0)
+    ddm = {lay.parts[r].conns['2']: r for r in refs(lay, 'AD5593R')}   # by A0
+    lay.place(ddm['GND'], 48.0, 53.0)
+    lay.place(ddm['+3V3'], 48.0, 70.0)
+    for r in refs(lay, 'D'):                  # each laser's dummy-load diodes beside its driver
+        driver = drivers[lay.parts[r].block[-3:]]
+        x, y = P(lay.fps[driver].GetPosition())
+        lay.place_near(r, x + 4.0, y - 4.0)
+    clips = iter(refs(lay, 'SHIELD_CLIP'))
+    # west wall shared by both cans, open where a BOSA body crosses it
+    for x, y, rot in ((85.0, 36.0, 0), (80.3, 39.5, 90), (85.5, 52.0, 0), (80.3, 57.5, 90), (85.0, 56.4, 0),
+                      (80.3, 76.5, 90), (85.0, 73.6, 0)):
+        lay.place(next(clips), x, y, rot)
     return lay
 
 def sniffer_serdes(lay):
@@ -502,8 +563,8 @@ def planes(lay):
 
 if __name__ == '__main__':
     force = '--force' in sys.argv
-    names = [a for a in sys.argv[1:] if not a.startswith('-')] or ['olt', 'onu', 'hsmc', 'sniffer']
-    for make in (olt_layout, onu_layout, hsmc_layout, sniffer_layout):
+    names = [a for a in sys.argv[1:] if not a.startswith('-')] or ['olt', 'onu', 'hsmc', 'sniffer', 'inline']
+    for make in (olt_layout, onu_layout, hsmc_layout, sniffer_layout, inline_layout):
         if make.__name__.split('_')[0] not in names:
             continue
         lay = make()
@@ -519,8 +580,11 @@ if __name__ == '__main__':
             print(lay.bd.name, 'placed', len(lay.placed_refs()), 'of', len(lay.parts))
             print(lay.save())
             continue
-        hand = sniffer_serdes(lay) if lay.bd.name == 'sniffer' else serdes(lay, lay.bd.name == 'olt')   # exact pairs first
-        passives(lay, 13.0)
+        direct = lay.bd.name in ('sniffer', 'inline')   # no Nano header
+        hand = sniffer_serdes(lay) if direct else serdes(lay, lay.bd.name == 'olt')   # exact pairs first
+        if lay.bd.name == 'inline':
+            hand |= {'W4', 'W5', 'W8', 'W9'}   # both transmitters: to the router
+        passives(lay, None if lay.bd.name == 'inline' else 13.0)
         lay.fanout(hand | {'Y11', 'Y12'} | {b for b in lay.bus_balls() if b[0] == 'A'}, PLANE_NETS)
         for net in ('CCLK', 'MISO'):  # row channels U/V, V/W west on top (U1-2, V1, W1 unused), out to x = centre - 9
             bx, _ = ball_xy(lay.ball_of(net))

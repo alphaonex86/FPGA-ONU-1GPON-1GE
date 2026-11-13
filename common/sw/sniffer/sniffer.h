@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: CERN-OHL-S-2.0
-// GPON tap sniffer (SnifferCore): reads its records, configures it from the tapped exchange, learns RESET_OFFSET.
+// GPON sniffer (SnifferCore on a passive tap, InlineSniffer): decodes its records, configures it from the exchange,
+// learns RESET_OFFSET.
 #ifndef SNIFFER_H
 #define SNIFFER_H
 
@@ -16,7 +17,7 @@
 #define SNIFFER_PENDING 32
 #define SNIFFER_PROFILE_LINES 16384 // remembered to skip repeats
 
-enum sniffer_kind { SNIFFER_PLOAM, SNIFFER_ALLOC, SNIFFER_GEM, SNIFFER_BURST };
+enum sniffer_kind { SNIFFER_PLOAM, SNIFFER_ALLOC, SNIFFER_GEM, SNIFFER_BURST, SNIFFER_REPLY }; // reply: the in-line link's own
 
 struct sniffer_record {
     unsigned kind, flags, length; // length: payload bytes

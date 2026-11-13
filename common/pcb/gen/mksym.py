@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
-"""Write common/pcb/lib/bridge.kicad_sym: ECP5 from the Lattice pinout CSV (facts only) + small parts,
-and common/pcb/lib/bridge.pretty (BOSA and HSMC card connector footprints). Without the CSV the ECP5 symbol already in the library is kept.
+"""Write common/pcb/lib/bridge.kicad_sym: the ECP5s from the Lattice pinout CSVs (facts only) + small parts,
+and common/pcb/lib/bridge.pretty (BOSA, shield clip and HSMC card connector footprints). Without its CSV an ECP5 symbol already in the library is kept.
 
-    python3 mksym.py [<ECP5UM-25 pinout .csv from latticesemi.com>] ../lib/bridge.kicad_sym
+    python3 mksym.py [<ECP5UM-25 and/or ECP5UM-45 pinout .csv from latticesemi.com>] ../lib/bridge.kicad_sym
 """
 import csv, math, os, re, sys
 from sexp import Sym as S, dump, lib_symbol
@@ -10,11 +10,15 @@ from kisch import box_symbol
 from hsmcpins import pinout as hsmc_pinout
 from paths import KI_LIB
 
-def ecp5_symbol(csv_path):
+ECP5 = {'25': ('6', '25k LUT, 1 SERDES DCU'), '45': ('8', '45k LUT, 2 SERDES DCUs')}   # density: speed grade bought, what
+
+def ecp5_symbol(csv_path, density):
+    rows = list(csv.reader(l for l in open(csv_path, encoding='latin-1') if not l.startswith('#')))
+    col = next(r for r in rows if r and r[0] == 'PAD').index('CABGA381')
     balls = []  # (ball, function, bank, dual)
-    for row in csv.reader(l for l in open(csv_path) if not l.startswith('#')):
-        if len(row) >= 8 and row[0] != 'PAD' and row[7] not in ('-', ''):
-            balls.append((row[7], row[1], row[2], row[3]))
+    for row in rows:
+        if len(row) > col and row[0] != 'PAD' and row[col] not in ('-', ''):
+            balls.append((row[col], row[1], row[2], row[3]))
     def key(b):
         m = re.match(r'([A-Z]+)(\d+)', b)
         return (m.group(1), int(m.group(2)))
@@ -25,22 +29,25 @@ def ecp5_symbol(csv_path):
     half = lambda l: (l[:(len(l) + 1) // 2], l[(len(l) + 1) // 2:])
     config = named(r'(CCLK|CFG_\d|DONE|INITN|PROGRAMN|TCK|TDI|TMS)$', 'input') + named(r'TDO$', 'output')
     serdes = named(r'HDTX', 'output') + named(r'HDRX|REFCLK', 'input') + named(r'RESERVED', 'no_connect')
-    serdes_pwr = named(r'VCCA0|VCCAUXA|VCCH', 'power_in')
+    serdes_pwr = named(r'VCCA\d|VCCAUXA|VCCH', 'power_in')
     power = named(r'VCC$|VCCAUX$|VCCIO\d', 'power_in')
     gnd = named(r'GND$', 'power_in')
     nc = named(r'NC$', 'no_connect')
     units = [half(io('01')), half(io('23')), half(io('67')), (io('8'), config), (serdes, serdes_pwr),
              half(power), half(gnd), half(nc)]
     assert sum(len(l) + len(r) for l, r in units) == len(balls) == 381, len(balls)
-    return box_symbol('LFE5UM-25F-BG381', units, 'U', 'LFE5UM-25F-6BG381C',
+    return box_symbol(f'LFE5UM-{density}F-BG381', units, 'U', f'LFE5UM-{density}F-{ECP5[density][0]}BG381C',
                       'Package_BGA:Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm',
-                      'ECP5 25k LUT, 1 SERDES DCU, caBGA381; units: banks 0/1, 2/3, 6/7, 8+config, SERDES, power, GND, NC')
+                      f'ECP5 {ECP5[density][1]}, caBGA381; units: banks 0/1, 2/3, 6/7, 8+config, SERDES, power, GND, NC')
 
 out = sys.argv[-1]
-syms = [ecp5_symbol(sys.argv[1]) if len(sys.argv) > 2 else lib_symbol(out, 'LFE5UM-25F-BG381')]
-lvds_xo = lambda name, descr, pin1: box_symbol(name, [([('1', pin1, 'input'), ('2', 'NC', 'no_connect'), ('3', 'GND', 'power_in')],
-                                                       [('6', 'VDD', 'power_in'), ('4', 'OUT+', 'tri_state'), ('5', 'OUT-', 'tri_state')])],
-                                               'Y', name, 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm', descr)
+csvs = {re.search(r'ECP5UM-(\d+)', open(p, encoding='latin-1').readline()).group(1): p for p in sys.argv[1:-1]}   # "# Pin Out For ECP5UM-45"
+syms = [ecp5_symbol(csvs[d], d) if d in csvs else lib_symbol(out, f'LFE5UM-{d}F-BG381') for d in ECP5]
+XO_3225 = 'Oscillator:Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm'
+def lvds_xo(name, descr, pin1, pin2=('NC', 'no_connect'), footprint=XO_3225):
+    return box_symbol(name, [([('1', pin1, 'input'), ('2', *pin2), ('3', 'GND', 'power_in')],
+                              [('6', 'VDD', 'power_in'), ('4', 'OUT+', 'tri_state'), ('5', 'OUT-', 'tri_state')])],
+                      'Y', name, footprint, descr)
 syms.append(lvds_xo('XO_LVDS_3225', 'LVDS XO 3.3 V, 3.2x2.5 mm (SiT9121): OE high/open = on, low = outputs hi-Z', 'OE'))
 syms.append(lvds_xo('VCXO_LVDS_3225', 'LVDS VCXO 3.3 V, 3.2x2.5 mm (SiT3821): VIN 0..VDD control voltage', 'VIN'))
 syms.append(box_symbol('PCA9540B', [([('1', 'SCL', 'input'), ('2', 'SDA', 'bidirectional'), ('3', 'VDD', 'power_in'), ('6', 'VSS', 'power_in')],
@@ -89,11 +96,38 @@ syms.append(box_symbol('SY88349NDL', [([('1', 'DIN', 'input'), ('4', '/DIN', 'in
                                          ('5', 'VCC', 'power_in'), ('16', 'VCC', 'passive'), ('3', 'GND', 'power_in'),
                                          ('8', 'GND', 'passive'), ('11', 'GND', 'passive'), ('17', 'EP', 'passive')])],
                        'U', 'SY88349NDLMG', 'Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias',
-                       'Microchip SY88349NDL 2.5 Gb/s burst-mode limiting amp, CML out, 3x3 QFN-16'))
+                       'Microchip SY88349NDL 2.5 Gb/s burst-mode limiting amp, CML out, 3x3 QFN-16; same pins: SY88149NDL (1.25 Gb/s, LVPECL out)'))
+syms.append(box_symbol('SY88993AV', [([('2', 'DIN', 'input'), ('3', '/DIN', 'input'), ('4', 'VREF', 'output'), ('5', 'LOSLVL', 'passive'),
+                                        ('1', '/EN', 'input')],
+                                       [('9', 'DOUT', 'output'), ('8', '/DOUT', 'output'), ('7', 'LOS', 'open_collector'),
+                                        ('10', 'VCC', 'power_in'), ('6', 'GND', 'power_in')])],
+                       'U', 'SY88993AVKG', 'Package_SO:MSOP-10_3x3mm_P0.5mm',
+                       'Microchip SY88993AV 3.2 Gb/s limiting amp, CML out, LOS open collector (high: no signal), MSOP-10'))
+syms.append(box_symbol('MAX3643', [([('2', 'IN+', 'input'), ('3', 'IN-', 'input'), ('5', 'BEN+', 'input'), ('6', 'BEN-', 'input'),
+                                      ('8', '~{EN}', 'input'), ('21', 'VMSET', 'input'), ('20', 'MODSET', 'passive'), ('23', 'VBSET', 'input'),
+                                      ('24', 'BIASSET', 'passive'), ('10', 'IMAX', 'passive'), ('22', 'VREF', 'output'), ('12', 'MDIN', 'input')],
+                                     [('16', 'OUT+', 'output'), ('17', 'OUT-', 'output'), ('14', 'BIAS+', 'output'), ('13', 'BIAS-', 'output'),
+                                      ('11', 'MDOUT', 'output'), ('9', 'BCMON', 'output'), ('7', 'BENOUT', 'output'), ('1', 'VCCA', 'power_in'),
+                                      ('4', 'VCCS', 'power_in'), ('15', 'VCCO', 'power_in'), ('18', 'VCCO', 'passive'), ('19', 'GND', 'power_in'),
+                                      ('25', 'EP', 'passive')])],
+                       'U', 'MAX3643ETG+', 'Package_DFN_QFN:TQFN-24-1EP_4x4mm_P0.5mm_EP2.6x2.6mm_ThermalVias',
+                       'Maxim MAX3643 155 Mb/s - 2.5 Gb/s burst-mode laser driver: no APC, monitor diode sample and hold, TQFN-24'))
 # Receive can of a GPON BOSA (TO-46 APD-TIA), leads per the XL-BCB2111-LS-02 drawing; the TX can is not soldered
 syms.append(box_symbol('BOSA_RX', [([('1', 'VCC', 'power_in'), ('2', 'VAPD', 'passive'), ('4', 'GND', 'power_in')],
                                      [('5', 'OUT+', 'output'), ('3', 'OUT-', 'output')])],
                        'U', 'BOSA RX', 'bridge:BOSA_RX_TO46', 'GPON BOSA receive can only (APD-TIA): the laser can stays unconnected'))
+# 7 x 5 mm LVDS VCXOs share this land and pin order (SiT3372, Si515 / Si550, CTS 356): pin 2 enables, high or open
+syms.append(box_symbol('VCXO_LVDS_7050', [([('1', 'VIN', 'input'), ('2', 'OE', 'input'), ('3', 'GND', 'power_in'), ('7', 'EP', 'passive')],
+                                            [('6', 'VDD', 'power_in'), ('4', 'OUT+', 'tri_state'), ('5', 'OUT-', 'tri_state')])],
+                       'Y', 'VCXO_LVDS_7050', 'bridge:VCXO_7050_EP',
+                       'LVDS VCXO 3.3 V, 7x5 mm, 6 pads 2.54 mm pitch + centre pad (GND): VIN control voltage, OE high = on'))
+# GPON OLT BOSA, both cans: RX leads as BOSA_RX (XL-BCB2111-LS-02 drawing), TX can lead order unknown
+syms.append(box_symbol('BOSA_OLT', [([('T1', 'LD_A', 'passive'), ('T2', 'LD_K', 'passive'), ('T3', 'MPD_A', 'passive'), ('T4', 'MPD_K', 'passive')],
+                                      [('2', 'VAPD', 'passive'), ('1', 'VCC', 'power_in'), ('5', 'OUT+', 'output'), ('3', 'OUT-', 'output'),
+                                       ('4', 'GND', 'power_in')])],
+                       'U', 'BOSA OLT', 'bridge:BOSA_OLT', 'GPON OLT BOSA (1490 nm DFB TX, 1310 nm burst APD-TIA RX); TX pad order to measure'))
+syms.append(box_symbol('SHIELD_CLIP', [([('1', 'GND', 'passive')], [])], 'SH', 'ICSRC6508SFR', 'bridge:SHIELD_CLIP_6.5x0.8',
+                       'SMD clip for a 0.2 mm shield can wall (Innochips ICSRC6508SFR, LCSC C238199)'))
 def hsmc_symbol():
     fn = hsmc_pinout()
     first = {f: min(p for p in fn if fn[p] == f) for f in ('3.3V', '12V', 'GND')}   # one typed power pin each, the rest passive (ERC)
@@ -186,3 +220,40 @@ def bosa_rx_footprint():
 bosa_footprint()
 bosa_rx_footprint()
 hsmc_footprint()
+
+# OLT BOSA standing on its RX can (pads as BOSA_RX_TO46), TX can behind it with its 4 leads bent down into a row.
+# TX_BACK and the row's order are placeholders until a BOSA is measured.
+TX_BACK, TX_PITCH = 10.0, 2.0
+
+def bosa_olt_footprint():
+    pads = [[S('pad'), str(k + 1), S('thru_hole'), S('circle'), [S('at'), *polar(0, RX_PCD, -90 + 72 * k)], [S('size'), 0.9, 0.9],
+             [S('drill'), 0.6], [S('layers'), '*.Cu', '*.Mask']] for k in range(5)]
+    pads += [[S('pad'), f'T{k + 1}', S('thru_hole'), S('circle'), [S('at'), -TX_BACK, (k - 1.5) * TX_PITCH], [S('size'), PAD, PAD],
+              [S('drill'), DRILL], [S('layers'), '*.Cu', '*.Mask']] for k in range(4)]
+    body = [rect(-TX_BACK + 1.5, -BOSA_R, 6.0, BOSA_R, 'F.Fab', 0.1), rect(-TX_BACK - 1.0, -BOSA_R - 0.4, 6.25, BOSA_R + 0.4, 'F.CrtYd', 0.05),
+            rect(-TX_BACK + 1.35, -BOSA_R - 0.15, 5.7, BOSA_R + 0.15, 'F.SilkS', 0.12)]
+    write_footprint('BOSA_OLT', 'GPON OLT BOSA on its RX can (TO-46, 5 leads: 1 VCC, 2 Isource, 3 Dout-, 4 GND, 5 Dout+), fiber toward +x; '
+                    'TX can leads T1-T4 in a row behind: position and order to measure', 'through_hole', body + pads, (0, -4.6))
+
+# Innochips ICSRC6508SFR: land 6.7 x 0.9 mm, paste in three openings (drawing rev C)
+def shield_clip_footprint():
+    pad = [S('pad'), '1', S('smd'), S('rect'), [S('at'), 0, 0], [S('size'), 6.7, 0.9], [S('layers'), 'F.Cu', 'F.Mask']]
+    paste = [[S('pad'), '', S('smd'), S('rect'), [S('at'), x, 0], [S('size'), w, 0.8], [S('layers'), 'F.Paste']]
+             for x, w in ((-2.65, 1.1), (0, 1.0), (2.65, 1.1))]
+    write_footprint('SHIELD_CLIP_6.5x0.8', 'Shield can clip Innochips ICSRC6508SFR (LCSC C238199), 6.5 x 0.8 mm, for a 0.2 mm wall',
+                    'smd', [rect(-3.25, -0.4, 3.25, 0.4, 'F.Fab', 0.1), rect(-3.6, -0.7, 3.6, 0.7, 'F.CrtYd', 0.05), pad] + paste, (0, -1.5))
+
+# SiT3372 7.0 x 5.0 mm land (datasheet rev 1.07): pad columns 4.15 mm apart, 2.54 mm pitch, centre pad 1.70 x 3.00 mm (GND,
+# for its 0.24 W). Pads widened outward to 1.6 mm so the same land takes the ceramic 7 x 5 parts.
+def vcxo_footprint():
+    pads = [[S('pad'), str(n), S('smd'), S('rect'), [S('at'), x, y], [S('size'), 1.6, 1.45], [S('layers'), 'F.Cu', 'F.Paste', 'F.Mask']]
+            for n, x, y in ((1, -2.25, -2.54), (2, -2.25, 0), (3, -2.25, 2.54), (4, 2.25, 2.54), (5, 2.25, 0), (6, 2.25, -2.54))]
+    pads.append([S('pad'), '7', S('smd'), S('rect'), [S('at'), 0, 0], [S('size'), 1.7, 3.0], [S('layers'), 'F.Cu', 'F.Paste', 'F.Mask']])
+    mark = [S('fp_circle'), [S('center'), -3.6, -3.2], [S('end'), -3.45, -3.2], [S('stroke'), [S('width'), 0.12], [S('type'), S('solid')]],
+            [S('fill'), S('yes')], [S('layer'), 'F.SilkS']]   # pin 1
+    write_footprint('VCXO_7050_EP', 'LVDS VCXO 7.0 x 5.0 mm, 6 pads + centre pad (SiT3372 land), body 5 mm along x',
+                    'smd', [rect(-2.5, -3.5, 2.5, 3.5, 'F.Fab', 0.1), rect(-3.3, -3.75, 3.3, 3.75, 'F.CrtYd', 0.05), mark] + pads, (0, -4.6))
+
+bosa_olt_footprint()
+shield_clip_footprint()
+vcxo_footprint()

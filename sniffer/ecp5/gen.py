@@ -9,7 +9,7 @@ import sys
 # Values after LiteICLink's serdes_ecp5.py (10BSER, hardware-proven), raw: no 8b10b, comma, word aligner or CTC.
 DUAL = {
     'D_MACROPDB': '0b1', 'D_IB_PWDNB': '0b1', 'D_TXPLL_PWDNB': '0b1',
-    'D_REFCK_MODE': '0b010', 'D_TX_MAX_RATE': '2.5', 'D_RX_MAX_RATE': '2.5', 'D_TX_VCO_CK_DIV': '0b000',
+    'D_REFCK_MODE': '0b010', 'D_TX_MAX_RATE': '2.5', 'D_TX_VCO_CK_DIV': '0b000',
     'D_BITCLK_LOCAL_EN': '0b1',
     'D_CMUSETBIASI': '0b00', 'D_CMUSETI4CPP': '0d3', 'D_CMUSETI4CPZ': '0d3', 'D_CMUSETI4VCO': '0b00',
     'D_CMUSETICP4P': '0b01', 'D_CMUSETICP4Z': '0b101', 'D_CMUSETINITVCT': '0b00', 'D_CMUSETISCL4VCO': '0b000',
@@ -35,13 +35,18 @@ LANE = {
     'RTERM_TX': '0d19', 'TXAMPLITUDE': '0d400',
 }
 PER_LANE = {0: {'TPWDNB': '0b1'}, 1: {}}
+# a transmitter in use, after LiteICLink: slices 0, 2 and 3 on the main data
+TX_ON = {'TPWDNB': '0b1', 'TDRV_SLICE0_CUR': '0b011', 'TDRV_SLICE0_SEL': '0b01', 'TDRV_SLICE1_CUR': '0b000',
+         'TDRV_SLICE1_SEL': '0b00', 'TDRV_SLICE2_CUR': '0b11', 'TDRV_SLICE2_SEL': '0b01', 'TDRV_SLICE3_CUR': '0b10',
+         'TDRV_SLICE3_SEL': '0b01', 'TDRV_SLICE4_CUR': '0b00', 'TDRV_SLICE4_SEL': '0b00', 'TDRV_SLICE5_CUR': '0b00',
+         'TDRV_SLICE5_SEL': '0b00'}
 
 PINS = re.compile(r'^(FWD_CLK|DS\d+|US\d+)_S$|^(VCXO_PWM|DS_SD)$')
 SERDES = ['DS_RX_P', 'DS_RX_N', 'US_RX_P', 'US_RX_N', 'REFCLK_P', 'REFCLK_N'] # dedicated pads: no IO type
 
 
-def board_pins(pcb):
-    """ECP5 ball of each signal net, from the footprint with the LFE5UM value."""
+def board_pins(pcb, wanted=lambda net: PINS.match(net) or net in SERDES):
+    """ECP5 ball of each wanted net, from the footprint with the LFE5UM value."""
     text = open(pcb).read()
     at = text.find('LFE5UM')
     if at < 0:
@@ -53,13 +58,22 @@ def board_pins(pcb):
         if depth == 0:
             break
     pads = re.findall(r'\(pad "([A-Z0-9]+)".*?\(net (?:\d+ )?"([^"]+)"\)', text[start:end], re.S)
-    return {net: ball for ball, net in pads if PINS.match(net) or net in SERDES}
+    return {net: ball for ball, net in pads if wanted(net)}
 
 
 def port(net):
     """Top-level port of a net: DS3_S -> DS_S[3]."""
     m = re.match(r'^(DS|US)(\d+)_S$', net)
     return f'{m[1]}_S[{m[2]}]' if m else net
+
+
+def write_params(out, per_lane):
+    """dcu_params.vh: the shared tables, then each lane's own settings."""
+    params = dict(DUAL)
+    for lane, extra in per_lane.items():
+        params.update({f'CH{lane}_{k}': v for k, v in dict(LANE, **extra).items()})
+    with open(f'{out}/dcu_params.vh', 'w') as f:
+        f.write(',\n'.join(f'  .{k}("{v}")' for k, v in params.items()) + '\n')
 
 
 def main(pcb, out):
@@ -76,11 +90,7 @@ def main(pcb, out):
             f.write(f'LOCATE COMP "{net}" SITE "{pins[net]}";\n')
         f.write('FREQUENCY NET "ref_clk" 124.416 MHZ;\nFREQUENCY NET "ds_clk" 124.416 MHZ;\n'
                 'FREQUENCY NET "out_clk" 77.76 MHZ;\n')
-    params = dict(DUAL)
-    for lane, extra in PER_LANE.items():
-        params.update({f'CH{lane}_{k}': v for k, v in dict(LANE, **extra).items()})
-    with open(f'{out}/dcu_params.vh', 'w') as f:
-        f.write(',\n'.join(f'  .{k}("{v}")' for k, v in params.items()) + '\n')
+    write_params(out, PER_LANE)
 
 
 if __name__ == '__main__':

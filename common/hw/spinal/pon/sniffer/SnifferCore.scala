@@ -40,26 +40,8 @@ case class SnifferCore(usDomain: ClockDomain, gemDepth: Int = 4096, burstDepth: 
     val irq = out Bool () // record words wait
   }
   val busif = BusInterface(io.apb, SizeMapping(0, 256))
-  val CTRL = busif.newReg("Sniffer control")
-  val enable = CTRL.field(Bool(), AccessType.RW, 0, "enable: record (the ONU laser and cage 0 TX are forced off meanwhile)")(SymbolName("enable"))
-  val allPloams = CTRL.field(Bool(), AccessType.RW, 0, "allPloams: every PLOAM, else to onuId or broadcast")(SymbolName("allPloams"))
-  CTRL.reserved(6 bits)
-  val onuId = CTRL.field(Bits(8 bits), AccessType.RW, 0, "onuId: the tapped ONU's")(SymbolName("onuId"))
-  val delimiterErrors = CTRL.field(UInt(2 bits), AccessType.RW, 1, "delimiterErrors: wrong bits allowed")(SymbolName("delimiterErrors"))
-  val DELIMITER = busif.newReg("Upstream delimiter, from the Upstream_Overhead PLOAM")
-  val delimiter = DELIMITER.field(Bits(24 bits), AccessType.RW, 0, "delimiter")(SymbolName("delimiter"))
-  def mapReg(name: String, doc: String): Flow[KeepWrite] = {
-    val reg = busif.newReg(doc)(SymbolName(name))
-    reg.field(UInt(12 bits), AccessType.WO, 0, "id")(SymbolName("id"))
-    reg.field(Bool(), AccessType.WO, 0, "keep")(SymbolName("keep"))
-    val write = Flow(KeepWrite())
-    write.valid := reg.hitDoWrite
-    write.id := busif.writeData(11 downto 0).asUInt
-    write.keep := busif.writeData(12)
-    write
-  }
-  val allocMap = mapReg("ALLOC_MAP", "Write: keep (or not) the BWmap entries of an Alloc-ID")
-  val portMap = mapReg("PORT_MAP", "Write: keep (or not) the GEM fragments of a Port-ID")
+  val filter = FilterRegs(busif, "record (the ONU laser and cage 0 TX are forced off meanwhile)")
+  import filter._
   io.enabled := enable
 
   val time = Reg(UInt(64 bits)) init (0)

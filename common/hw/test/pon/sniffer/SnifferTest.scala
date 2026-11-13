@@ -25,6 +25,7 @@ case class SnifferDsBench() extends Component {
     val allocMap = slave Flow (KeepWrite())
     val portMap = slave Flow (KeepWrite())
     val synced = out Bool ()
+    val frameStart = out Bool () // the framer's
     val output = master Stream (Fragment(Bits(8 bits)))
     val drops, truncations = out UInt (32 bits)
   }
@@ -45,7 +46,7 @@ case class SnifferDsBench() extends Component {
   io.output << sniffer.io.output
   io.drops := sniffer.io.drops
   io.truncations := sniffer.io.truncations
-  framer.io.frameStart.simPublic()
+  io.frameStart := framer.io.frameStart // an output, not simPublic: Verilator 5.054 fails on UNOPTPUBLIC
 }
 
 /** Downstream filter against the OLT framer, upstream bursts placed on the line bit by bit. Throws on failure. */
@@ -94,7 +95,7 @@ object SnifferTest extends App {
     cd.onSamplings {
       cycle += 1
       dut.io.time #= cycle
-      if (dut.framer.io.frameStart.toBoolean) frameStarts += 1
+      if (dut.io.frameStart.toBoolean) frameStarts += 1
     }
     cd.forkStimulus(10)
     writeMap(dut.io.allocMap, Seq(0x105), cd)

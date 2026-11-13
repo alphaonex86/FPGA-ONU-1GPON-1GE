@@ -45,13 +45,17 @@ case class SnifferUs(quietBytes: Int = 8, maxBytes: Int = 20000, depth: Int = 32
   val long = emit && length === maxBytes - 1 && !ended
 
   val records = RecordWriter(0, depth, depth / 64)
-  records.io.data.valid := emit
-  records.io.data.payload := delay.last
-  records.io.close.valid := inBurst && (ended || long)
-  records.io.close.kind := RecordKind.burst
-  records.io.close.flags := B(0, 7 bits) ## long
-  records.io.close.time := start
-  records.io.close.extra.clearAll()
+  val data = Flow(Bits(8 bits))
+  val close = Flow(RecordHead(0))
+  data.valid := emit
+  data.payload := delay.last
+  close.valid := inBurst && (ended || long)
+  close.kind := RecordKind.burst
+  close.flags := B(0, 7 bits) ## long
+  close.time := start
+  close.extra.clearAll()
+  records.io.data << data.stage() // both a clock later (timing)
+  records.io.close << close.stage()
   io.output << records.io.output
   io.drops := records.io.drops
   io.truncations := records.io.truncations

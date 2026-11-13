@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CERN-OHL-S-2.0
-// HPS (Linux) front end: the sniffer window through UIO (its interrupt) or /dev/mem (polled), or a replayed dump.
-#include "sniffer.h"
+// Front end. Passive tap, on the HPS: the sniffer window through UIO (its interrupt) or /dev/mem (polled). In-line
+// sniffer: its serial port (inline.c). Or a replayed dump.
+#include "inline.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -222,6 +223,7 @@ static void usage(void)
             "  -t FILE  decoded records (default stdout, '-' none)\n"
             "  -P FILE  OMCI profile: the OLT's requests with the ONU's answers\n"
             "  -r FILE  decode a raw dump instead of the board\n"
+            "  -i PORT  the in-line sniffer's serial port (its FT2232H channel A), e.g. /dev/ttyUSB0\n"
             "  -u DEV   the sniffer's UIO device (de25-standard/ghrd/uio_overlay.sh), e.g. /dev/uio0: waits on its\n"
             "           interrupt; else /dev/mem, polled\n"
             "  -b ADDR  HPS-to-FPGA lightweight bridge base, /dev/mem only (default 0x%08x)\n"
@@ -231,7 +233,7 @@ static void usage(void)
             "  -p ID    keep and decode this OMCI Port-ID (repeatable; else from Configure_Port-ID)\n"
             "  -A       every PLOAM, not only the ONU's and broadcast\n"
             "  -d HEX   upstream delimiter until an Upstream_Overhead (default ab5983)\n"
-            "  -l N     burst reset lead before the StartTime, clocks (default 128)\n"
+            "  -l N     burst reset lead before the StartTime, clocks (default 128; passive tap only, as -W)\n"
             "  -W N     burst reset width, clocks (default 16, 0 none)\n",
             LW_BRIDGE);
 }
@@ -241,15 +243,16 @@ int main(int argc, char **argv)
     static struct sniffer s;
     static uint8_t serial[8];
     struct sniffer_options opt = {.onu_id = -1, .delimiter = 0xAB5983, .lead = 128, .width = 16, .text = stdout};
-    const char *dump = NULL, *profile = NULL, *text = NULL, *in = NULL, *uio = NULL;
+    const char *dump = NULL, *profile = NULL, *text = NULL, *in = NULL, *uio = NULL, *port = NULL;
     unsigned long value, bridge = LW_BRIDGE;
     int c;
-    while ((c = getopt(argc, argv, "w:P:t:r:u:b:o:s:a:p:Ad:l:W:h")) != -1) {
+    while ((c = getopt(argc, argv, "w:P:t:r:i:u:b:o:s:a:p:Ad:l:W:h")) != -1) {
         switch (c) {
         case 'w': dump = optarg; break;
         case 'P': profile = optarg; break;
         case 't': text = optarg; break;
         case 'r': in = optarg; break;
+        case 'i': port = optarg; break;
         case 'u': uio = optarg; break;
         case 'b': if (parse_number(optarg, 0xFFFFFFFFul, &bridge) < 0) return 2; break;
         case 'o': if (parse_number(optarg, 254, &value) < 0) return 2; opt.onu_id = (int)value; break;
@@ -308,6 +311,8 @@ int main(int argc, char **argv)
         result = sniffer_start(&s, &none, &opt) < 0 ? -1 : replay(&s, file);
         sniffer_stop(&s);
         fclose(file);
+    } else if (port) {
+        result = inline_run(&s, port, &opt, &stopping);
     } else {
         result = live(&s, (uint32_t)bridge, uio, &opt);
     }

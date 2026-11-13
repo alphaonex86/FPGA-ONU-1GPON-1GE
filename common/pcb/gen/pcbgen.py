@@ -5,7 +5,7 @@ import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
 from boards import ECP5_BALLS, ball_xy
 from kisch import uid
-from paths import LIB, KI_LIB, board_dir
+from paths import LIB, ki_lib, board_dir
 
 FP = '/usr/share/kicad/footprints'
 OX, OY = 100.0, 100.0           # board origin on the page
@@ -32,13 +32,14 @@ def unconnected_name(ref, part, num, multi_unit):
 def is_free(net):
     return not net or net.startswith('unconnected-')
 
-def own_models(fp):
-    """Point the footprint's 3D models at common/pcb/lib/3d where we made one; return how many changed."""
+def own_models(fp, lib):
+    """Point the footprint's 3D models at common/pcb/lib/3d (`lib`: ki_lib of the board's folder) where we made one;
+    return how many changed."""
     models, changed = list(fp.Models()), 0   # python sees copies: edit them, then put them back
     for m in models:
         name = os.path.basename(m.m_Filename)
-        if os.path.exists(f'{LIB}/3d/{name}') and m.m_Filename != f'{KI_LIB}/3d/{name}':
-            m.m_Filename = f'{KI_LIB}/3d/{name}'
+        if os.path.exists(f'{LIB}/3d/{name}') and m.m_Filename != f'{lib}/3d/{name}':
+            m.m_Filename = f'{lib}/3d/{name}'
             changed += 1
     if changed:
         fp.Models().clear()
@@ -46,11 +47,11 @@ def own_models(fp):
             fp.Add3DModel(m)
     return changed
 
-def finish_footprint(fp):
+def finish_footprint(fp, lib):
     """Our silk conventions, on generated and routed boards alike: references on the fab layer
     (0402 density makes them unreadable on silk; JLC assembles from the CPL), passive outlines on fab too,
     no field text but the value on fab. Return whether anything changed."""
-    changed = own_models(fp) > 0
+    changed = own_models(fp, lib) > 0
     fab = pcbnew.B_Fab if fp.IsFlipped() else pcbnew.F_Fab
     for f in fp.GetFields():
         if f.IsReference() and f.GetLayer() != fab:
@@ -90,7 +91,7 @@ class Layout:
             fp.SetPath(pcbnew.KIID_PATH(f'/{root}/{uid(bd.name, ref, 1)}'))
             for k, v in part.fields.items():
                 fp.SetField(k, v)
-            finish_footprint(fp)
+            finish_footprint(fp, ki_lib(board_dir(bd.name)))
             fp.SetDNP(part.dnp)
             units = {pin[0] for pin in part.pins}
             for pad in fp.Pads():
