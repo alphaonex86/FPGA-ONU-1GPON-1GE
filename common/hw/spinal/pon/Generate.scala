@@ -17,5 +17,6 @@ object Generate extends App {
   config.generateVerilog(sniffer.SnifferDs())
   config.generateVerilog(sniffer.SnifferUs())
   config.generateVerilog(sniffer.SnifferBridge()) // in sniffer/ecp5/sniffer_ecp5.v
-  config.generateVerilog(sniffer.InlineSniffer()) // in ../FPGA-USB-GPON-sniffer/ecp5 (+ inline_regs.h)
+  // benDelay 5: the GTP's TX latency (5-6 half-words on its model, FPGA-USB-GPON-sniffer/artix7/tb.v) + the board's gate
+  config.generateVerilog(sniffer.InlineSniffer(benDelay = 5)) // in ../FPGA-USB-GPON-sniffer/artix7 (+ inline_regs.h)
 }

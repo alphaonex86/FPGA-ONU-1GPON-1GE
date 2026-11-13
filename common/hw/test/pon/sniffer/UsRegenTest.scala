@@ -9,13 +9,14 @@ import pon.gpon.GtcDsTest.check
 /** Bursts with a corrupted head through the regenerator, on every alignment of the 10-bit words: the burst leaves
   * whole after a constant delay, its head rebuilt as preamble, the laser on from before it to its last one. */
 object UsRegenTest extends App {
-  val compiled = SimConfig.compile(UsRegen())
   val (head, garble) = (3, 2)
   val delimiter = Seq(1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1) // 0xB5983
 
   case class Burst(start: Int, clean: Seq[Int]) { val end = start + clean.length } // clean: as the ONU sent it
 
-  for (alignment <- 0 until 10) {
+  for (spb <- Seq(1, 4); compiled = SimConfig.compile(UsRegen(spb = spb)); alignment <- 0 until 10) {
+    val shift = alignment % spb // samples before the first bit
+    val ragged = mutable.ArrayBuffer[Boolean]() // per bit: its samples differ
     val rand = new scala.util.Random(alignment)
     val line = mutable.ArrayBuffer.fill(300 + alignment)(0)
     val ideal = mutable.ArrayBuffer[Int]() // the line with every burst's preamble continued backwards
@@ -38,16 +39,24 @@ object UsRegenTest extends App {
       dut.io.garble #= garble
       dut.io.bits #= 0
       dut.clockDomain.forkStimulus(10)
-      for (w <- 0 until line.length / 10) {
-        dut.io.bits #= (0 until 10).map(k => BigInt(line(10 * w + k)) << (9 - k)).sum
+      val width = 10 * spb
+      def sample(i: Int) = if (i < shift) 0 else line((i - shift) / spb)
+      val samples = mutable.ArrayBuffer[Int]()
+      for (w <- 0 until line.length / 10 - 1) {
+        dut.io.bits #= (0 until width).map(k => BigInt(sample(width * w + k)) << (width - 1 - k)).sum
         dut.clockDomain.waitSampling()
-        val (o, b) = (dut.io.output.toInt, dut.io.ben.toInt)
-        out ++= (9 to 0 by -1).map(k => (o >> k) & 1)
+        val (o, b) = (dut.io.output.toBigInt, dut.io.ben.toInt)
+        samples ++= (width - 1 to 0 by -1).map(k => ((o >> k) & 1).toInt)
         ben ++= Seq.fill(5)((b >> 1) & 1) ++ Seq.fill(5)(b & 1)
+      }
+      for (cell <- samples.drop(shift).grouped(spb) if cell.length == spb) {
+        ragged += cell.distinct.length != 1
+        out += cell.head
       }
     }
     val delay = out.indexOfSlice(bursts(0).clean.drop(48)) - (bursts(0).start + 48)
     check(delay == 110, s"alignment $alignment: delay $delay bits")
+    check(bursts.forall(b => (b.start until b.end).forall(p => !ragged(p + delay))), s"$spb samples per bit, $shift before the first: every bit of a burst leaves as $spb equal samples")
     def lit(from: Int, to: Int): Seq[Int] = ben.slice(from + delay, to + delay).toSeq
     for ((b, n) <- bursts.zipWithIndex if n != 1) {
       val on = (b.start - 40 until b.start + 10).find(p => ben(p + delay) == 1).getOrElse(-1)

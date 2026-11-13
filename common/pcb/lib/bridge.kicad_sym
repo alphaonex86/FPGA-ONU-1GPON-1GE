@@ -5623,6 +5623,74 @@
         (name "OUT-" (effects (font (size 1.27 1.27))))
         (number "5" (effects (font (size 1.27 1.27)))))))
   (symbol
+    "XO_LVDS_7050"
+    (pin_names (offset 1.016))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "Y" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "XO_LVDS_7050" (at 0 -8.89 0) (effects (font (size 1.27 1.27))))
+    (property
+      "Footprint"
+      "Oscillator:Oscillator_SMD_IDT_JU6-6_7.0x5.0mm_P2.54mm"
+      (at 0 0 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property
+      "Description"
+      "LVDS XO 3.3 V, 7x5 mm, 6 pads (SCTF SX7DF): OE high/open = on, low = outputs hi-Z"
+      (at 0 0 0)
+      (effects (font (size 1.27 1.27)) (hide yes)))
+    (symbol
+      "XO_LVDS_7050_1_1"
+      (rectangle
+        (start -7.62 2.54)
+        (end 7.62 -7.62)
+        (stroke (width 0.254) (type default))
+        (fill (type background)))
+      (pin
+        input
+        line
+        (at -10.16 0 0)
+        (length 2.54)
+        (name "OE" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27)))))
+      (pin
+        no_connect
+        line
+        (at -10.16 -2.54 0)
+        (length 2.54)
+        (name "NC" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_in
+        line
+        (at -10.16 -5.08 0)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27)))))
+      (pin
+        power_in
+        line
+        (at 10.16 0 180)
+        (length 2.54)
+        (name "VDD" (effects (font (size 1.27 1.27))))
+        (number "6" (effects (font (size 1.27 1.27)))))
+      (pin
+        tri_state
+        line
+        (at 10.16 -2.54 180)
+        (length 2.54)
+        (name "OUT+" (effects (font (size 1.27 1.27))))
+        (number "4" (effects (font (size 1.27 1.27)))))
+      (pin
+        tri_state
+        line
+        (at 10.16 -5.08 180)
+        (length 2.54)
+        (name "OUT-" (effects (font (size 1.27 1.27))))
+        (number "5" (effects (font (size 1.27 1.27)))))))
+  (symbol
     "PCA9540B"
     (pin_names (offset 1.016))
     (exclude_from_sim no)

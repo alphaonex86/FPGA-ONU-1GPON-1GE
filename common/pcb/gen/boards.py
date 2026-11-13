@@ -56,6 +56,7 @@ def assign_balls(signals, clock):
 class Bridge(Board):
     serdes_w = 0.2   # router width of the SerDes netclass
     serdes_nets = ()  # this board's own SerDes netclass patterns, besides pcbgen's
+    flag_nets = ()    # power inputs fed through a part (a power flag in the schematic)
 
     def r(self, value, a, b, fp=R0402, **fields):
         return self.add('R', 'Device', 'R', value, fp, {'1': a, '2': b}, **fields)
@@ -81,7 +82,7 @@ class Bridge(Board):
         self.add('U', 'Regulator_Switching', 'TLV62569DBV', 'TLV62569DBVR', 'Package_TO_SOT_SMD:SOT-23-5',
                  {'VIN': '+5V', 'EN': '+5V', 'GND': 'GND', 'SW': sw, 'FB': fbn}, MPN='TLV62569DBVR')
         self.add('L', 'Device', 'L', '2.2u', 'Inductor_SMD:L_Cenker_CKCS252012', {'1': sw, '2': out},
-                 MPN='CKCS252012-2R2M')
+                 MPN='SLO252012F2R2MTT')   # 2520, as the CKCS252012-2R2M
         self.r(top, out, fbn)
         self.r(bottom, fbn, 'GND')
         self.decouple('+5V', 0, 1)
@@ -161,6 +162,49 @@ class Bridge(Board):
                  {'1': '+3V3', '2': 'TCK', '3': 'TDI', '4': 'TDO', '5': 'TMS', '6': 'GND'})
         return balls
 
+    def artix7(self, misc):
+        """XC7A35T-2FGG484I, its supplies and configuration: master SPI from its flash (M = 001), JTAG; GTP quad 216
+        lanes 0 (DS_) and 1 (US_) on MGTREFCLK0, lanes 2-3 unused (UG482 Table 5-6: RX to GND, TX open); XADC, thermal
+        diode and key battery unused (UG480, UG470). misc: {net: ball}, every ball LVCMOS33."""
+        self.block = 'power'
+        self.decouple('+5V', 0, 1, 1)
+        self.decouple('+3V3', 0, 1, 2)
+        for out, top, bottom in (('+3V3', '453k', '100k'), ('+1V0', '100k', '150k'), ('+1V8', '200k', '100k')):
+            self.buck(out, top, bottom)
+        for out, sym, mpn in (('+1V0_GT', 'TLV75510PDBV', 'TLV74310PDBVR'), ('+1V2_GT', 'TLV75512PDBV', 'TLV74312PDBVR')):
+            self.block = f'power:{out}'   # the GTP's analog supplies, their own LDOs (same SOT-23-5 pinout as the TLV755)
+            self.add('U', 'Regulator_Linear', sym, mpn, 'Package_TO_SOT_SMD:SOT-23-5',
+                     {'IN': '+1V8', 'EN': '+1V8', 'GND': 'GND', 'OUT': out}, MPN=mpn)
+            self.c('1u', '+1V8'); self.c('1u', out)
+        self.block = 'fpga'
+        gt = {'MGTPRXP0_216': 'DS_RX_P', 'MGTPRXN0_216': 'DS_RX_N', 'MGTPTXP0_216': 'DS_TX_P', 'MGTPTXN0_216': 'DS_TX_N',
+              'MGTPRXP1_216': 'US_RX_P', 'MGTPRXN1_216': 'US_RX_N', 'MGTPTXP1_216': 'US_TX_P', 'MGTPTXN1_216': 'US_TX_N',
+              'MGTREFCLK0P_216': 'REFCLK_P', 'MGTREFCLK0N_216': 'REFCLK_N', 'MGTRREF_216': 'GT_RREF',
+              **{f'MGTPRX{d}{k}_216': 'GND' for d in 'PN' for k in (2, 3)}}
+        unused = ('VCCBATT_0', 'VP_0', 'VN_0', 'VREFP_0', 'VREFN_0', 'DXP_0', 'DXN_0', 'GNDADC_0', 'M1_0', 'M2_0')
+        conn = {'VCCINT': '+1V0', 'VCCBRAM': '+1V0', 'VCCAUX': '+1V8', 'VCCADC_0': '+1V8', 'MGTAVCC': '+1V0_GT',
+                'MGTAVTT': '+1V2_GT', 'GND': 'GND', **{n: 'GND' for n in unused},
+                **{f'VCCO_{k}': '+3V3' for k in (0, 13, 14, 15, 16, 34, 35)}, 'CFGBVS_0': '+3V3', 'M0_0': '+3V3',
+                'PROGRAM_B_0': 'PROGRAM_B', 'INIT_B_0': 'INIT_B', 'DONE_0': 'DONE', 'CCLK_0': 'CCLK',
+                'TCK_0': 'TCK', 'TDI_0': 'TDI', 'TDO_0': 'TDO', 'TMS_0': 'TMS',
+                'T19': 'FLASH_CS', 'P22': 'MOSI', 'R22': 'MISO', **gt, **{ball: net for net, ball in misc.items()}}   # FCS_B, D00_MOSI, D01_DIN
+        self.add('U', 'FPGA_Xilinx_Artix7', 'XC7A35T-FGG484', 'XC7A35T-2FGG484I', 'Package_BGA:Xilinx_FGG484', conn,
+                 MPN='XC7A35T-2FGG484I')
+        self.block = 'fpga_support'
+        self.r('100', 'GT_RREF', '+1V2_GT', MPN='100 ohm 1 %')
+        self.flag_nets = ('GT_RREF',)   # MGTRREF is typed a power input
+        self.decouple('+1V0', 10, 2, 1)
+        self.decouple('+1V8', 5, 1)
+        self.decouple('+3V3', 14, 3)
+        for rail in ('+1V0_GT', '+1V2_GT'):
+            self.decouple(rail, 4, 1)
+        for net, value in (('PROGRAM_B', '4.7k'), ('INIT_B', '4.7k'), ('DONE', '330'), ('FLASH_CS', '4.7k'),
+                           ('TDI', '4.7k'), ('TMS', '4.7k')):   # TDO is an output
+            self.r(value, net, '+3V3')
+        self.r('4.7k', 'TCK', 'GND')
+        self.add('J', 'Connector_Generic', 'Conn_01x06', 'JTAG', 'Connector_PinHeader_2.54mm:PinHeader_1x06_P2.54mm_Vertical',
+                 {'1': '+3V3', '2': 'TCK', '3': 'TDI', '4': 'TDO', '5': 'TMS', '6': 'GND'})
+
     def header(self, signals):
         self.block = 'header'
         conn = {str(p): n for n, p in signals.items()}
@@ -225,12 +269,13 @@ def optics(b, tx='TX0', rx='RX0', ben='BEN'):
            'IO4': 'MODMON', 'IO5': 'APD_MON', 'IO6': 'RSSI', 'IO7': 'APCFAULT_N'}, MPN='AD5593RBRUZ')
     b.r('10k', 'DDM_RESET', '+3V3'); b.c('100n', 'DDM_VREF'); b.decouple('+3V3', 1)
 
-def apd_bias(b, p='', r_top='300k'):
-    """TPS61391 APD bias; p prefixes every net (a second receiver). DAC on <p>APD_ADJ, APD current on <p>APD_MON."""
+def apd_bias(b, p='', r_top='300k', en=None):
+    """TPS61391 APD bias; p prefixes every net (a second receiver). DAC on <p>APD_ADJ, APD current on <p>APD_MON.
+    en: its enable net (else always on)."""
     b.block = 'apd' + p   # Vout = 1.2 V * (1 + 300k/10k) + (1.2 V - APD_ADJ) * 300k/20k: 55 V .. 18 V, 37 V with the DAC off
     b.fb('+3V3', f'+3V3_{p}APD'); b.decouple(f'+3V3_{p}APD', 1, 1)
     b.add('U', LIB, 'TPS61391', 'TPS61391RTER', 'Package_DFN_QFN:WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm_ThermalVias',
-          {'VIN': f'+3V3_{p}APD', 'EN': f'+3V3_{p}APD', '14': f'+3V3_{p}APDA', '15': f'+3V3_{p}APDA', 'AGND': 'GND', 'GND': 'GND', 'EP': 'GND',
+          {'VIN': f'+3V3_{p}APD', 'EN': en or f'+3V3_{p}APD', '14': f'+3V3_{p}APDA', '15': f'+3V3_{p}APDA', 'AGND': 'GND', 'GND': 'GND', 'EP': 'GND',
            'FB': f'{p}APD_FB', 'ISHORT': f'{p}APD_ISHORT', 'CAP': f'{p}APD_CAP', 'SW': f'{p}HV_SW', 'MONIN': f'{p}HV_MONIN', 'APD': f'{p}HV_APD',
            'MON1': f'{p}APD_MON', 'MON2': f'{p}APD_MON2'}, MPN='TPS61391RTER')
     b.add('L', 'Device', 'L', '4.7u', 'Inductor_SMD:L_Cenker_CKCS252012', {'1': f'+3V3_{p}APD', '2': f'{p}HV_SW'}, MPN='4.7 uH, Isat >= 1 A, 2520')
@@ -356,12 +401,14 @@ def sfp_cage(b, name, td, rd, vcc='+3V3'):
     for n in ('TX_FAULT', 'TX_DIS', 'LOS', 'MOD_ABS', 'SCL', 'SDA'):
         b.r('4.7k', f'{name}_{n}', vcc)
 
-def receiver(b, p, bosa, coupling, swap=False, la='SY88349NDLMG', detect='SD'):
+def receiver(b, p, bosa, coupling, swap=False, la='SY88349NDLMG', detect='SD', dc=False):
     """BOSA receive can -> SY88349NDL -> SerDes RX <p>RX_P/N; the laser is never connected (bosa None: the caller's
     part, on <p>TIA_P/N). la: SY88349NDLMG (2.5 Gb/s, CML out) or SY88149NDLMG (1.25 Gb/s, LVPECL out).
     Auto reset, squelched between bursts (JAM); detect: 'SD' = <p>SD high during a burst (the envelope, to the FPGA),
     'LOS' = <p>LOS low during a burst (the pin's stronger edge leads).
-    swap: TIA+ to the LA's DIN- (and - to +) where the layout needs it; the data comes out inverted."""
+    swap: TIA+ to the LA's DIN- (and - to +) where the layout needs it; the data comes out inverted.
+    dc: LVPECL into a GTP's 50 ohm / 0.8 V termination through 180 / 124 ohm (0.74 / 0.87 V, 264 mVdpp): between bursts
+    the squelched output stays a solid zero, no AC-coupling droop."""
     b.block = f'rx:{p}'
     vcc = f'+3V3_{p}OPT'
     b.fb('+3V3', vcc); b.decouple(vcc, 3, 1)
@@ -379,7 +426,10 @@ def receiver(b, p, bosa, coupling, swap=False, la='SY88349NDLMG', detect='SD'):
     b.r('5.1k', f'{p}SDLVL', vcc)     # SD level: starting value, trimmed on the bench
     b.r('4.7k', out, '+3V3')          # the LVTTL output needs its pull-up
     for t in 'PN':
-        b.c('100n', f'{p}LA_{t}', f'{p}RX_{t}')
+        if dc:
+            b.r('180', f'{p}LA_{t}', f'{p}RX_{t}'); b.r('124', f'{p}RX_{t}', 'GND')
+        else:
+            b.c('100n', f'{p}LA_{t}', f'{p}RX_{t}')
         if la.startswith('SY88149'):
             b.r('150', f'{p}LA_{t}', 'GND')   # LVPECL emitter load
 
@@ -490,12 +540,12 @@ def laser(b, p, data, dis, ben=None):
 
 def inline():
     """In-line GPON sniffer (../FPGA-USB-GPON-sniffer/README.md): in one ONU's drop fibre, both directions regenerated
-    through the ECP5 and dumped over USB. OLT port: ONU-type BOSA (DS_ receiver, US_ burst laser); ONU port: OLT-type
-    BOSA (US_ burst receiver, DS_ laser), both on pad rows that fit any lead order. FT2232H: channel A 245 FIFO to the ECP5, channel B its JTAG and flash.
+    through the Artix-7 and dumped over USB. OLT port: ONU-type BOSA (DS_ receiver, US_ burst laser); ONU port: OLT-type
+    BOSA (US_ burst receiver, DS_ laser), both on pad rows that fit any lead order. FT2232H: channel A 245 FIFO to the FPGA, channel B its JTAG and flash.
     The upstream laser lights only while the ONU-port receiver sees light (US_QUIET low, no FPGA in that path) and
     the max-burst cutoff ends what stays on."""
-    b = Bridge('inline', 'In-line GPON sniffer: USB, ECP5, OLT and ONU optical ports')
-    b.serdes_nets = ('DS_TIA_*', 'DS_DIN_*', 'DS_LA_*', 'DS_RX_*', 'DS_TX_*', 'US_TX_*', 'REFCLK_*', 'USB_D?', '*_LD_IN_*',
+    b = Bridge('inline', 'In-line GPON sniffer: USB, Artix-7, OLT and ONU optical ports')
+    b.serdes_nets = ('DS_TIA_*', 'DS_DIN_*', 'DS_LA_*', 'DS_RX_*', 'DS_TX_*', 'US_TX_*', 'REFCLK_*', 'XO_OUT_*', 'USB_D?', '*_LD_IN_*',
                      '*_LD_OUT_*', '*_LD_BIAS_*', '*_LD_K', '*_LD_A')   # the lasers' currents too
     b.block = 'usb'
     b.add('J', 'Connector', 'USB_C_Receptacle_USB2.0_16P', 'USB-C', 'Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12',
@@ -526,18 +576,12 @@ def inline():
     b.r('330', 'FT_WR_N', 'FT_WR'); b.r('10k', 'FT_SIWU', '+3V3')
     for net in ('FT_RD_N', 'FT_WR_N'):   # idle while the FPGA is unconfigured
         b.r('10k', net, '+3V3')
-    b.power(own_3v3=True)
-    serdes = {'HDRXP0_D0CH0': 'DS_RX_P', 'HDRXN0_D0CH0': 'DS_RX_N', 'HDTXP0_D0CH0': 'DS_TX_P', 'HDTXN0_D0CH0': 'DS_TX_N',
-              'HDRXP0_D0CH1': 'US_RX_P', 'HDRXN0_D0CH1': 'US_RX_N', 'HDTXP0_D0CH1': 'US_TX_P', 'HDTXN0_D0CH1': 'US_TX_N',
-              'REFCLKP_D0': 'REFCLK_P', 'REFCLKN_D0': 'REFCLK_N', 'VCCHRX0_D0CH0': '+1V1_HRX', 'VCCHRX1_D0CH1': '+1V1_HRX',
-              **{f'HDRX{d}0_D1CH{ch}': 'GND' for d in 'PN' for ch in (0, 1)}}   # unused DCU: RX to GND (TN-02038 3.8)
-    # balls: a first choice, to follow the placement (ecp5/gen.py reads them from the board). US_BEN is a DDR output:
-    # left or right bank only.
-    misc = {'US_BEN': 'N4', 'US_LASER_DIS': 'N5', 'DS_LASER_DIS': 'P5', 'DS_LOS': 'M5', 'US_ABOVE': 'M4', 'BURST_CUT': 'L5',
-            'SCL': 'N3', 'SDA': 'M3', 'VCXO_PWM': 'U16', 'LED_SYNC': 'T17',
-            'FT_RXF_N': 'A10', 'FT_TXE_N': 'B10', 'FT_RD_N': 'C10', 'FT_WR_N': 'D10',
-            **{f'FT_D{i}': ball for i, ball in enumerate(('C8', 'D8', 'E8', 'A9', 'B9', 'C9', 'D9', 'E9'))}}
-    b.ecp5({}, set(), misc, serdes, 'PROGRAMN', ('FLASH_CS', 'CCLK', 'MOSI', 'MISO'), device='45F', flash=True)
+    # balls: banks 34 (FT2232H) and 16 (optics) on the outer rows toward their parts once the BGA is turned a quarter
+    misc = {**{f'FT_D{i}': ball for i, ball in enumerate(('AB1', 'AB2', 'AB3', 'AB5', 'AB6', 'AB7', 'AB8', 'AA1'))},
+            'FT_RXF_N': 'AA3', 'FT_TXE_N': 'AA4', 'FT_RD_N': 'AA5', 'FT_WR_N': 'AA6',
+            'US_BEN': 'B22', 'US_LASER_DIS': 'C22', 'DS_LASER_DIS': 'D22', 'DS_LOS': 'E22', 'US_ABOVE': 'G22',
+            'BURST_CUT': 'B21', 'SCL': 'D21', 'SCL2': 'E21', 'SDA': 'F21', 'LED_SYNC': 'G21', 'APD_EN': 'A21'}
+    b.artix7(misc)
     b.add('U', 'Memory_Flash', 'W25Q32JVSS', 'W25Q32JVSSIQ', 'Package_SO:SOIC-8_5.3x5.3mm_P1.27mm',
           {'1': 'FLASH_CS', '2': 'MISO', '3': 'FLASH_WP', '4': 'GND', '5': 'MOSI', '6': 'CCLK', '7': 'FLASH_HOLD', '8': '+3V3'},
           MPN='W25Q32JVSSIQ')
@@ -546,14 +590,12 @@ def inline():
     b.decouple('+3V3', 1)
     b.add('D', 'Device', 'LED', 'green', 'LED_SMD:LED_0603_1608Metric', {'A': 'LED_SYNC', 'K': 'LED_K'}, MPN='green 0603')
     b.r('1k', 'LED_K', 'GND')
-    b.block = 'clock'   # another 7x5 LVDS VCXO fits if its absolute pull range is >= +-50 ppm
-    b.add('Y', LIB, 'VCXO_LVDS_7050', 'SiT3372 155.52 MHz', 'bridge:VCXO_7050_EP',
-          {'VIN': 'VCXO_VC', 'OE': 'VCXO_OE', 'GND': 'GND', 'EP': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'REFCLK_P', 'OUT-': 'REFCLK_N'},
-          MPN='SiT3372AI-2E2-33NE155.520000')
+    b.block = 'clock'   # fixed 155.52 MHz: the downstream transmitter follows the line with its phase interpolator
+    b.add('Y', LIB, 'XO_LVDS_7050', 'SX7DF155.520B20F30DNN', 'Oscillator:Oscillator_SMD_IDT_JU6-6_7.0x5.0mm_P2.54mm',
+          {'OE': '+3V3_XO', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'XO_OUT_P', 'OUT-': 'XO_OUT_N'}, MPN='SX7DF155.520B20F30DNN')
     b.fb('+3V3', '+3V3_XO'); b.decouple('+3V3_XO', 1, 1)
-    b.r('10k', 'VCXO_OE', '+3V3_XO')
-    b.r('10k', 'VCXO_PWM', 'VCXO_RC'); b.c('15n', 'VCXO_RC')    # two poles at 1 kHz: ecp5/vcxo_loop_model.py
-    b.r('10k', 'VCXO_RC', 'VCXO_VC'); b.c('15n', 'VCXO_VC')
+    for t in 'PN':   # UG482: an LVDS oscillator AC coupled into MGTREFCLK
+        b.c('100n', f'XO_OUT_{t}', f'REFCLK_{t}')
 
     # OLT port: downstream in (continuous: SY88993AV, squelched by its own LOS), upstream bursts out
     b.block = 'rx:DS_'
@@ -571,7 +613,8 @@ def inline():
            'DOUT': 'DS_LA_P', '/DOUT': 'DS_LA_N', 'VCC': '+3V3_DS_OPT', 'GND': 'GND'}, MPN='SY88993AVKG')
     b.r('7.5k', 'DS_LOSLVL', '+3V3_DS_OPT'); b.r('2.4k', 'DS_LOSLVL', 'DS_VREF')   # ~VCC - 1.0 V: LOS near 15 mVpp, to trim
     b.r('4.7k', 'DS_LOS', '+3V3')
-    apd_bias(b, 'DS_')
+    apd_bias(b, 'DS_', en='APD_EN')
+    b.r('10k', 'APD_EN', 'GND')   # FPGA unconfigured: both APD supplies off (the DACs come up at 0 V: highest bias)
     b.block = 'gate'   # US_LD_BEN = US_BEN while the ONU sends, stretched ~0.7 us past its burst for the regenerator's delay
     b.add('U', '74xGxx', '74LVC1G07', 'SN74LVC1G07DBVR', 'Package_TO_SOT_SMD:SOT-23-5',
           {'2': 'US_LOS', '4': 'US_QUIET', 'VCC': '+3V3', 'GND': 'GND'}, MPN='SN74LVC1G07DBVR')
@@ -588,25 +631,28 @@ def inline():
           {'LD_A': 'DS_LD_A', 'LD_K': 'DS_LD_K', 'MPD_A': 'DS_MPD_A', 'CASE': 'GND', 'STRAP': 'GND',
            'VAPD': 'US_HV_APD', 'VCC': '+3V3_US_OPT', 'OUT+': 'US_TIA_P', 'OUT-': 'US_TIA_N', 'GND': 'GND'},
           MPN='XL-BCB2111-LS-02')
-    receiver(b, 'US_', None, '220p', la='SY88149NDLMG', detect='LOS')
+    receiver(b, 'US_', None, '220p', la='SY88149NDLMG', detect='LOS', dc=True)
     # 19 mV across the termination holds the output at zero on the receiver's noise, in the 120 ns before LOS squelches
     b.r('5.1k', 'US_DIN_P', 'GND'); b.r('5.1k', 'US_DIN_N', 'GND', dnp=True)   # the other one if the BOSA's data is inverted
-    apd_bias(b, 'US_', '330k')   # XL-BCB2111 Vbr up to 60 V
+    apd_bias(b, 'US_', '330k', en='APD_EN')   # XL-BCB2111 Vbr up to 60 V
     b.block = 'level'   # burst level: the APD current against a DAC, read by the FPGA during each burst
     b.add('U', 'Comparator', 'TLV3501AIDBV', 'TLV3501AIDBVR', 'Package_TO_SOT_SMD:SOT-23-6',
           {'3': 'US_APD_MON', '1': 'US_RSSI_REF', '5': 'US_ABOVE', '4': '+3V3', '2': 'GND', '6': 'GND'}, MPN='TLV3501AIDBVR')
     b.c('10n', 'US_RSSI_REF'); b.decouple('+3V3', 1)
     laser(b, 'DS_', 'DS_TX', 'DS_LASER_DIS')
     b.r('4.7k', 'DS_LASER_DIS', '+3V3')   # FPGA unconfigured: dark
-    b.block = 'ddm'
-    for a0, ios in (('GND', ('DS_APD_ADJ', 'DS_APD_MON', 'US_LD_BSET', 'US_LD_MSET', 'US_LD_MD', 'US_LD_BCMON')),
-                    ('+3V3', ('US_APD_ADJ', 'US_RSSI_REF', 'DS_LD_BSET', 'DS_LD_MSET', 'DS_LD_MD', 'DS_LD_BCMON'))):
-        k = 'A' if a0 == 'GND' else 'B'   # I2C 0x10 (OLT port), 0x11 (ONU port)
-        b.add('U', 'Analog', 'AD5593R', 'AD5593RBRUZ', 'Package_SO:TSSOP-16_4.4x5mm_P0.65mm',
-              {'~{RESET}': f'DDM_RESET_{k}', 'A0': a0, 'V_{DD}': '+3V3', 'V_{LOGIC}': '+3V3', 'V_{REF}': f'DDM_VREF_{k}', 'GND': 'GND',
-               'SDA': 'SDA', 'SCL': 'SCL', **{f'IO{i}': net for i, net in enumerate(ios)}}, MPN='AD5593RBRUZ')
-        b.r('10k', f'DDM_RESET_{k}', '+3V3'); b.c('100n', f'DDM_VREF_{k}'); b.decouple('+3V3', 1)
-    for net in ('SCL', 'SDA'):
+    b.block = 'ddm'   # set points: two DACs on one address, each its own clock (0 V at power-on: no laser current)
+    for scl, outs in (('SCL', ('DS_APD_ADJ', 'US_LD_BSET', 'US_LD_MSET')), ('SCL2', ('US_APD_ADJ', 'US_RSSI_REF', 'DS_LD_BSET', 'DS_LD_MSET'))):
+        b.add('U', 'Analog_DAC', 'MCP4728', 'MCP4728T-E/UN', 'Package_SO:MSOP-10_3x3mm_P0.5mm',
+              {'VDD': '+3V3', 'VSS': 'GND', 'SCL': scl, 'SDA': 'SDA', '~{LDAC}': 'GND', **{f'VOUT{c}': n for c, n in zip('ABCD', outs)}},
+              MPN='MCP4728T-E/UN')
+        b.decouple('+3V3', 1, 1)
+    b.add('U', 'Analog_ADC', 'ADS7828', 'ADS7828E/2K5', 'Package_SO:TSSOP-16_4.4x5mm_P0.65mm',   # monitors, I2C 0x48
+          {'VDD': '+3V3', 'GND': 'GND', 'COM': 'GND', 'REF': 'ADC_REF', 'A0': 'GND', 'A1': 'GND', 'SCL': 'SCL', 'SDA': 'SDA',
+           'CH0': 'DS_APD_MON', 'CH1': 'US_LD_MD', 'CH2': 'US_LD_BCMON', 'CH3': 'DS_LD_MD', 'CH4': 'DS_LD_BCMON',
+           'CH5': 'GND', 'CH6': 'GND', 'CH7': 'GND'}, MPN='ADS7828E/2K5')
+    b.c('2.2u', 'ADC_REF'); b.decouple('+3V3', 1)
+    for net in ('SCL', 'SCL2', 'SDA'):
         b.r('2.2k', net, '+3V3')
     b.block = 'shield'   # a hand-made 0.2 mm can over each receiver
     for _ in range(6):

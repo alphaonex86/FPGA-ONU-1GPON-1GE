@@ -42,11 +42,13 @@ object InlineSnifferTest extends App {
   val fromDevice = mutable.ArrayBuffer[Int]()
   val dsOut, usOut = mutable.ArrayBuffer[Int]()
   val ben = mutable.ArrayBuffer[Boolean]() // per half-word
+  var zeros = 0 // the dut's
   var laserBeforeData, benWithoutLaser = false
   var sdaLowSeen, strobeError = false
   var i2cWrites = mutable.ArrayBuffer[Long]() // out clock of each change of the lines
 
   SimConfig.compile(InlineSniffer(steadyBits = 8)).doSim(3) { dut =>
+    zeros = dut.zeros
     dut.io.dsRx #= 0
     dut.io.usRx #= 0
     dut.io.dsSignal #= true
@@ -55,6 +57,7 @@ object InlineSnifferTest extends App {
     dut.io.link.read #= 0
     dut.io.scl #= true
     dut.io.usAbove #= false
+    dut.io.burstCut #= false
     dut.io.sda #= false
     var dsWord, usWord, outClock = 0
     dut.dsCd.onSamplings {
@@ -62,16 +65,18 @@ object InlineSnifferTest extends App {
       dsWord += 1
     }
     dut.clockDomain.onSamplings {
-      dut.io.usRx #= (0 until 20).map(k => BigInt(if (10 * usWord + k / 2 < usBits.length) usBits(10 * usWord + k / 2) else 0) << k).sum
+      val ds = dut.io.dsTx.toBigInt
+      if (ds != 0 && !dut.io.dsLaser.toBoolean) laserBeforeData = true
+      if (dut.io.dsLaser.toBoolean) dsOut ++= (0 until 20).map(k => ((ds >> k) & 1).toInt)
+    }
+    dut.usCd.onSamplings { // 4 samples per bit
+      dut.io.usRx #= (0 until 40).map(k => BigInt(if (10 * usWord + k / 4 < usBits.length) usBits(10 * usWord + k / 4) else 0) << k).sum
       usWord += 1
       // the comparator: over its level during the first and the last burst
       dut.io.usAbove #= Seq(bursts.head, bursts.last).exists { case (at, clear) => 10 * usWord >= at && 10 * usWord < at + 8 * clear.length }
       if (dut.io.usBen.toInt != 0 && !dut.io.usLaser.toBoolean) benWithoutLaser = true
-      val ds = dut.io.dsTx.toBigInt
-      if (ds != 0 && !dut.io.dsLaser.toBoolean) laserBeforeData = true
-      if (dut.io.dsLaser.toBoolean) dsOut ++= (0 until 20).map(k => ((ds >> k) & 1).toInt)
       val us = dut.io.usTx.toBigInt
-      usOut ++= (0 until 20).map(k => ((us >> k) & 1).toInt)
+      usOut ++= (0 until 40).map(k => ((us >> k) & 1).toInt)
       ben += ((dut.io.usBen.toInt >> 1) & 1) == 1
       ben += (dut.io.usBen.toInt & 1) == 1
     }
@@ -113,6 +118,7 @@ object InlineSnifferTest extends App {
     dut.clockDomain.forkStimulus(20)
     fork { sleep(7); dut.dsCd.forkStimulus(20) }
     dut.outCd.forkStimulus(32)
+    fork { sleep(3); dut.usCd.forkStimulus(20) }
     dut.outCd.waitSampling(20)
     toDevice ++= Seq(0x11, 0x22) ++ read("ID") // bytes before a command are skipped
     toDevice ++= write("CTRL", 0x10501) ++ write("LASERS", 3) ++ write("DELIMITER", usDelimiter.toLong)
@@ -165,8 +171,8 @@ object InlineSnifferTest extends App {
   val from = 8 * (line.indexOfSlice(DsLine.psyncBytes) + 4 * frameBytes) // a PSync and its Ident: no other frame has them
   val found = dsOut.indexOfSlice(dsBits.slice(from, from + 64))
   check(found >= 0 && dsOut.slice(found, found + 1000000) == dsBits.slice(from, from + 1000000).toSeq, "downstream: sent again bit for bit")
-  check((0 until usOut.length by 2).forall(k => usOut(k) == usOut(k + 1)), "upstream: each bit twice on the lane")
-  val usSent = (0 until usOut.length by 2).map(usOut(_))
+  check((0 until usOut.length by 4).forall(k => usOut.slice(k, k + 4).distinct.length == 1), "upstream: each bit four samples on the lane")
+  val usSent = (0 until usOut.length by 4).map(usOut(_))
   for ((at, clear) <- bursts) {
     val whole = usBits.slice(at - 24, at + 8 * clear.length).toSeq // from the delimiter
     val bits = whole.take(whole.lastIndexOf(1) + 1) // its trailing zeros are the laser off, whatever the lane carries
@@ -174,9 +180,12 @@ object InlineSnifferTest extends App {
     // the enable is a clock (two half-words) behind the data here (the SerDes adds its own in the card), on to the last one
     check(sent >= 0 && (sent / 5 + 2 to (sent + bits.length - 1) / 5 + 2).forall(ben(_)), s"upstream: burst at bit $at sent again from its delimiter to its last one, laser on")
   }
-  // the enable is two half-words behind the data here: bit i is dark when its half-word's enable is off
-  def dark(i: Int) = i / 5 + 2 < ben.length && !ben(i / 5 + 2)
+  // the enable is two half-words behind the data here: bit i is off when its half-word's enable is; after a burst its
+  // first `zeros` half-words off carry zeros, the others 1010
+  def off(i: Int, back: Int) = { val j = i / 5 + 2 - back; j < 0 || j < ben.length && !ben(j) } // off before the start
+  def dark(i: Int) = (0 to zeros).forall(off(i, _))
   check((0 until usSent.length - 1).forall(i => !(dark(i) && dark(i + 1)) || usSent(i) != usSent(i + 1)), "upstream: 1010 on the lane while the laser is off")
+  check(usSent.indices.forall(i => !off(i, 0) || dark(i) || usSent(i) == 0), "upstream: zeros on the lane just after a burst")
   val lit = ben.count(identity) * 5
   val need = bursts.map(b => 8 * (b._2.length + 11)).sum
   check(lit >= need && lit < need + bursts.length * 200, s"upstream: laser on for the bursts only ($lit bits for $need)")

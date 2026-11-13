@@ -59,11 +59,13 @@ case class PhasePick(quietWords: Int = 4) extends Component {
   * phase, so the downstream latency, where the fill toggles; 2^10, 5, 13 with a 1 kHz RC: locked in 0.1 s, the phase
   * within 0.1 line bit for 33 to 300 ppm over the range, FPGA-USB-GPON-sniffer/ecp5/vcxo_loop_model.py). PI loop every
   * 2^updateShift clocks, duty to a first-order sigma-delta on the VC pin's RC filter (16 Hz, two poles); a higher
-  * duty raises the frequency. Off (no downstream): the duty holds. Default gains: ~0.5 Hz, damping ~1, for 100 ppm
+  * duty raises the frequency; `hold` (a power of two): clocks each bit of it lasts, for a transceiver's phase
+  * interpolator that takes one step per that many (no VCXO). Off (no downstream): the duty holds. Default gains: ~0.5 Hz, damping ~1, for 100 ppm
   * over the VC range at 124.416 MHz (0.19 words/s per duty LSB). Closed-loop model (sniffer/ecp5/vcxo_loop_model.py):
   * locked within 0.5 word in 14 s from 10 ppm, stable for 33 to 300 ppm over the range; the VCXO's pull must exceed
   * its initial error. */
-case class VcxoLoop(updateShift: Int = 14, kpShift: Int = 5, kiShift: Int = 9) extends Component {
+case class VcxoLoop(updateShift: Int = 14, kpShift: Int = 5, kiShift: Int = 9, hold: Int = 1) extends Component {
+  require(isPow2(hold) && hold <= (1 << updateShift))
   val io = new Bundle {
     val enable = in Bool ()
     val error = in SInt (8 bits)
@@ -92,8 +94,12 @@ case class VcxoLoop(updateShift: Int = 14, kpShift: Int = 5, kiShift: Int = 9) e
   }
   val sum = Reg(UInt(16 bits)) init (0)
   val carry = sum +^ duty
-  sum := carry.resize(16 bits)
-  io.vc := RegNext(carry.msb) init (False)
+  val vc = Reg(Bool()) init (False)
+  when(if (hold == 1) True else tick(log2Up(hold) - 1 downto 0) === 0) {
+    sum := carry.resize(16 bits)
+    vc := carry.msb
+  }
+  io.vc := vc
   io.duty := duty
 }
 
@@ -101,23 +107,22 @@ case class VcxoLoop(updateShift: Int = 14, kpShift: Int = 5, kiShift: Int = 9) e
   * upstream lane is read. `ds`: the downstream lane's recovered clock. `out`: 77.76 MHz from the default domain (x5/8).
   * Lane words: 20 bits, first received bit in bit 0 (the ECP5 DCU's order). To the DE25-Nano, per `out` clock:
   * 32 downstream and 16 upstream line bits, first bit in the MSB; the first half on the rising edge.
-  * `inline`: for a repeater, the VCXO loop holds the downstream latency (see VcxoLoop); `dsLine` and `usBits` are what
-  * it sends again. */
+  * `inline`: for a repeater without a VCXO, the loop steers the transmitter's phase interpolator and holds the
+  * downstream latency (see VcxoLoop); `dsLine` is what it sends again, the upstream stays outside (UsClean). */
 case class SnifferBridge(fifoDepth: Int = 16, inline: Boolean = false, dsDomain: ClockDomain = null, outDomain: ClockDomain = null) extends Component {
   val dsCd = if (dsDomain != null) dsDomain else ClockDomain.external("ds")
   val outCd = if (outDomain != null) outDomain else ClockDomain.external("out")
   val io = new Bundle {
     val dsWord = in Bits (20 bits) // ds domain
-    val usWord = in Bits (20 bits) // 2x oversampled
+    val usWord = !inline generate (in Bits (20 bits)) // 2x oversampled
     val dsSignal = in Bool ()      // async: downstream present and its CDR locked
     val vcxo = out Bool ()
     val duty = out UInt (16 bits)
-    val usOdd = out Bool ()
+    val usOdd = !inline generate (out Bool ())
     val dsLine = out Bits (20 bits) // the downstream in this domain, first bit in the MSB; zero while `dsValid` is not
     val dsValid = out Bool ()
-    val usBits = out Bits (10 bits) // the picked upstream bits, first in the MSB
     val dsPins = out Bits (32 bits) // out domain
-    val usPins = out Bits (16 bits)
+    val usPins = !inline generate (out Bits (16 bits))
   }
   // downstream into the VCXO domain: once half full the FIFO pops every clock, so its fill is the clocks' phase
   val crossing = StreamFifoCC(Bits(20 bits), fifoDepth, dsCd, clockDomain)
@@ -131,34 +136,34 @@ case class SnifferBridge(fifoDepth: Int = 16, inline: Boolean = false, dsDomain:
   val ds = io.dsValid ? crossing.io.pop.payload | B(0, 20 bits)
   io.dsLine := ds
 
-  val loop = if (inline) VcxoLoop(10, 5, 13) else VcxoLoop()
+  val loop = if (inline) VcxoLoop(10, 5, 13, hold = 8) else VcxoLoop()
   val fill = crossing.io.popOccupancy.intoSInt - S(fifoDepth / 2)
   loop.io.enable := BufferCC(io.dsSignal, False)
   loop.io.error := RegNext((if (inline) (fill << 1) + 1 else fill).resize(8 bits)) init (0)
   io.vcxo := loop.io.vc
   io.duty := loop.io.duty
 
-  val pick = PhasePick()
-  pick.io.samples := io.usWord.reversed
-  io.usOdd := pick.io.odd
-  io.usBits := pick.io.bits
-
   // both gearboxes start together at the same ratio, so their words come on the same clocks
   val dsGear = Gearbox(20, 32)
-  val usGear = Gearbox(10, 16)
   dsGear.io.input.push(ds)
-  usGear.io.input.push(pick.io.bits)
-  val toOut = StreamFifoCC(Bits(48 bits), 16, clockDomain, outCd)
+  val upstream = !inline generate new Area {
+    val pick = PhasePick()
+    pick.io.samples := io.usWord.reversed
+    io.usOdd := pick.io.odd
+    val gear = Gearbox(10, 16)
+    gear.io.input.push(pick.io.bits)
+  }
+  val toOut = StreamFifoCC(Bits((if (inline) 32 else 48) bits), 16, clockDomain, outCd)
   toOut.io.push.valid := dsGear.io.output.valid
-  toOut.io.push.payload := dsGear.io.output.payload ## usGear.io.output.payload
+  toOut.io.push.payload := (if (inline) dsGear.io.output.payload else dsGear.io.output.payload ## upstream.gear.io.output.payload)
 
   val output = new ClockingArea(outCd) {
     val started = Reg(Bool()) init (False)
     when(!started && toOut.io.popOccupancy >= 4)(started := True)
     when(started && !toOut.io.pop.valid)(started := False)
     toOut.io.pop.ready := started
-    val word = RegNext((started && toOut.io.pop.valid) ? toOut.io.pop.payload | B(0, 48 bits)) init (0)
-    io.dsPins := word(47 downto 16)
-    io.usPins := word(15 downto 0)
+    val word = RegNext((started && toOut.io.pop.valid) ? toOut.io.pop.payload | B(0)) init (0)
+    io.dsPins := word(word.high downto word.getWidth - 32)
+    if (!inline) io.usPins := word(15 downto 0)
   }
 }

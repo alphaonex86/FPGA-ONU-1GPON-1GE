@@ -4375,7 +4375,7 @@
       (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
       (property
         "Description"
-        "Microchip SY88349NDL 2.5 Gb/s burst-mode limiting amp, CML out, 3x3 QFN-16"
+        "Microchip SY88349NDL 2.5 Gb/s burst-mode limiting amp, CML out, 3x3 QFN-16; same pins: SY88149NDL (1.25 Gb/s, LVPECL out)"
         (at 0 0 0)
         (effects (font (size 1.27 1.27)) (hide yes)))
       (symbol
@@ -5646,7 +5646,7 @@
       (at 86.36 177.8 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (property "Datasheet" "" (at 86.36 177.8 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "MPN" "CKCS252012-2R2M" (at 86.36 177.8 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "MPN" "SLO252012F2R2MTT" (at 86.36 177.8 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "7b98d5a5-a505-5391-8f31-bd5777764194"))
     (pin "2" (uuid "53ed0f74-01af-53cc-a026-7acebac85e04"))
     (instances
@@ -5900,7 +5900,7 @@
       (at 88.9 223.52 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (property "Datasheet" "" (at 88.9 223.52 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "MPN" "CKCS252012-2R2M" (at 88.9 223.52 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "MPN" "SLO252012F2R2MTT" (at 88.9 223.52 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "5aa47695-b4a6-55d8-940a-79b0f7f444bf"))
     (pin "2" (uuid "3a204f84-9026-5f71-be0d-482ea120153a"))
     (instances

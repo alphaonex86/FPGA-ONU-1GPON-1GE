@@ -5944,7 +5944,7 @@
       (at 86.36 177.8 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (property "Datasheet" "" (at 86.36 177.8 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "MPN" "CKCS252012-2R2M" (at 86.36 177.8 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "MPN" "SLO252012F2R2MTT" (at 86.36 177.8 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "cd28fc28-3606-5e26-b5a4-a00a77a9c6e1"))
     (pin "2" (uuid "aad7ce32-bb07-5f6d-bf30-0115a3ab18ff"))
     (instances
@@ -6198,7 +6198,7 @@
       (at 88.9 223.52 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (property "Datasheet" "" (at 88.9 223.52 0) (effects (font (size 1.27 1.27)) (hide yes)))
-    (property "MPN" "CKCS252012-2R2M" (at 88.9 223.52 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "MPN" "SLO252012F2R2MTT" (at 88.9 223.52 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "905e4907-8697-5dd2-868a-e42b7b9d00ab"))
     (pin "2" (uuid "2d5e42de-0c8b-5aef-a161-93845dac6c14"))
     (instances

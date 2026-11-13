@@ -3,7 +3,6 @@
 import json, math, os, re, sys
 import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
-from boards import ECP5_BALLS, ball_xy
 from kisch import uid
 from paths import LIB, ki_lib, board_dir
 
@@ -16,9 +15,9 @@ def P(v): return (pcbnew.ToMM(v.x) - OX, pcbnew.ToMM(v.y) - OY)
 BGA_C = (32.0, 26.0)
 VIA_D, VIA_HOLE = 0.45, 0.2
 POWER_PREFIX = ('+', 'GND')
-PLANE_NETS = ('GND', '+3V3', '+1V1')   # In1 GND, In2 +3V3 with a +1V1 island
+PLANE_NETS = ('GND', '+3V3', '+1V1', '+1V0')   # In1 GND, In2 +3V3 with a core island (ECP5 +1V1, Artix-7 +1V0)
 HV_PREFIX, HV_CLEAR = 'HV_', 0.2   # APD bias nets (<prefix>HV_*), up to 61 V
-SUB_RAILS = ('+1V1_SD', '+2V5')   # SerDes 1.1 V (~0.2 A) and VCCAUX 2.5 V (~50 mA): 0.2 mm, ~17 mV over 35 mm
+SUB_RAILS = ('+1V1_SD', '+2V5', '+1V8')   # SerDes 1.1 V (~0.2 A), VCCAUX 2.5 / 1.8 V (with the GTP LDOs ~0.3 A): 0.2 mm
 
 def fp_dir(lib):
     return f'{LIB}/{lib}.pretty' if lib == 'bridge' else f'{FP}/{lib}.pretty'
@@ -81,6 +80,7 @@ class Layout:
         self.parts = {p.ref: p for p in bd.parts if p.on_board and p.footprint}
         self.fps, self.rects = {}, {'F': [], 'B': []}
         self.keepout = {'F': [], 'B': []}
+        self.core, self.pitch, self.island = '+1V1', 0.8, None   # the BGA's core rail, ball pitch, core plane island
         root = uid(bd.name, 'sheet')
         for ref, part in self.parts.items():
             lib, name = part.footprint.split(':')
@@ -188,7 +188,7 @@ class Layout:
                 if p.GetNumber()[0] in 'AB' and not is_free(p.GetNetname()) and not p.GetNetname().startswith(('+', 'GND'))]
 
     def cap_for_bga(self, ref):
-        return self.parts[ref].block == 'ecp5_support'
+        return self.parts[ref].block in ('ecp5_support', 'fpga_support')
 
     def on_bottom_net(self, nets):
         return any(self.fps[r].IsFlipped() for n in nets if not n.startswith(POWER_PREFIX) for r, xy in self.pads_of(n)
@@ -267,26 +267,26 @@ class Layout:
     def fanout(self, top_balls, plane_nets):
         """Dog-bone via for every connected ball except `top_balls` (left to the top-layer
         router or routed by hand). Vias point away from the BGA centre, so the centre lines
-        stay via-free: that channel carries the +1V1 plane out on In2."""
-        cx, cy = BGA_C
+        stay via-free: that channel carries the core plane out on In2. Ball positions from the
+        placed footprint: any package, any rotation."""
         fp = self.fps[self.bga]
-        for pad in fp.Pads():
-            b, net = pad.GetNumber(), pad.GetNetname()
+        cx, cy = P(fp.GetPosition())
+        d = self.pitch / 2
+        balls = {p.GetNumber(): (P(p.GetPosition()), p.GetNetname()) for p in fp.Pads()}
+        for b, ((x, y), net) in balls.items():
             if is_free(net) or b in top_balls:
                 continue
-            bx, by = ball_xy(b)
-            dx = 0.4 if bx > 0 else -0.4
-            dy = 0.4 if by > 0 else -0.4
-            x, y = cx + bx, cy + by
+            dx = d if x > cx else -d
+            dy = d if y > cy else -d
             self.track(net, [(x, y), (x + dx, y + dy)], 0.2 if net.startswith(POWER_PREFIX) else 0.1)
             self.via(net, x + dx, y + dy)
         # rails without a plane: neighbour balls also join on top, the via field is too tight for their width
-        net_at = {tuple(round(v, 2) for v in ball_xy(p.GetNumber())): p.GetNetname() for p in fp.Pads() if p.GetNumber() not in top_balls}
-        for (bx, by), net in net_at.items():
+        net_at = {(round(x, 2), round(y, 2)): net for b, ((x, y), net) in balls.items() if b not in top_balls}
+        for (x, y), net in net_at.items():
             if net.startswith('+') and net not in plane_nets:
-                for nx, ny in ((bx + 0.8, by), (bx, by + 0.8)):
+                for nx, ny in ((x + self.pitch, y), (x, y + self.pitch)):
                     if net_at.get((round(nx, 2), round(ny, 2))) == net:
-                        self.track(net, [(cx + bx, cy + by), (cx + nx, cy + ny)], 0.1)
+                        self.track(net, [(x, y), (nx, ny)], 0.1)
 
     def save(self):
         d = board_dir(self.bd.name)
@@ -315,8 +315,8 @@ def write_project(path, bd):
         'track_widths': [0.1, 0.15, 0.2, 0.3, 0.5], 'via_dimensions': [{'diameter': VIA_D, 'drill': VIA_HOLE}]}}
     power = [n for n in bd.nets() if n.startswith(POWER_PREFIX)]
     # BGA rails without a plane thread the via field: 0.35 mm channels fit 0.15 mm at 0.1 clearance
-    ecp5 = next((p for p in bd.parts if p.value.startswith('LFE5')), None)
-    rails = sorted({n for n in ecp5.conns.values() if n.startswith('+')} - set(PLANE_NETS)) if ecp5 else []
+    fpga = next((p for p in bd.parts if p.value.startswith(('LFE5', 'XC7A'))), None)
+    rails = sorted({n for n in fpga.conns.values() if n.startswith('+')} - set(PLANE_NETS) - set(SUB_RAILS)) if fpga else []
     sub = [n for n in SUB_RAILS if n in power]
     power = [n for n in power if n not in rails and n not in sub]
     pro['net_settings'] = {'meta': {'version': 4}, 'net_colors': None, 'netclass_assignments': None,

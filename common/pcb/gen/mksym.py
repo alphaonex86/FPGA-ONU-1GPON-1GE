@@ -50,6 +50,8 @@ def lvds_xo(name, descr, pin1, pin2=('NC', 'no_connect'), footprint=XO_3225):
                       'Y', name, footprint, descr)
 syms.append(lvds_xo('XO_LVDS_3225', 'LVDS XO 3.3 V, 3.2x2.5 mm (SiT9121): OE high/open = on, low = outputs hi-Z', 'OE'))
 syms.append(lvds_xo('VCXO_LVDS_3225', 'LVDS VCXO 3.3 V, 3.2x2.5 mm (SiT3821): VIN 0..VDD control voltage', 'VIN'))
+syms.append(lvds_xo('XO_LVDS_7050', 'LVDS XO 3.3 V, 7x5 mm, 6 pads (SCTF SX7DF): OE high/open = on, low = outputs hi-Z', 'OE',
+                    footprint='Oscillator:Oscillator_SMD_IDT_JU6-6_7.0x5.0mm_P2.54mm'))
 syms.append(box_symbol('PCA9540B', [([('1', 'SCL', 'input'), ('2', 'SDA', 'bidirectional'), ('3', 'VDD', 'power_in'), ('6', 'VSS', 'power_in')],
                                      [('5', 'SC0', 'bidirectional'), ('4', 'SD0', 'bidirectional'), ('8', 'SC1', 'bidirectional'), ('7', 'SD1', 'bidirectional')])],
                        'U', 'PCA9540BD', 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm', '2-channel I2C mux, address 0x70'))

@@ -3,9 +3,9 @@
 import math, os, sys
 import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
-from pcbgen import Layout, BGA_C, ball_xy, P, V, plane_vias, PLANE_NETS
+from pcbgen import Layout, BGA_C, P, V, plane_vias, PLANE_NETS
 from paths import board_dir
-from boards import onu, olt, hsmc, sniffer, inline
+from boards import onu, olt, hsmc, sniffer, inline, ball_xy
 
 PASSIVE = ('R', 'C', 'FB', 'L', 'RN', 'TP')
 def is_passive(ref):
@@ -14,13 +14,18 @@ def is_passive(ref):
 def refs(lay, symname):
     return [r for r, p in lay.parts.items() if p.lib_id.endswith(':' + symname)]
 
-def bga_xy(ball):
+def bga_xy(ball):   # ECP5 boards (BGA unrotated at BGA_C)
     bx, by = ball_xy(ball)
     return BGA_C[0] + bx, BGA_C[1] + by
 
+def island(field):
+    """Core plane island east of a BGA whose dog-bone field ends `field` mm from its centre, 0.5 mm in."""
+    cx, cy = BGA_C
+    return (cx + field + 0.5, cy - 11.0 + 0.5, cx + 26.0 - 0.5, cy + 2.5 - 0.5)
+
 def common(lay, h):
     u = refs(lay, 'LFE5UM-25F-BG381')[0]
-    lay.bga = u
+    lay.bga, lay.island = u, island(9.8)
     lay.header(56.13, 3.0)
     lay.place(u, *BGA_C)
     x0, y0, x1, y1 = BGA_C[0] - 9.6, BGA_C[1] - 9.6, BGA_C[0] + 9.6, BGA_C[1] + 9.6
@@ -70,7 +75,7 @@ def passives(lay, header_rn_y):
     # source series packs between the header and the BGA, under their balls
     for r in sorted(r for r in parts if r.startswith('RN')):
         balls = [lay.ball_of(n) for n in parts[r].conns.values() if n.endswith('_S')]
-        xs = [bga_xy(b)[0] for b in balls if b]
+        xs = [lay.pad_xy(lay.bga, b)[0] for b in balls if b]
         lay.place_near(r, sum(xs) / len(xs), header_rn_y, rot=90)
     rail_balls = {}
     if lay.bga:
@@ -97,13 +102,13 @@ def passives(lay, header_rn_y):
                 else:
                     later.append(r)
                 continue
-            if nets == ['+1V1'] and lay.cap_for_bga(r):  # on the wide +1V1 island east of the BGA
-                lay.place_near(r, BGA_C[0] + 11.0, BGA_C[1], bottom=True, within=ISLAND)
+            if nets == [lay.core] and lay.cap_for_bga(r):  # on the wide core island east of the BGA
+                lay.place_near(r, lay.island[0] + 0.7, BGA_C[1], bottom=True, within=lay.island)
                 continue
             if r.startswith('C') and len(nets) == 1 and nets[0] in rail_balls and lay.cap_for_bga(r):
                 balls = rail_balls[nets[0]]
                 k = used.get(nets[0], 0); used[nets[0]] = k + 1
-                lay.place_near(r, *bga_xy(balls[k % len(balls)]), bottom=True)
+                lay.place_near(r, *lay.pad_xy(lay.bga, balls[k % len(balls)]), bottom=True)
                 continue
             pts = []
             if not lay.bga and len(nets) == 1 and nets[0].startswith('+'):   # decoupling: at the pins of its own block
@@ -179,27 +184,32 @@ def sniffer_layout():
 def inline_layout():
     """USB and the FT2232H north-west of the BGA, flash and JTAG west, both optical ports east with their fibres over
     the edge (OLT port north, ONU port south), each receiver's limiting amp at its can inside a ring of shield clips.
-    The BOSA lands take any lead order (BOSA_PADS)."""
+    The BOSA lands take any lead order (BOSA_PADS). The Artix-7 turned so its ball A1 is north-east: the GTP quad
+    (rows A-F) faces the ports, the FT2232H bus (rows AA/AB, columns 1-8) the north-west, the config flash bank
+    (columns 19-22) the south-west."""
     lay = Layout(inline(), 92, 92)
     one = lambda sym: refs(lay, sym)[0]
     by_net = lambda sym, pin: {lay.parts[r].conns[pin][:3]: r for r in refs(lay, sym)}
-    lay.bga = one('LFE5UM-45F-BG381')
-    lay.place(lay.bga, *BGA_C)
-    lay.keepout['B'].append((BGA_C[0] - 9.6, BGA_C[1] - 9.6, BGA_C[0] + 9.6, BGA_C[1] + 9.6))   # dog-bone via field
+    lay.bga, lay.core, lay.pitch, lay.island = one('XC7A35T-FGG484'), '+1V0', 1.0, island(11.8)
+    lay.place(lay.bga, *BGA_C, 270)
+    a1 = lay.pad_xy(lay.bga, 'A1')
+    assert a1[0] > BGA_C[0] and a1[1] < BGA_C[1], f'ball A1 at {a1}: not north-east'
+    lay.keepout['B'].append((BGA_C[0] - 11.5, BGA_C[1] - 11.5, BGA_C[0] + 11.5, BGA_C[1] + 11.5))   # dog-bone via field
     bucks = {lay.parts[r].block: r for r in refs(lay, 'TLV62569DBV')}
-    for rail, xy in (('+1V1', (47.5, 23.0)), ('+1V1_SD', (47.5, 32.5)), ('+3V3', (62.0, 8.0))):
+    for rail, xy in (('+1V0', (49.5, 23.0)), ('+1V8', (49.5, 32.5)), ('+3V3', (62.0, 8.0))):   # cells clear of the via field
         lay.place(bucks[f'power:{rail}'], *xy, 180, True)
         buck_cell(lay, bucks[f'power:{rail}'])
-    lay.place(one('TLV75525PDBV'), 54.0, 31.0, 0, True)
+    lay.place(one('TLV75510PDBV'), 56.0, 31.0, 0, True)    # GTP supplies from +1V8
+    lay.place(one('TLV75512PDBV'), 56.0, 35.0, 0, True)
     lay.place(one('USB_C_Receptacle_USB2.0_16P'), 16.0, 4.2, 180)   # mouth over the north edge
     lay.place(one('USBLC6-2SC6'), 25.5, 5.0)
-    lay.place(one('FT2232HL'), 14.0, 18.0)
+    lay.place(one('FT2232HL'), 12.5, 18.0)
     lay.place(one('Crystal_GND24'), 3.5, 27.0, 90)
     lay.place(one('93LCxxBxxOT'), 9.0, 28.5)
-    lay.place(one('W25Q32JVSS'), 15.0, 35.0)
+    lay.place(one('W25Q32JVSS'), 12.5, 36.0)
     lay.place(one('Conn_01x06'), 4.0, 38.0)                          # JTAG
     lay.place(one('LED'), 12.0, 88.0)
-    lay.place(one('VCXO_LVDS_7050'), 39.0, 42.5)                     # south of the REFCLK balls Y11/Y12
+    lay.place(one('XO_LVDS_7050'), 44.0, 8.5)                        # north of the REFCLK balls F6/E6
     for hole, xy in zip(refs(lay, 'MountingHole'), ((4, 4), (88, 4), (4, 88), (64, 88))):
         lay.place(hole, *xy)
     # each port: BOSA body along the east edge, laser driver west of its lead row, limiting amp north of the receiver
@@ -224,9 +234,10 @@ def inline_layout():
     lay.place(cut, 60.5, 56.0)
     lay.place(one('74LVC1G32'), 65.5, 57.0)
     lay.place(one('TLV3501AIDBV'), 62.0, 64.0)
-    ddm = {lay.parts[r].conns['2']: r for r in refs(lay, 'AD5593R')}   # by A0
-    lay.place(ddm['GND'], 47.0, 53.0)
-    lay.place(ddm['+3V3'], 47.0, 76.0)
+    dacs = {lay.parts[r].conns['2']: r for r in refs(lay, 'MCP4728')}   # by clock: SCL feeds the OLT port's
+    lay.place(dacs['SCL'], 47.0, 53.0)
+    lay.place(one('ADS7828'), 47.0, 64.0)
+    lay.place(dacs['SCL2'], 47.0, 76.0)
     for r in refs(lay, 'D'):                  # each laser's dummy-load diodes beside its driver
         x, y = P(lay.fps[drivers[lay.parts[r].block[-3:]]].GetPosition())
         lay.place_near(r, x + 4.0, y - 5.0)
@@ -538,23 +549,54 @@ def escape(lay, net, steps, layer):
     lay.track(net, pts, 0.1, layer)
     lay.via(net, *pts[-1])
 
-ISLAND = (BGA_C[0] + 9.8 + 0.5, BGA_C[1] - 11.0 + 0.5, BGA_C[0] + 26.0 - 0.5, BGA_C[1] + 2.5 - 0.5)  # wide +1V1, 0.5 mm in
-
 def planes(lay):
     w, h, e = lay.w, lay.h, 0.3
     full = [(e, e), (w - e, e), (w - e, h - e), (e, h - e)]
     cx, cy = BGA_C
     lay.zone('GND', pcbnew.In1_Cu, full)
     lay.zone('+3V3', pcbnew.In2_Cu, full)
-    core = 2.75
-    # core, a neck along the via-free centre line, then wide once out of the via field (decaps + buck output)
-    lay.zone('+1V1', pcbnew.In2_Cu, [(cx - core, cy - core), (cx + core, cy - core), (cx + core, cy - 0.55),
-                                     (cx + 9.8, cy - 0.55), (ISLAND[0] - 0.5, ISLAND[1] - 0.5), (ISLAND[2] + 0.5, ISLAND[1] - 0.5),
-                                     (ISLAND[2] + 0.5, ISLAND[3] + 0.5), (ISLAND[0] - 0.5, ISLAND[3] + 0.5), (cx + 9.8, cy + 0.55),
-                                     (cx + core, cy + 0.55), (cx + core, cy + core), (cx - core, cy + core)],
+    # core: the box of the core balls' dog-bones, a neck along the via-free centre line, then wide once out of the
+    # via field (decaps + buck output)
+    m = lay.pitch / 2 + 0.35
+    core = [xy for r, xy in lay.pads_of(lay.core) if r == lay.bga]
+    x0, x1 = min(x for x, y in core) - m, max(x for x, y in core) + m
+    y0, y1 = min(min(y for x, y in core) - m, cy - 0.55), max(max(y for x, y in core) + m, cy + 0.55)
+    i0, i1, i2, i3 = lay.island
+    neck = i0 - 0.5
+    lay.zone(lay.core, pcbnew.In2_Cu, [(x0, y0), (x1, y0), (x1, cy - 0.55), (neck, cy - 0.55), (neck, i1 - 0.5),
+                                       (i2 + 0.5, i1 - 0.5), (i2 + 0.5, i3 + 0.5), (neck, i3 + 0.5), (neck, cy + 0.55),
+                                       (x1, cy + 0.55), (x1, y1), (x0, y1)],
              priority=1, clearance=0.2, min_width=0.15)
-    lay.no_vias([(cx + core, cy - 0.55), (cx + 9.8, cy - 0.55), (cx + 9.8, cy + 0.55), (cx + core, cy + 0.55)])
+    lay.no_vias([(x1, cy - 0.55), (neck, cy - 0.55), (neck, cy + 0.55), (x1, cy + 0.55)])
     # outer GND pours come after routing (finish.py): poured copper would wall the router in
+
+
+def finish(lay):
+    added, missed = plane_vias(lay)
+    print('plane vias', added, 'NO ROOM for', missed if missed else 'none')
+    lay.outline()
+    print(lay.bd.name, 'placed', len(lay.placed_refs()), 'of', len(lay.parts))
+    print(lay.save())
+
+def fpga_board(lay):
+    if lay.bd.name == 'inline':   # Artix-7: the edge-row GTP lane 0 (downstream) leaves on top, the rest dog-bones
+        passives(lay, None)
+        lay.fanout({'A4', 'B4', 'A8', 'B8'}, PLANE_NETS)
+        planes(lay)
+        return
+    hand = sniffer_serdes(lay) if lay.bd.name == 'sniffer' else serdes(lay, lay.bd.name == 'olt')   # exact pairs first
+    passives(lay, 13.0)
+    lay.fanout(hand | {'Y11', 'Y12'} | {b for b in lay.bus_balls() if b[0] == 'A'}, PLANE_NETS)
+    for net in ('CCLK', 'MISO'):  # row channels U/V, V/W west on top (U1-2, V1, W1 unused), out to x = centre - 9
+        bx, _ = ball_xy(lay.ball_of(net))
+        escape(lay, net, [(-9.0 - bx + 0.4, 0)], pcbnew.F_Cu)
+    if lay.bd.name == 'olt':  # PROGRAMN goes east: under the field along its own pad row (empty on B.Cu)
+        bx, _ = ball_xy(lay.ball_of('OLT_PROGRAMN'))
+        escape(lay, 'OLT_PROGRAMN', [(0.4, -0.4), (9.0 - bx, 0)], pcbnew.B_Cu)
+    for net in ('TDO', 'TCK'):  # back to its pad site, west along its (V, T) row line on B.Cu
+        bx, _ = ball_xy(lay.ball_of(net))
+        escape(lay, net, [(-0.4, -0.4), (-8.6 - bx, 0)], pcbnew.B_Cu)
+    planes(lay)
 
 
 if __name__ == '__main__':
@@ -567,33 +609,9 @@ if __name__ == '__main__':
         target = os.path.join(board_dir(lay.bd.name), lay.bd.name + '.kicad_pcb')
         if os.path.exists(target) and not force:  # a routed board is the source from then on
             sys.exit(f'{target} exists: routing would be lost; --force to regenerate')
-        if not lay.bga:
+        if lay.bga:
+            fpga_board(lay)
+        else:
             passives(lay, None)
             hsmc_planes(lay)
-            added, missed = plane_vias(lay)
-            print('plane vias', added, 'NO ROOM for', missed if missed else 'none')
-            lay.outline()
-            print(lay.bd.name, 'placed', len(lay.placed_refs()), 'of', len(lay.parts))
-            print(lay.save())
-            continue
-        direct = lay.bd.name in ('sniffer', 'inline')   # no Nano header
-        hand = sniffer_serdes(lay) if direct else serdes(lay, lay.bd.name == 'olt')   # exact pairs first
-        if lay.bd.name == 'inline':
-            hand |= {'W4', 'W5', 'W8', 'W9'}   # both transmitters: to the router
-        passives(lay, None if lay.bd.name == 'inline' else 13.0)
-        lay.fanout(hand | {'Y11', 'Y12'} | {b for b in lay.bus_balls() if b[0] == 'A'}, PLANE_NETS)
-        for net in ('CCLK', 'MISO'):  # row channels U/V, V/W west on top (U1-2, V1, W1 unused), out to x = centre - 9
-            bx, _ = ball_xy(lay.ball_of(net))
-            escape(lay, net, [(-9.0 - bx + 0.4, 0)], pcbnew.F_Cu)
-        if lay.bd.name == 'olt':  # PROGRAMN goes east: under the field along its own pad row (empty on B.Cu)
-            bx, _ = ball_xy(lay.ball_of('OLT_PROGRAMN'))
-            escape(lay, 'OLT_PROGRAMN', [(0.4, -0.4), (9.0 - bx, 0)], pcbnew.B_Cu)
-        for net in ('TDO', 'TCK'):  # back to its pad site, west along its (V, T) row line on B.Cu
-            bx, _ = ball_xy(lay.ball_of(net))
-            escape(lay, net, [(-0.4, -0.4), (-8.6 - bx, 0)], pcbnew.B_Cu)
-        planes(lay)
-        added, missed = plane_vias(lay)
-        print('plane vias', added, 'NO ROOM for', missed if missed else 'none')
-        lay.outline()
-        print(lay.bd.name, 'placed', len(lay.placed_refs()), 'of', len(lay.parts))
-        print(lay.save())
+        finish(lay)

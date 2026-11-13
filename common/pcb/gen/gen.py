@@ -15,7 +15,8 @@ for board in (makers[n]() for n in sys.argv[1:] or makers):
     d = board_dir(board.name)
     os.makedirs(d, exist_ok=True)
     nets = board.nets()
-    write_schematic(board, f'{d}/{board.name}.kicad_sch', {n for n in nets if n.startswith('+') or n == 'GND'})
+    flagged = {n for n in nets if n.startswith('+') or n == 'GND'} | set(board.flag_nets)
+    write_schematic(board, f'{d}/{board.name}.kicad_sch', flagged)
     write_project(f'{d}/{board.name}.kicad_pro', board)
     open(f'{d}/sym-lib-table', 'w').write(
         '(sym_lib_table\n  (version 7)\n  (lib (name "bridge")(type "KiCad")(uri "' + ki_lib(d) + '/bridge.kicad_sym")(options "")(descr "Bridge boards"))\n)\n')
