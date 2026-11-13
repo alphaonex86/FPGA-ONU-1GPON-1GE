@@ -2,7 +2,7 @@
 """Last step on a routed board: footprint conventions (finish_footprint), GND pours on both outer
 layers, zone refill, dangling copper removed, DRC.
 
-    python3 finish.py <board>.kicad_pcb
+    python3 finish.py <board>.kicad_pcb [<folder the board lives in, when this file is a copy being routed>]
 """
 import collections, json, os, subprocess, sys, tempfile
 import pcbnew, re
@@ -82,8 +82,9 @@ def drop_items(path, uuids):
 
 if __name__ == '__main__':
     path = sys.argv[1]
+    home = sys.argv[2] if len(sys.argv) > 2 else os.path.dirname(os.path.abspath(path))   # 3D model paths start there
     pcb = pcbnew.LoadBoard(path)
-    if outer_pours(pcb) | any([finish_footprint(fp, ki_lib(os.path.dirname(os.path.abspath(path)))) for fp in pcb.Footprints()]):
+    if outer_pours(pcb) | any([finish_footprint(fp, ki_lib(home)) for fp in pcb.Footprints()]):
         pcbnew.SaveBoard(path, pcb, True)   # board only: the .kicad_pro stays write_project's
     errors, open_items = drop_dangling(path)
     print(f'{path}: errors {dict(errors)}, unconnected {open_items}')

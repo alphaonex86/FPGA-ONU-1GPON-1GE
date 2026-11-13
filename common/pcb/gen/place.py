@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from pcbgen import Layout, BGA_C, P, V, plane_vias, PLANE_NETS
 from paths import board_dir
 from boards import onu, olt, hsmc, sniffer, inline, ball_xy
+import bosa
 
 PASSIVE = ('R', 'C', 'FB', 'L', 'RN', 'TP')
 def is_passive(ref):
@@ -41,6 +42,11 @@ def common(lay, h):
     for link in refs(lay, 'Conn_01x08'):                 # OLT-ONU link, under the header's SPI/I2C pins
         lay.place(link, 3.0, 10.0)
     lay.place(refs(lay, 'Conn_01x06')[0], 8.0, 38.0)    # JTAG
+
+def bosa_ports(lay):
+    """The BOSAs by their receiver's net prefix (DS_ / US_)."""
+    out_p = next(pad for pad, lead in bosa.LEADS.items() if lead == 'OUT+')
+    return {lay.parts[r].conns[out_p][:3]: r for r in refs(lay, 'BOSA_GPON')}
 
 def buck_cell(lay, u):
     """TLV62569 (rotated 180, bottom) hot loop: L at SW, Cout at L, Cin at VIN, divider at FB.
@@ -114,7 +120,9 @@ def passives(lay, header_rn_y):
             if not lay.bga and len(nets) == 1 and nets[0].startswith('+'):   # decoupling: at the pins of its own block
                 pts = [lay.pad_xy(u, pin) for u, p in parts.items() if p.block == parts[r].block and not is_passive(u)
                        and u in placed for pin, n in p.conns.items() if n == nets[0]]
-            plane_last = (lambda n: (n in PLANE_NETS, n.startswith('+'))) if not lay.bga else (lambda n: n.startswith('+'))
+            # signals first; between two rails the one with fewer pads: a ferrite sits at its load, not at the plane's centroid
+            plane_last = ((lambda n: (n in PLANE_NETS, n.startswith('+'))) if not lay.bga else
+                          (lambda n: (n.startswith('+'), len(lay.pads_of(n)) if n.startswith('+') else 0)))
             for n in sorted(nets, key=plane_last) if not pts else []:
                 pts = [xy for ref, xy in lay.pads_of(n) if not is_passive(ref)]
                 if pts:
@@ -169,8 +177,9 @@ def sniffer_layout():
     lay.place(refs(lay, 'VCXO_LVDS_3225')[0], 42.0, 37.5)       # at the REFCLK balls Y11/Y12, as on the ONU board
     la = {lay.parts[r].conns['1'][:3]: r for r in refs(lay, 'SY88349NDL')}
     # each limiting amp right at its RX can: the TIA's millivolts stay short, the CML pairs run to the BGA
-    lay.place(refs(lay, 'BOSA_GPON')[0], 49.0, 57.0)             # downstream: body to the east edge, fiber over it
-    lay.place(refs(lay, 'BOSA_RX')[0], 59.0, 43.0)               # upstream: RX can 5 mm from the east edge
+    ports = bosa_ports(lay)
+    lay.place(ports['DS_'], 49.0, 57.0)                          # downstream: body to the east edge, fiber over it
+    lay.place(ports['US_'], 59.0, 43.0)                          # upstream: RX can 5 mm from the east edge
     lay.place(la['DS_'], 56.5, 50.0)                             # north of the X100DG RX can (57.5, 57)
     lay.place(la['US_'], 51.0, 43.0)
     tps = {lay.parts[r].conns['5'][:3]: r for r in refs(lay, 'TPS61391')}   # pin 5 = APD output
@@ -182,12 +191,15 @@ def sniffer_layout():
     return lay
 
 def inline_layout():
-    """USB and its ULPI PHY north-west of the BGA, flash and JTAG west, both optical ports east with their fibres over
-    the edge (OLT port north, ONU port south), each receiver's limiting amp at its can inside a ring of shield clips.
-    The BOSA lands take any lead order (BOSA_PADS). The Artix-7 turned so its ball A1 is north-east: the GTP quad
-    (rows A-F) faces the ports, the ULPI bus (rows Y-AB, columns 1-8) the north-west, the config flash bank
+    """Compact: USB and its ULPI PHY north-west of the BGA, the flash socket and the logic south of it, both optical
+    ports east (OLT port north, ONU port south): each BOSA across the east edge, TX can at the edge, RX can inside with
+    its limiting amp in a ring of shield clips. The fibre leaves over the edge or, from the other end, passes above the
+    low parts west of the RX can (bosa.BOOT): nothing tall there. The Artix-7 turned so its ball A1 is north-east: the
+    GTP quad (rows A-F) faces the ports, the ULPI bus (rows Y-AB, columns 1-8) the north-west, the config flash bank
     (columns 19-22) the south-west."""
-    lay = Layout(inline(), 92, 92)
+    w, h = 84, 54
+    lay = Layout(inline(), w, h)
+    lay.ring, lay.gap = 0.8, 0.15   # dense board: the routers need the channels around each chip
     one = lambda sym: refs(lay, sym)[0]
     by_net = lambda sym, pin: {lay.parts[r].conns[pin][:3]: r for r in refs(lay, sym)}
     lay.bga, lay.core, lay.pitch, lay.island = one('XC7A35T-FGG484'), '+1V0', 1.0, island(11.8)
@@ -196,50 +208,122 @@ def inline_layout():
     assert a1[0] > BGA_C[0] and a1[1] < BGA_C[1], f'ball A1 at {a1}: not north-east'
     lay.keepout['B'].append((BGA_C[0] - 11.5, BGA_C[1] - 11.5, BGA_C[0] + 11.5, BGA_C[1] + 11.5))   # dog-bone via field
     bucks = {lay.parts[r].block: r for r in refs(lay, 'TLV62569DBV')}
-    for rail, xy in (('+1V0', (49.5, 23.0)), ('+1V8', (49.5, 32.5)), ('+3V3', (62.0, 8.0))):   # cells clear of the via field
+    for rail, xy in (('+1V0', (49.5, 23.0)), ('+1V8', (49.5, 32.5)), ('+3V3', (38.0, 41.5))):   # cells clear of the via field
         lay.place(bucks[f'power:{rail}'], *xy, 180, True)
         buck_cell(lay, bucks[f'power:{rail}'])
     lay.place(one('TLV75510PDBV'), 56.0, 31.0, 0, True)    # GTP supplies from +1V8
     lay.place(one('TLV75512PDBV'), 56.0, 35.0, 0, True)
     lay.place(one('USB_C_Receptacle_USB2.0_16P'), 16.0, 4.2, 180)   # mouth over the north edge
     lay.place(one('USBLC6-2SC6'), 25.5, 5.0)
-    lay.place(one('USB3320'), 13.0, 16.0)                             # between the USB-C and bank 34 (ULPI)
-    lay.place(one('W25Q32JVSS'), 12.5, 36.0)
-    lay.place(one('Conn_01x06'), 4.0, 38.0)                          # JTAG
-    lay.place(one('LED'), 12.0, 88.0)
+    lay.place(one('USB3320'), 13.0, 16.0, 180)                        # ULPI pins 1-8 face bank 34, USB pins the west edge
+    lay.place(one('W25Q32JVSS'), 9.0, 34.5)                           # the flash socket, hand reach from the west edge
+    lay.place(one('Conn_01x06'), 2.5, 21.5)                           # JTAG pads (not fitted), west of its balls
+    lay.place(one('LED'), 14.0, 47.5)
     lay.place(one('XO_LVDS_7050'), 44.0, 8.5)                        # north of the REFCLK balls F6/E6
-    for hole, xy in zip(refs(lay, 'MountingHole'), ((4, 4), (88, 4), (4, 88), (64, 88))):
+    for hole, xy in zip(refs(lay, 'MountingHole'), ((4, 4), (w - 4, 25.6), (4, h - 4), (w - 4, h - 4))):   # east: between the ports
         lay.place(hole, *xy)
-    # each port: BOSA body along the east edge, laser driver west of its lead row, limiting amp north of the receiver
-    # row inside three walls of shield clips (the fourth side is the BOSA)
-    ports = {lay.parts[r].conns['R3'][:3]: r for r in refs(lay, 'BOSA_PADS')}   # by the receiver: DS_ = OLT port
+    ports = bosa_ports(lay)   # DS_ = OLT port
     drivers = by_net('MAX3643', '2')
     tps, schottky = by_net('TPS61391', '5'), by_net('D_Schottky', '1')
     amp = {'DS_': one('SY88993AV'), 'US_': one('SY88349NDL')}
     clips = iter(refs(lay, 'SHIELD_CLIP'))
-    for rx, tx, y in (('DS_', 'US_', 48.0), ('US_', 'DS_', 79.0)):
-        lay.place(ports[rx], 86.5, y)
-        lay.place(amp[rx], 86.0, y - 19.0)
-        lay.place(drivers[tx], 65.0, y)
-        lay.place(tps[rx], 68.5, y - 18.0)
-        lay.place(schottky[rx], 68.5, y - 14.4)
-        for cx, cy, rot in ((86.0, y - 23.3, 0), (80.8, y - 19.0, 90), (91.0, y - 19.0, 90)):
+    rx_x = w - 5.0 - bosa.TX_X
+    for rx, tx, y in (('DS_', 'US_', 17.0), ('US_', 'DS_', 42.0)):   # y: the BOSA's axis
+        lay.place(ports[rx], rx_x, y)
+        lay.place(amp[rx], rx_x - 4.0, y - 8.5, 180)      # north-west of the can: inputs east at its leads A / B, outputs west
+        tia_pair(lay, amp[rx], ports[rx], rx, rx_x - 1.6, y - 5.5)
+        for t, dx in (('P', -0.2), ('N', -1.2)):          # AC caps to a top-escaped lane: on top, inside the can, toward
+            cap = next((r for r, p in lay.parts.items()   # its open south side (the clips wall the other three)
+                        if r.startswith('C') and f'{rx}RX_{t}' in p.conns.values()), None)
+            if cap:
+                pad = next(n for n, net in lay.parts[cap].conns.items() if net == f'{rx}LA_{t}')
+                lay.place_pad(cap, pad, pad_of_net(lay, amp[rx], f'{rx}LA_{t}')[0] + dx, y - 8.5 + 2.2, (0, 1), bottom=False)
+        pecl_outputs(lay, amp[rx], rx)
+        for cx, cy, rot in ((rx_x - 4.0, y - 12.8, 0), (rx_x - 8.9, y - 8.5, 90), (rx_x + 2.6, y - 8.5, 90)):
             lay.place(next(clips), cx, cy, rot)
-    lay.place(one('74LVC1G07'), 56.0, 38.5)
+        lay.place(drivers[tx], w - 5.0, y - 8.0, 270, True)   # bottom, on the TX can's axis: outputs (pins 13-18) face its leads
+        laser_cell(lay, drivers[tx], tx)
+        lay.place(tps[rx], rx_x - 5.0, y + 7.5, 0, True)  # APD bias south-west of the RX can, on the bottom with its parts
+        lay.place(schottky[rx], rx_x - 0.4, y + 7.5, 0, True)
     gate, cut = sorted(refs(lay, '74LVC1G97'), key=lambda r: lay.parts[r].block != 'gate')
-    lay.place(gate, 61.5, 38.5)
-    lay.place(one('74LVC1G123'), 55.0, 56.0)
-    lay.place(cut, 60.5, 56.0)
-    lay.place(one('74LVC1G32'), 65.5, 57.0)
-    lay.place(one('TLV3501AIDBV'), 62.0, 64.0)
+    chain = (one('74LVC1G07'), gate, one('74LVC1G123'), cut)   # the upstream laser's gate and cutoff: on top, over the bucks
+    for k, r in enumerate(chain):
+        lay.place(r, 47.5, 37.0 + 3.4 * k)
+    lay.place(one('74LVC1G32'), 52.0, 47.0)
+    lay.place(one('TLV3501AIDBV'), rx_x - 10.5, 49.5)    # at the ONU port's APD monitor
     dacs = {lay.parts[r].conns['2']: r for r in refs(lay, 'MCP4728')}   # by clock: SCL feeds the OLT port's
-    lay.place(dacs['SCL'], 47.0, 53.0)
-    lay.place(one('ADS7828'), 47.0, 64.0)
-    lay.place(dacs['SCL2'], 47.0, 76.0)
-    for r in refs(lay, 'D'):                  # each laser's dummy-load diodes beside its driver
-        x, y = P(lay.fps[drivers[lay.parts[r].block[-3:]]].GetPosition())
-        lay.place_near(r, x + 4.0, y - 5.0)
+    lay.place(dacs['SCL'], 52.0, 5.5)     # beside the OLT port it sets
+    lay.place(dacs['SCL2'], 23.0, 46.5)
+    lay.place(one('ADS7828'), 33.0, 44.5)
     return lay
+
+def tia_pair(lay, la, port, p, x, y):
+    """The receiver's millivolt pair, on top inside the can: the coupling capacitors side by side at the can's open
+    south side (P at x), each termination beside its capacitor, and the tracks laid here: from the BOSA leads, then up
+    the amplifier's east side to its inputs (P inside, N around it)."""
+    def part(prefix, a, b):
+        return next(r for r, q in lay.parts.items() if r.startswith(prefix) and {a, b} <= set(q.conns.values()))
+    pad = lambda r, net: next(n for n, v in lay.parts[r].conns.items() if v == net)
+    pins = {t: next(q for q in lay.fps[la].Pads() if q.GetNetname() == f'{p}DIN_{t}') for t in 'PN'}
+    east = max(P(q.GetBoundingBox().GetEnd())[0] for q in pins.values())
+    for t, cx, run, side in (('P', x, east + 0.3, -1), ('N', x + 1.0, east + 1.2, 1)):
+        din, tia = f'{p}DIN_{t}', f'{p}TIA_{t}'
+        cap, term = part('C', din, tia), part('R', din, f'{p}VREF')
+        lay.place_pad(cap, pad(cap, din), cx, y, (0, 1), bottom=False)
+        lay.place_pad(term, pad(term, din), cx + side, y, (side, 0), bottom=False)
+        pin_y = P(pins[t].GetPosition())[1]
+        lay.track(din, [(cx + side, y), (cx, y), (run, y - abs(run - cx)), (run, pin_y), (east - 0.1, pin_y)], lay.bd.serdes_w)
+        lx, ly = pad_of_net(lay, port, tia)
+        lay.track(tia, [(cx, y + 1.02), (cx, ly - abs(lx - cx)), (lx, ly)], lay.bd.serdes_w)
+        offset = next((r for r, q in lay.parts.items() if r.startswith('R') and set(q.conns.values()) == {din, 'GND'}), None)
+        if offset:   # the burst receiver's offset resistor: inside the can too, no stub
+            lay.place_pad(offset, pad(offset, din), cx + side, y + 1.0, (side, 0), bottom=False)
+            lay.track(din, [(cx + side, y), (cx + side, y + 1.0)], lay.bd.serdes_w)
+
+def pecl_outputs(lay, la, p):
+    """A DC-coupled limiting amplifier's outputs, on top inside the can west of its pins: each series resistor in line
+    with its pin, the emitter load beside it (P south, N north), and a via each down to the bottom: the legs leave alike."""
+    def part(a, b):
+        return next((r for r, q in lay.parts.items() if r.startswith('R') and set(q.conns.values()) == {a, b}), None)
+    pad = lambda r, net: next(n for n, v in lay.parts[r].conns.items() if v == net)
+    for t, away in (('P', 1), ('N', -1)):
+        out, rx = f'{p}LA_{t}', f'{p}RX_{t}'
+        series, load = part(out, rx), part(out, 'GND')
+        if not series:
+            return
+        x, y = pad_of_net(lay, la, out)
+        lay.place_pad(series, pad(series, out), x - 1.15, y, (-1, 0), bottom=False)
+        lay.place_pad(load, pad(load, out), x - 1.15, y + away, (0, away), bottom=False)
+        vx, vy = pad_of_net(lay, series, rx)
+        lay.track(out, [(x, y), (x - 1.15, y), (x - 1.15, y + away)], lay.bd.serdes_w)
+        lay.track(rx, [(vx, vy), (vx, vy + 0.75 * away)], lay.bd.serdes_w)
+        lay.via(rx, vx, vy + 0.75 * away)
+        lay.rects['B'].append((vx - 0.45, vy + 0.75 * away - 0.45, vx + 0.45, vy + 0.75 * away + 0.45))   # no bottom part on the via
+
+def laser_cell(lay, driver, p):
+    """The laser current's parts between the driver's output pins and the TX can: the series resistors in a row south
+    of their pins, each dummy-load diode beside its resistor; the input pair's termination north of its pins; the three
+    current-setting resistors at their pins (IMAX east, MODSET / BIASSET west). Their tracks are laid here: straight,
+    and clear of the via each VCC pin between them needs."""
+    def wire(net, r, x, y, toward, jog):
+        pin = pad_of_net(lay, driver, net)
+        lay.place_pad(r, next(n for n, v in lay.parts[r].conns.items() if v == net), x, y, toward)
+        lay.track(net, [pin, (pin[0], y - jog), (x, y)], lay.bd.serdes_w, pcbnew.B_Cu)
+    for pin, dx, dy, toward in (('IMAX', 1.5, 0, (0, 1)), ('MODSET', -1.0, 0.2, (-1, 0)), ('BIASSET', -1.0, -0.2, (-1, 0))):
+        net = f'{p}LD_{pin}'
+        (x, y), r = pad_of_net(lay, driver, net), part_on(lay, net, 'R')
+        lay.place_pad(r, next(n for n, v in lay.parts[r].conns.items() if v == net), x + dx, y + dy, toward)
+        lay.track(net, [(x, y), (x + dx - math.copysign(abs(dy), dx), y), (x + dx, y + dy)], 0.1, pcbnew.B_Cu)
+    term, (x, y) = part_on(lay, f'{p}LD_IN_P', 'R'), pad_of_net(lay, driver, f'{p}LD_IN_P')
+    wire(f'{p}LD_IN_P', term, x - 0.26, y - 2.0, (1, 0), -0.6)
+    lay.track(f'{p}LD_IN_N', [(x + 0.5, y), (x + 0.5, y - 1.4), pad_of_net(lay, term, f'{p}LD_IN_N')], lay.bd.serdes_w, pcbnew.B_Cu)
+    row = lay.pad_xy(driver, '16')[1] + 1.5
+    for pin, dx in (('OUT_P', 0), ('BIAS_P', 0), ('OUT_N', -0.5), ('BIAS_N', 0.5)):
+        net = f'{p}LD_{pin}'
+        x = pad_of_net(lay, driver, net)[0] + dx
+        wire(net, part_on(lay, net, 'R'), x, row, (0, 1), 0.5)
+        if dx:
+            lay.place_near(part_on(lay, f'{net}_D', 'D'), x + 3.2 * dx, row + 1.0, bottom=True, rot=90)
 
 def sniffer_serdes(lay):
     """RX0 (Y5/Y6, downstream) and RX1 (Y7/Y8, upstream) straight south to their AC caps; TX balls stay open."""
@@ -580,6 +664,10 @@ def fpga_board(lay):
     if lay.bd.name == 'inline':   # Artix-7: the edge-row GTP lane 0 (downstream) leaves on top, the rest dog-bones
         passives(lay, None)
         lay.fanout({'A4', 'B4', 'A8', 'B8'}, PLANE_NETS)
+        for ball in ('B4', 'B8'):   # second row: out through its own dog-bone site, between the edge balls
+            x, y = lay.pad_xy(lay.bga, ball)
+            net = next(p.GetNetname() for p in lay.fps[lay.bga].Pads() if p.GetNumber() == ball)
+            lay.track(net, [(x, y), (x + 0.5, y - 0.5), (x + 2.0, y - 0.5)], lay.bd.serdes_w)
         planes(lay)
         return
     hand = sniffer_serdes(lay) if lay.bd.name == 'sniffer' else serdes(lay, lay.bd.name == 'olt')   # exact pairs first
@@ -597,12 +685,17 @@ def fpga_board(lay):
     planes(lay)
 
 
+FORMER_BOSA = {'onu', 'hsmc', 'sniffer'}   # routed with the estimated land: updated once the leads are measured (bosa.py)
+
 if __name__ == '__main__':
     force = '--force' in sys.argv
     names = [a for a in sys.argv[1:] if not a.startswith('-')] or ['olt', 'onu', 'hsmc', 'sniffer', 'inline']
     for make in (olt_layout, onu_layout, hsmc_layout, sniffer_layout, inline_layout):
-        if make.__name__.split('_')[0] not in names:
+        board = make.__name__.split('_')[0]
+        if board not in names:
             continue
+        if board in FORMER_BOSA:
+            sys.exit(f'{board}: placed for the former BOSA land (origin, can distance): convert its layout first')
         lay = make()
         target = os.path.join(board_dir(lay.bd.name), lay.bd.name + '.kicad_pcb')
         if os.path.exists(target) and not force:  # a routed board is the source from then on

@@ -5,6 +5,7 @@ import os, re
 from kisch import Board
 from hsmcpins import pinout as hsmc_pinout
 from sexp import lib_symbol, pins
+import bosa
 
 LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'lib', 'bridge.kicad_sym')
 R0402, C0402 = 'Resistor_SMD:R_0402_1005Metric', 'Capacitor_SMD:C_0402_1005Metric'
@@ -56,6 +57,12 @@ def assign_balls(signals, clock):
 class Bridge(Board):
     serdes_w = 0.2   # router width of the SerDes netclass
     serdes_nets = ()  # this board's own SerDes netclass patterns, besides pcbgen's
+    power_nets = ()   # supply nets not named '+...': Power netclass too
+
+    def add(self, prefix, lib, symname, value, footprint, conns, **kw):
+        if symname == 'BOSA_GPON':   # until its leads are measured: fab.py refuses the board
+            kw = {**bosa.VERIFY, **kw}
+        return super().add(prefix, lib, symname, value, footprint, conns, **kw)
     flag_nets = ()    # power inputs fed through a part (a power flag in the schematic)
 
     def r(self, value, a, b, fp=R0402, **fields):
@@ -163,7 +170,8 @@ class Bridge(Board):
         return balls
 
     def artix7(self, misc):
-        """XC7A35T-2FGG484I, its supplies and configuration: master SPI from its flash (M = 001), JTAG; GTP quad 216
+        """XC7A35T-2FGG484I, its supplies and configuration: master SPI from its flash (M = 001), JTAG pads (header not
+        fitted); GTP quad 216
         lanes 0 (DS_) and 1 (US_) on MGTREFCLK0, lanes 2-3 unused (UG482 Table 5-6: RX to GND, TX open); XADC, thermal
         diode and key battery unused (UG480, UG470). misc: {net: ball}, every ball LVCMOS33."""
         self.block = 'power'
@@ -203,7 +211,7 @@ class Bridge(Board):
             self.r(value, net, '+3V3')
         self.r('4.7k', 'TCK', 'GND')
         self.add('J', 'Connector_Generic', 'Conn_01x06', 'JTAG', 'Connector_PinHeader_2.54mm:PinHeader_1x06_P2.54mm_Vertical',
-                 {'1': '+3V3', '2': 'TCK', '3': 'TDI', '4': 'TDO', '5': 'TMS', '6': 'GND'})
+                 {'1': '+3V3', '2': 'TCK', '3': 'TDI', '4': 'TDO', '5': 'TMS', '6': 'GND'}, dnp=True)   # rescue only
 
     def header(self, signals):
         self.block = 'header'
@@ -260,7 +268,7 @@ def optics(b, tx='TX0', rx='RX0', ben='BEN'):
     b.add('U', LIB, 'BOSA_GPON', 'BOSA GPON (X100DG)', 'bridge:BOSA_GPON',
           {'LD_A': '+3V3_OPT', 'LD_K': 'LD_K', 'MPD_A': 'LD_MD', 'MPD_K': '+3V3_OPT',
            'VAPD': 'HV_APD', 'VCC': '+3V3_RX', 'OUT+': 'TIA_P', 'OUT-': 'TIA_N', 'GND': 'GND'},
-          MPN='desoldered from an X100DG; pad order to measure')
+          MPN='desoldered from an X100DG')
     apd_bias(b)
     b.block = 'ddm'
     b.add('U', 'Analog', 'AD5593R', 'AD5593RBRUZ', 'Package_SO:TSSOP-16_4.4x5mm_P0.65mm',
@@ -461,7 +469,7 @@ def sniffer():
     # DS: continuous, 100 nF. US: bursts, 220 pF: tau = 50 ohm * 220 pF = 11 ns settles within the GPON preamble
     # and stays far above the scrambler's 7-bit runs (5.6 ns at 1.24416 Gb/s).
     receiver(b, 'DS_', ('BOSA_GPON', 'BOSA GPON (X100DG), RX can only', 'bridge:BOSA_GPON'), '100n')
-    receiver(b, 'US_', ('BOSA_RX', 'XL-BCB2111-LS-02, RX can only', 'bridge:BOSA_RX_TO46'), '220p')
+    receiver(b, 'US_', ('BOSA_GPON', 'XL-BCB2111-LS-02, RX can only', 'bridge:BOSA_GPON'), '220p')
     apd_bias(b, 'DS_')
     apd_bias(b, 'US_', '330k')   # XL-BCB2111 Vbr up to 60 V: 330k gives 19..61 V over the DAC range
     b.block = 'ddm'
@@ -541,13 +549,14 @@ def laser(b, p, data, dis, ben=None):
 def inline():
     """In-line GPON sniffer (../FPGA-USB-GPON-sniffer/README.md): in one ONU's drop fibre, both directions regenerated
     through the Artix-7 and dumped over USB. OLT port: ONU-type BOSA (DS_ receiver, US_ burst laser); ONU port: OLT-type
-    BOSA (US_ burst receiver, DS_ laser), both on pad rows that fit any lead order. USB: USB3320 ULPI PHY to the FPGA (LUNA serial device); flash and FPGA
-    written over the JTAG header.
+    BOSA (US_ burst receiver, DS_ laser), both on the X100DG BOSA land (the OLT type assumed alike). USB: USB3320 ULPI PHY to the FPGA (LUNA serial device); the bitstream's
+    flash sits in a DIP-8 socket (written in a programmer), the JTAG header is not fitted.
     The upstream laser lights only while the ONU-port receiver sees light (US_QUIET low, no FPGA in that path) and
     the max-burst cutoff ends what stays on."""
     b = Bridge('inline', 'In-line GPON sniffer: USB, Artix-7, OLT and ONU optical ports')
     b.serdes_nets = ('DS_TIA_*', 'DS_DIN_*', 'DS_LA_*', 'DS_RX_*', 'DS_TX_*', 'US_TX_*', 'REFCLK_*', 'XO_OUT_*', 'USB_D?', '*_LD_IN_*',
                      '*_LD_OUT_*', '*_LD_BIAS_*', '*_LD_K', '*_LD_A')   # the lasers' currents too
+    b.power_nets = ('VBUS',)   # the whole board's current
     b.block = 'usb'
     b.add('J', 'Connector', 'USB_C_Receptacle_USB2.0_16P', 'USB-C', 'Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12',
           {'VBUS': 'VBUS', 'GND': 'GND', 'SHIELD': 'GND', 'CC1': 'USB_CC1', 'CC2': 'USB_CC2', 'D+': 'USB_DP', 'D-': 'USB_DM'},
@@ -562,7 +571,7 @@ def inline():
            'VBAT': '+5V', 'VDD33': 'USB_VDD33', 'VDD18': '+1V8_USB', 'VDDIO': '+3V3', 'VBUS': 'USB_VBUS_SENSE',
            'DP': 'USB_DP', 'DM': 'USB_DM', 'ID': 'USB_VDD33', 'GND': 'GND'}
     phy.update({f'DATA{i}': f'ULPI_D{i}' for i in range(8)})
-    b.add('U', LIB, 'USB3320', 'USB3320C-EZK-TR', 'Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm', phy,
+    b.add('U', LIB, 'USB3320', 'USB3320C-EZK-TR', 'Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm_ThermalVias', phy,
           MPN='USB3320C-EZK-TR')
     b.c('2.2u', 'USB_VDD33'); b.decouple('+3V3', 1)   # VDD33: its regulator's output, 2.2 uF < 1 ohm ESR
     b.fb('+1V8', '+1V8_USB'); b.decouple('+1V8_USB', 2); b.c('1u', '+1V8_USB')
@@ -576,9 +585,10 @@ def inline():
             'US_BEN': 'B22', 'US_LASER_DIS': 'C22', 'DS_LASER_DIS': 'D22', 'DS_LOS': 'E22', 'US_ABOVE': 'G22',
             'BURST_CUT': 'B21', 'SCL': 'D21', 'SCL2': 'E21', 'SDA': 'F21', 'LED_SYNC': 'G21', 'APD_EN': 'A21'}
     b.artix7(misc)
-    b.add('U', 'Memory_Flash', 'W25Q32JVSS', 'W25Q32JVSSIQ', 'Package_SO:SOIC-8_5.3x5.3mm_P1.27mm',
+    # the bitstream's flash in a socket: written in a programmer, no JTAG needed (JLC places the socket only)
+    b.add('U', 'Memory_Flash', 'W25Q32JVSS', 'W25Q32 DIP-8 in a socket', 'Package_DIP:DIP-8_W7.62mm_Socket',
           {'1': 'FLASH_CS', '2': 'MISO', '3': 'FLASH_WP', '4': 'GND', '5': 'MOSI', '6': 'CCLK', '7': 'FLASH_HOLD', '8': '+3V3'},
-          MPN='W25Q32JVSSIQ')
+          MPN='DS1001-01-08BT1NSF6X-JKB')
     for net in ('MISO', 'FLASH_WP', 'FLASH_HOLD'):
         b.r('10k', net, '+3V3')
     b.decouple('+3V3', 1)
@@ -594,8 +604,8 @@ def inline():
     # OLT port: downstream in (continuous: SY88993AV, squelched by its own LOS), upstream bursts out
     b.block = 'rx:DS_'
     b.fb('+3V3', '+3V3_DS_OPT'); b.decouple('+3V3_DS_OPT', 3, 1)
-    b.add('U', LIB, 'BOSA_PADS', 'GPON ONU BOSA', 'bridge:BOSA_PADS',
-          {'LD_A': 'US_LD_A', 'LD_K': 'US_LD_K', 'MPD_A': 'US_MPD_A', 'CASE': 'GND', 'STRAP': 'GND',
+    b.add('U', LIB, 'BOSA_GPON', 'GPON ONU BOSA', 'bridge:BOSA_GPON',
+          {'LD_A': 'US_LD_A', 'LD_K': 'US_LD_K', 'MPD_A': 'US_MPD_A', 'MPD_K': 'US_LD_A',
            'VAPD': 'DS_HV_APD', 'VCC': '+3V3_DS_OPT', 'OUT+': 'DS_TIA_P', 'OUT-': 'DS_TIA_N', 'GND': 'GND'},
           MPN='GPON ONU BOSA, APD-TIA receiver (1310 nm DFB, 1490 nm APD)')
     for t in 'PN':
@@ -621,8 +631,8 @@ def inline():
 
     # ONU port: upstream bursts in, downstream out; the fixed pad is on the fibre
     b.block = 'bosa:onu'
-    b.add('U', LIB, 'BOSA_PADS', 'GPON OLT BOSA', 'bridge:BOSA_PADS',
-          {'LD_A': 'DS_LD_A', 'LD_K': 'DS_LD_K', 'MPD_A': 'DS_MPD_A', 'CASE': 'GND', 'STRAP': 'GND',
+    b.add('U', LIB, 'BOSA_GPON', 'GPON OLT BOSA', 'bridge:BOSA_GPON',
+          {'LD_A': 'DS_LD_A', 'LD_K': 'DS_LD_K', 'MPD_A': 'DS_MPD_A', 'MPD_K': 'DS_LD_A',
            'VAPD': 'US_HV_APD', 'VCC': '+3V3_US_OPT', 'OUT+': 'US_TIA_P', 'OUT-': 'US_TIA_N', 'GND': 'GND'},
           MPN='XL-BCB2111-LS-02')
     receiver(b, 'US_', None, '220p', la='SY88149NDLMG', detect='LOS', dc=True)

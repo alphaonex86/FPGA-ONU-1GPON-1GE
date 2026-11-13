@@ -5,6 +5,8 @@ DRC) closes each. Score, lowest first: unconnected, DRC errors, vias, track leng
 competes too, so a worse result never replaces it. Routing is the last step: once nothing moves pins any more.
 
     python3 common/pcb/gen/route.py [olt] [onu] [hsmc] [sniffer] [<path>.kicad_pcb]    (routers: FPGAcommon/hw, HW=<dir>)
+    STRATEGIES=fr-engine FREEROUTING_HEAP_GB=4 python3 common/pcb/gen/route.py inline    (one strategy, a small heap:
+    by default all of them run at once and each freerouting waits for 17 GB of free memory)
 """
 import concurrent.futures, glob, os, shutil, subprocess, sys, tempfile
 GEN = os.path.dirname(os.path.abspath(__file__))
@@ -50,8 +52,16 @@ def mlroute(work, board, log):
     if run(log, ['python3', f'{HW}/mlroute.py', board, report, out], work) == 0 and os.path.exists(out):
         shutil.move(out, board)
 
+def engine(work, board, log):   # IA-PCB's router on what is still open, the copper already there kept
+    repo = os.environ.get('IAPCB_REPO', '/mnt/data/perso/confiared/software/IA-PCB-pinout-position-route')
+    out = os.path.join(work, 'engine.kicad_pcb')
+    rc = run(log, [f'{repo}/krtenv/bin/python', '-u', f'{repo}/router/py_router/route.py', board, out, '--keep-input-copper'],
+             f'{repo}/router')
+    if rc == 0 and os.path.exists(out):
+        shutil.move(out, board)
+
 def finish(work, board, log):
-    return run(log, ['python3', f'{GEN}/finish.py', board], work, ok=(0, 1)) == 0   # 1: not clean
+    return run(log, ['python3', f'{GEN}/finish.py', board, home], work, ok=(0, 1)) == 0   # 1: not clean
 
 def if_open(step):   # only after a finish that left the board unclean
     return ('open', step)
@@ -62,6 +72,8 @@ STRATEGIES = {   # each a list of steps; the first is the former route.sh
                     finish],
     'krt-fr': [krt, finish, if_open(freerouting()), finish],
     'fr-krt-ml': [freerouting(), krt, finish, if_open(mlroute), finish],
+    # the engine alone necks power and SerDes tracks: only as the closer
+    'fr-engine': [freerouting(), engine, finish, if_open(freerouting(iterations=2)), if_open(engine), finish],
 }
 
 def strategy(name, steps, src, root):
@@ -87,10 +99,10 @@ def key(s):   # (tracks, vias, length, layers, violations, unconnected); -1: the
 
 for name in sys.argv[1:] or ['olt', 'onu']:
     src = os.path.abspath(name) if name.endswith('.kicad_pcb') else os.path.join(board_dir(name), f'{name}.kicad_pcb')
-    name = os.path.basename(src)[:-len('.kicad_pcb')]
+    name, home = os.path.basename(src)[:-len('.kicad_pcb')], os.path.dirname(src)
     root = tempfile.mkdtemp(prefix=f'route_{name}_')
     with concurrent.futures.ThreadPoolExecutor(len(STRATEGIES)) as pool:
-        jobs = {s: pool.submit(strategy, s, steps, src, root) for s, steps in STRATEGIES.items()}
+        jobs = {s: pool.submit(strategy, s, STRATEGIES[s], src, root) for s in os.environ.get('STRATEGIES', ','.join(STRATEGIES)).split(',')}
     results = {'input': src}
     for s, job in jobs.items():
         try:

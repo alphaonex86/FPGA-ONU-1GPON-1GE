@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 """JLCPCB order package of a routed board: <board dir>/fab/ with the gerber zip, BOM and CPL in JLC's columns and a
-README of what JLC cannot place (plus <board dir>/order-notes.md). Parts come from <board dir>/lcsc.csv (value,
+README of what JLC cannot place (plus <board dir>/order-notes.md); a part with a `Verify` field stops it. Parts come from <board dir>/lcsc.csv (value,
 footprint, MPN -> LCSC code, or 'consign' / 'hand'); a part missing there or a DRC error stops it.
 
     python3 common/pcb/gen/fab.py hsmc [--stock]     (--stock: current JLC stock of every code, network)
@@ -31,9 +31,12 @@ with tempfile.TemporaryDirectory() as tmp:
     errors = sum(len(drc.get(k, [])) for k in ('violations', 'unconnected_items', 'schematic_parity'))
     if errors:
         sys.exit(f'{name}: {errors} DRC errors, unconnected items or parity issues: not packaged')
-    cli('sch', 'export', 'bom', '--fields', 'Reference,Value,Footprint,MPN,${DNP}', '--group-by', 'Value,Footprint,MPN',
-        '-o', f'{tmp}/bom.csv', sch)
+    cli('sch', 'export', 'bom', '--exclude-dnp', '--fields', 'Reference,Value,Footprint,MPN,Verify',
+        '--group-by', 'Value,Footprint,MPN', '-o', f'{tmp}/bom.csv', sch)
     groups = list(csv.DictReader(open(f'{tmp}/bom.csv')))
+    unsure = [f"  {g['Reference']}: {g['Verify']}" for g in groups if g['Verify']]
+    if unsure:   # a part marked to check first (boards.py: a `Verify` field)
+        sys.exit(f'{name}: not packaged, to verify first:\n' + '\n'.join(unsure))
     cli('pcb', 'export', 'pos', '--format', 'csv', '--units', 'mm', '--side', 'both', '--exclude-dnp', '-o', f'{tmp}/pos.csv', pcb)
     pos = {r['Ref']: r for r in csv.DictReader(open(f'{tmp}/pos.csv'))}
     shutil.rmtree(out, ignore_errors=True)
@@ -62,8 +65,6 @@ def refs(text):   # "R13-R18,R21" -> ['R13', ..., 'R18', 'R21']
 bom, cpl, offboard = [], [], collections.defaultdict(list)
 for g in groups:
     part, rs = parts[(g['Value'], g['Footprint'], g['MPN'])], refs(g['Reference'])
-    if g['DNP']:
-        continue
     if part['lcsc'] in ('consign', 'hand'):
         offboard[part['lcsc']].append((g['Reference'], g['MPN'] or g['Value'], part['note']))
         if part['lcsc'] == 'hand':
@@ -86,7 +87,7 @@ shutil.make_archive(f'{out}/{name}-gerber', 'zip', f'{out}/gerber')
 
 lines = [f'# {name}: JLCPCB order', '',
          'Upload `' + f'{name}-gerber.zip' + '`: 4 layers, 1.6 mm, JLC04161H-7628 stackup (the SerDes widths assume it), '
-         'ENIG (0.5 mm pitch HSMC connector and QFNs). PCBA: both sides (J1, the HSMC connector, is on the bottom); '
+         'ENIG (BGA / 0.5 mm pitch parts). PCBA: both sides; '
          f'`{name}-bom.csv` and `{name}-cpl.csv`. Check every rotation in JLC\'s placement preview: KiCad and JLC '
          'footprint zero orientations differ for some packages.', '']
 for kind, title in (('consign', 'Supplied by us (consigned, or JLC global sourcing)'), ('hand', 'Soldered by hand after assembly')):

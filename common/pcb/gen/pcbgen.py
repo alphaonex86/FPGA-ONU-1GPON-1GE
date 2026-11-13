@@ -65,6 +65,8 @@ def finish_footprint(fp, lib):
     return changed
 
 class Layout:
+    ring, gap = 0.15, 0.15   # kept clear around a placed part of more than 4 pads (its escapes) / around the others
+
     def __init__(self, bd, width, height):
         self.bd, self.w, self.h = bd, width, height
         self.notch = None   # (x, y): the corner west of x and south of y cut away
@@ -117,7 +119,7 @@ class Layout:
             fp.SetLayerAndFlip(pcbnew.B_Cu if bottom else pcbnew.F_Cu)
         fp.SetOrientationDegrees(rot)
         fp.SetPosition(V(x, y))
-        self.rects['B' if bottom else 'F'].append(self.rect(fp))
+        self.rects['B' if bottom else 'F'].append(self.rect(fp, self.ring if fp.GetPadCount() > 4 else self.gap))
         if fp.GetAttributes() & pcbnew.FP_THROUGH_HOLE or any(p.GetAttribute() in (pcbnew.PAD_ATTRIB_PTH, pcbnew.PAD_ATTRIB_NPTH) for p in fp.Pads()):
             self.rects['F' if bottom else 'B'].append(self.rect(fp, 0.1))  # holes block the other side
         return fp
@@ -141,7 +143,7 @@ class Layout:
                 a = 2 * math.pi * k / n
                 px, py = round((x + radius * step * math.cos(a)) / 0.05) * 0.05, round((y + radius * step * math.sin(a)) / 0.05) * 0.05
                 fp.SetPosition(V(px, py))
-                r = self.rect(fp)
+                r = self.rect(fp, self.gap)
                 inside = within is None or (within[0] <= r[0] and within[1] <= r[1] and r[2] <= within[2] and r[3] <= within[3])
                 if inside and self.free(r, side):
                     self.rects[side].append(r)
@@ -191,8 +193,10 @@ class Layout:
         return self.parts[ref].block in ('ecp5_support', 'fpga_support')
 
     def on_bottom_net(self, nets):
-        return any(self.fps[r].IsFlipped() for n in nets if not n.startswith(POWER_PREFIX) for r, xy in self.pads_of(n)
-                   if r.rstrip('0123456789') not in ('R', 'C', 'FB', 'L', 'RN', 'TP'))
+        """A signal that reaches a chip on the bottom, or a rail that only bottom chips use."""
+        def chips(n):
+            return [self.fps[r].IsFlipped() for r, xy in self.pads_of(n) if r.rstrip('0123456789') not in ('R', 'C', 'FB', 'L', 'RN', 'TP')]
+        return any(all(c) and bool(c) if n.startswith(POWER_PREFIX) else any(c) for n, c in ((n, chips(n)) for n in nets))
 
     def header(self, east_x, odd_y):
         """2x20 socket on the bottom: pin 1 east, pins westward, even row south (outward)."""
@@ -313,7 +317,7 @@ def write_project(path, bd):
                   'min_copper_edge_clearance': 0.3, 'min_silk_clearance': 0.0},
         'rule_severities': {'lib_footprint_mismatch': 'ignore'},   # finish_footprint moves silk to fab on purpose
         'track_widths': [0.1, 0.15, 0.2, 0.3, 0.5], 'via_dimensions': [{'diameter': VIA_D, 'drill': VIA_HOLE}]}}
-    power = [n for n in bd.nets() if n.startswith(POWER_PREFIX)]
+    power = [n for n in bd.nets() if n.startswith(POWER_PREFIX) or n in bd.power_nets]
     # BGA rails without a plane thread the via field: 0.35 mm channels fit 0.15 mm at 0.1 clearance
     fpga = next((p for p in bd.parts if p.value.startswith(('LFE5', 'XC7A'))), None)
     rails = sorted({n for n in fpga.conns.values() if n.startswith('+')} - set(PLANE_NETS) - set(SUB_RAILS)) if fpga else []

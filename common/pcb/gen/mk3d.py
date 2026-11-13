@@ -9,6 +9,7 @@ import math, os
 import pcbnew
 from pcbgen import fp_dir
 from paths import LIB
+import bosa
 
 OUT = os.path.join(LIB, '3d')
 BLACK, SUBSTRATE, SOLDER, GOLD = (0.12, 0.12, 0.13), (0.30, 0.25, 0.12), (0.78, 0.78, 0.80), (0.86, 0.66, 0.22)
@@ -117,13 +118,53 @@ def pads(lib, name):
     return [(p.GetNumber(), pcbnew.ToMM(p.GetPosition().x), -pcbnew.ToMM(p.GetPosition().y),
              pcbnew.ToMM(p.GetSize().x), pcbnew.ToMM(p.GetSize().y), pcbnew.ToMM(p.GetDrillSize().x)) for p in fp.Pads()]
 
-def cabga381(s):
-    stand, substrate, top = 0.30, 0.36, 1.36   # ~: ball standoff, laminate, total seated height
-    for _, x, y, *_ in pads('Package_BGA', 'Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm'):
-        s.solid(ball(x, y, 0.45, 0, stand), SOLDER)
-    s.solid(box(-8.5, -8.5, stand, 8.5, 8.5, stand + substrate), SUBSTRATE)
-    s.solid(box(-8.45, -8.45, stand + substrate, 8.45, 8.45, top), BLACK)
-    s.solid(prism(circle(-7.3, 7.3, 0.35), top, top + 0.01), MARK)   # pin A1 corner
+def bga(name, half, ball_d, stand, substrate, top):
+    """~: ball standoff, laminate thickness, total seated height."""
+    def make(s):
+        for _, x, y, *_ in pads('Package_BGA', name):
+            s.solid(ball(x, y, ball_d, 0, stand), SOLDER)
+        s.solid(box(-half, -half, stand, half, half, stand + substrate), SUBSTRATE)
+        s.solid(box(-half + 0.05, -half + 0.05, stand + substrate, half - 0.05, half - 0.05, top), BLACK)
+        s.solid(prism(circle(-half + 1.2, half - 1.2, 0.35), top, top + 0.01), MARK)   # pin A1 corner
+    return make
+
+def xo7050(s):
+    base, lid = 1.2, 1.7   # ~ 7.0 x 5.0 x 1.7 mm ceramic base + metal lid
+    for num, x, y, w, h, _ in pads('Oscillator', 'Oscillator_SMD_IDT_JU6-6_7.0x5.0mm_P2.54mm'):
+        s.solid(box(x - w / 2 + 0.3, y - h / 2 + 0.4, 0, x + w / 2 - 0.3, y + h / 2 - 0.4, 0.03), GOLD)
+    s.solid(box(-2.5, -3.5, 0.03, 2.5, 3.5, base), CERAMIC)
+    s.solid(box(-2.3, -3.3, base, 2.3, 3.3, lid), STEEL)
+    s.solid(prism(circle(-1.7, 2.7, 0.2), lid, lid + 0.01), MARK)   # pin 1
+
+def usb_c(s):
+    """~ 16-pin USB-C receptacle (TYPE-C-31-M-12): 8.94 x 7.3 mm shell, 3.26 mm high, mouth on the footprint's +y."""
+    x, front, back, h, t = 4.47, -3.7, 3.65, 3.26, 0.3
+    s.solid(box(-x, front, h - t, x, back, h), STEEL)
+    s.solid(box(-x, front, 0.1, x, back, 0.1 + t), STEEL)
+    for x0 in (-x, x - t):
+        s.solid(box(x0, front, 0.1 + t, x0 + t, back, h - t), STEEL)
+    s.solid(box(-x + t, back - 1.5, 0.1 + t, x - t, back, h - t), BLACK)      # contact carrier at the back
+    s.solid(box(-3.4, front + 0.6, 1.33, 3.4, back - 1.5, 2.03), BLACK)       # tongue
+    for num, px, py, w, hh, drill in pads('Connector_USB', 'USB_C_Receptacle_HRO_TYPE-C-31-M-12'):
+        if num == 'SH':
+            s.solid(box(px - 0.15, py - hh / 2 + 0.3, -1.0, px + 0.15, py + hh / 2 - 0.3, 0.4), STEEL)   # shell legs
+        elif num.startswith('A'):   # the B row shares these lands
+            s.solid(box(px - w / 2, py - 0.6, 0, px + w / 2, py + 0.3, 0.1), GOLD)
+
+def qfn(name, half, height):
+    def make(s):
+        for num, x, y, w, h, drill in pads('Package_DFN_QFN', name):
+            if num and not drill and max(abs(x), abs(y)) > half - 1.0:   # the pins, not the exposed pad's pieces
+                s.solid(box(max(x - w / 2, -half), max(y - h / 2, -half), 0, min(x + w / 2, half), min(y + h / 2, half), 0.02), SOLDER)
+        s.solid(box(-half, -half, 0.02, half, half, height), BLACK)
+        s.solid(prism(circle(-half + 0.6, half - 0.6, 0.2), height, height + 0.01), MARK)   # pin 1
+    return make
+
+def shield_clip(s):
+    """~ SMD shield clip 6.5 x 0.8 mm (ICSRC6508SFR): a channel that grips a 0.2 mm can wall, 1.0 mm high."""
+    s.solid(box(-3.25, -0.4, 0, 3.25, 0.4, 0.1), STEEL)
+    for y0 in (-0.4, 0.3):
+        s.solid(box(-3.25, y0, 0.1, 3.25, y0 + 0.1, 1.0), STEEL)
 
 def sit9121(s):
     base, lid = 0.55, 0.75   # 3.2 x 2.5 x 0.75 mm (SiT9121 datasheet), ceramic base + metal lid
@@ -158,25 +199,26 @@ def sfp_cage(s):
         else:   # connector alignment pegs
             s.solid(prism(circle(x, y, drill / 2 * 0.9, 12), -1.6, 0.0), BLACK)
 
-def along_x(y, z, r, x0, x1):
-    """Cylinder on the x axis: a z cylinder with its axes turned (x, y, z) -> (z, x, y), handedness kept."""
-    return [[(c, a, b) for a, b, c in f] for f in prism(circle(y, z, r), x0, x1)]
-
-def bosa(s):
-    """~ GPON BOSA of the X100DG (mksym.py footprint): TX and RX TO cans standing under the body, fiber along +x."""
-    zc, lead = 4.8, 0.45
-    s.solid(prism(circle(0.0, 0.0, 2.8, 24), 0.3, 3.0), STEEL)    # TX TO-56 can
-    s.solid(prism(circle(8.5, 0.0, 2.7, 24), 0.3, 3.0), STEEL)    # RX TO-46 can
-    s.solid(box(-3.2, -3.3, 3.0, 12.0, 3.3, 6.6), STEEL)          # housing
-    s.solid(along_x(0, zc, 2.0, 12.0, 15.0), STEEL)                # receptacle
-    s.solid(along_x(0, zc, 1.6, 15.0, 23.0), BLACK)                # fiber boot, over the board edge
+def bosa_model(s):
+    """~ GPON BOSA of the X100DG (bosa.py): RX and TX TO cans standing under the body; the fibre is left out (its end
+    is unknown)."""
+    lead = 0.45
+    s.solid(prism(circle(0.0, 0.0, bosa.RX_CAN, 24), 0.3, 3.0), STEEL)
+    s.solid(prism(circle(bosa.TX_X, 0.0, bosa.TX_CAN, 24), 0.3, 3.0), STEEL)
+    x0, y0, x1, y1 = bosa.BODY
+    s.solid(box(x0, y0, 3.0, x1, y1, 6.6), STEEL)
     for num, x, y, *_ in pads('bridge', 'BOSA_GPON'):
         s.solid(prism(circle(x, y, lead / 2, 8), -1.6, 0.3), GOLD)
 
-MODELS = {'Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm': cabga381,
+MODELS = {'Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm': bga('Lattice_caBGA-381_17x17mm_Layout20x20_P0.8mm', 8.5, 0.45, 0.30, 0.36, 1.36),
+          'Xilinx_FGG484': bga('Xilinx_FGG484', 11.5, 0.6, 0.45, 0.5, 2.1),
+          'Oscillator_SMD_IDT_JU6-6_7.0x5.0mm_P2.54mm': xo7050,
+          'USB_C_Receptacle_HRO_TYPE-C-31-M-12': usb_c,
+          'TQFN-24-1EP_4x4mm_P0.5mm_EP2.6x2.6mm': qfn('TQFN-24-1EP_4x4mm_P0.5mm_EP2.6x2.6mm_ThermalVias', 2.0, 0.75),
+          'SHIELD_CLIP_6.5x0.8': shield_clip,
           'Oscillator_SMD_SiTime_SiT9121-6Pin_3.2x2.5mm': sit9121,
           'Connector_SFP_and_Cage': sfp_cage,
-          'BOSA_GPON': bosa}
+          'BOSA_GPON': bosa_model}
 
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)
