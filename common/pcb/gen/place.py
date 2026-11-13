@@ -274,7 +274,8 @@ def tia_pair(lay, la, port, p, x, y):
         pin_y = P(pins[t].GetPosition())[1]
         lay.track(din, [(cx + side, y), (cx, y), (run, y - abs(run - cx)), (run, pin_y), (east - 0.1, pin_y)], lay.bd.serdes_w)
         lx, ly = pad_of_net(lay, port, tia)
-        lay.track(tia, [(cx, y + 1.02), (cx, ly - abs(lx - cx)), (lx, ly)], lay.bd.serdes_w)
+        north = ly - 0.7   # each leg enters its lead from the north: the ground lead stands between the two
+        lay.track(tia, [(cx, y + 1.02), (cx, north - abs(lx - cx)), (lx, north), (lx, ly)], lay.bd.serdes_w)
         offset = next((r for r, q in lay.parts.items() if r.startswith('R') and set(q.conns.values()) == {din, 'GND'}), None)
         if offset:   # the burst receiver's offset resistor: inside the can too, no stub
             lay.place_pad(offset, pad(offset, din), cx + side, y + 1.0, (side, 0), bottom=False)
@@ -685,7 +686,7 @@ def fpga_board(lay):
     planes(lay)
 
 
-FORMER_BOSA = {'onu', 'hsmc', 'sniffer'}   # routed with the estimated land: updated once the leads are measured (bosa.py)
+FORMER_BOSA = {'onu', 'hsmc', 'sniffer'}   # routed with the estimated land: converted when next regenerated (bosa.py)
 
 if __name__ == '__main__':
     force = '--force' in sys.argv

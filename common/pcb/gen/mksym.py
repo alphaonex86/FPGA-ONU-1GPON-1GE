@@ -92,7 +92,7 @@ LEAD_TYPE = {'VCC': 'power_in', 'GND': 'power_in', 'OUT+': 'output', 'OUT-': 'ou
 lead = lambda pad: (pad, bosa.LEADS[pad], LEAD_TYPE.get(bosa.LEADS[pad], 'passive'))
 syms.append(box_symbol('BOSA_GPON', [([lead(p) for p in bosa.TX_ANGLES], [lead(p) for p in sorted(bosa.RX_ANGLES)])],
                        'U', 'BOSA GPON', 'bridge:BOSA_GPON', 'GPON BOSA, both TO cans under the body (X100DG land): '
-                       '1310/1490 nm ONU type or 1490/1310 nm OLT type' + ('' if bosa.MEASURED else '; lead functions provisional')))
+                       '1310/1490 nm ONU type or 1490/1310 nm OLT type'))
 syms.append(box_symbol('SY88349NDL', [([('1', 'DIN', 'input'), ('4', '/DIN', 'input'), ('2', 'VREF', 'output'), ('6', 'RESET', 'input'),
                                          ('10', '/AUTO_RESET', 'input'), ('13', 'LOS/SD_SEL', 'input'), ('14', 'LOS/SDLVL', 'passive'),
                                          ('15', 'JAM', 'input')],

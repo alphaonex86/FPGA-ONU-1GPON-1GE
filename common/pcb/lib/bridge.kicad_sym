@@ -6420,7 +6420,7 @@
     (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (property
       "Description"
-      "GPON BOSA, both TO cans under the body (X100DG land): 1310/1490 nm ONU type or 1490/1310 nm OLT type; lead functions provisional"
+      "GPON BOSA, both TO cans under the body (X100DG land): 1310/1490 nm ONU type or 1490/1310 nm OLT type"
       (at 0 0 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (symbol
@@ -6442,21 +6442,21 @@
         line
         (at -11.43 -2.54 0)
         (length 2.54)
-        (name "LD_K" (effects (font (size 1.27 1.27))))
+        (name "MPD_A" (effects (font (size 1.27 1.27))))
         (number "T2" (effects (font (size 1.27 1.27)))))
       (pin
         passive
         line
         (at -11.43 -5.08 0)
         (length 2.54)
-        (name "MPD_A" (effects (font (size 1.27 1.27))))
+        (name "LD_K" (effects (font (size 1.27 1.27))))
         (number "T3" (effects (font (size 1.27 1.27)))))
       (pin
         passive
         line
         (at -11.43 -7.62 0)
         (length 2.54)
-        (name "MPD_K" (effects (font (size 1.27 1.27))))
+        (name "CASE" (effects (font (size 1.27 1.27))))
         (number "T4" (effects (font (size 1.27 1.27)))))
       (pin
         output
@@ -6466,32 +6466,32 @@
         (name "OUT+" (effects (font (size 1.27 1.27))))
         (number "A" (effects (font (size 1.27 1.27)))))
       (pin
-        output
+        power_in
         line
         (at 11.43 -2.54 180)
         (length 2.54)
-        (name "OUT-" (effects (font (size 1.27 1.27))))
+        (name "GND" (effects (font (size 1.27 1.27))))
         (number "B" (effects (font (size 1.27 1.27)))))
       (pin
-        power_in
+        output
         line
         (at 11.43 -5.08 180)
         (length 2.54)
-        (name "GND" (effects (font (size 1.27 1.27))))
+        (name "OUT-" (effects (font (size 1.27 1.27))))
         (number "C" (effects (font (size 1.27 1.27)))))
-      (pin
-        passive
-        line
-        (at 11.43 -7.62 180)
-        (length 2.54)
-        (name "VAPD" (effects (font (size 1.27 1.27))))
-        (number "D" (effects (font (size 1.27 1.27)))))
       (pin
         power_in
         line
-        (at 11.43 -10.16 180)
+        (at 11.43 -7.62 180)
         (length 2.54)
         (name "VCC" (effects (font (size 1.27 1.27))))
+        (number "D" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 11.43 -10.16 180)
+        (length 2.54)
+        (name "VAPD" (effects (font (size 1.27 1.27))))
         (number "E" (effects (font (size 1.27 1.27)))))))
   (symbol
     "SY88349NDL"

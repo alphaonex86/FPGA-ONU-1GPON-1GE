@@ -5,7 +5,6 @@ import os, re
 from kisch import Board
 from hsmcpins import pinout as hsmc_pinout
 from sexp import lib_symbol, pins
-import bosa
 
 LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'lib', 'bridge.kicad_sym')
 R0402, C0402 = 'Resistor_SMD:R_0402_1005Metric', 'Capacitor_SMD:C_0402_1005Metric'
@@ -59,10 +58,6 @@ class Bridge(Board):
     serdes_nets = ()  # this board's own SerDes netclass patterns, besides pcbgen's
     power_nets = ()   # supply nets not named '+...': Power netclass too
 
-    def add(self, prefix, lib, symname, value, footprint, conns, **kw):
-        if symname == 'BOSA_GPON':   # until its leads are measured: fab.py refuses the board
-            kw = {**bosa.VERIFY, **kw}
-        return super().add(prefix, lib, symname, value, footprint, conns, **kw)
     flag_nets = ()    # power inputs fed through a part (a power flag in the schematic)
 
     def r(self, value, a, b, fp=R0402, **fields):
@@ -266,7 +261,7 @@ def optics(b, tx='TX0', rx='RX0', ben='BEN'):
         b.c('100n', a, z)
     b.fb('+3V3_OPT', '+3V3_RX'); b.decouple('+3V3_RX', 2, 1)
     b.add('U', LIB, 'BOSA_GPON', 'BOSA GPON (X100DG)', 'bridge:BOSA_GPON',
-          {'LD_A': '+3V3_OPT', 'LD_K': 'LD_K', 'MPD_A': 'LD_MD', 'MPD_K': '+3V3_OPT',
+          {'LD_A': '+3V3_OPT', 'LD_K': 'LD_K', 'MPD_A': 'LD_MD', 'CASE': 'GND',
            'VAPD': 'HV_APD', 'VCC': '+3V3_RX', 'OUT+': 'TIA_P', 'OUT-': 'TIA_N', 'GND': 'GND'},
           MPN='desoldered from an X100DG')
     apd_bias(b)
@@ -605,7 +600,7 @@ def inline():
     b.block = 'rx:DS_'
     b.fb('+3V3', '+3V3_DS_OPT'); b.decouple('+3V3_DS_OPT', 3, 1)
     b.add('U', LIB, 'BOSA_GPON', 'GPON ONU BOSA', 'bridge:BOSA_GPON',
-          {'LD_A': 'US_LD_A', 'LD_K': 'US_LD_K', 'MPD_A': 'US_MPD_A', 'MPD_K': 'US_LD_A',
+          {'LD_A': 'US_LD_A', 'LD_K': 'US_LD_K', 'MPD_A': 'US_MPD_A', 'CASE': 'GND',
            'VAPD': 'DS_HV_APD', 'VCC': '+3V3_DS_OPT', 'OUT+': 'DS_TIA_P', 'OUT-': 'DS_TIA_N', 'GND': 'GND'},
           MPN='GPON ONU BOSA, APD-TIA receiver (1310 nm DFB, 1490 nm APD)')
     for t in 'PN':
@@ -632,7 +627,7 @@ def inline():
     # ONU port: upstream bursts in, downstream out; the fixed pad is on the fibre
     b.block = 'bosa:onu'
     b.add('U', LIB, 'BOSA_GPON', 'GPON OLT BOSA', 'bridge:BOSA_GPON',
-          {'LD_A': 'DS_LD_A', 'LD_K': 'DS_LD_K', 'MPD_A': 'DS_MPD_A', 'MPD_K': 'DS_LD_A',
+          {'LD_A': 'DS_LD_A', 'LD_K': 'DS_LD_K', 'MPD_A': 'DS_MPD_A', 'CASE': 'GND',
            'VAPD': 'US_HV_APD', 'VCC': '+3V3_US_OPT', 'OUT+': 'US_TIA_P', 'OUT-': 'US_TIA_N', 'GND': 'GND'},
           MPN='XL-BCB2111-LS-02')
     receiver(b, 'US_', None, '220p', la='SY88149NDLMG', detect='LOS', dc=True)
