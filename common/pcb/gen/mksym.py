@@ -121,11 +121,12 @@ syms.append(box_symbol('VCXO_LVDS_7050', [([('1', 'VIN', 'input'), ('2', 'OE', '
                                             [('6', 'VDD', 'power_in'), ('4', 'OUT+', 'tri_state'), ('5', 'OUT-', 'tri_state')])],
                        'Y', 'VCXO_LVDS_7050', 'bridge:VCXO_7050_EP',
                        'LVDS VCXO 3.3 V, 7x5 mm, 6 pads 2.54 mm pitch + centre pad (GND): VIN control voltage, OE high = on'))
-# GPON OLT BOSA, both cans: RX leads as BOSA_RX (XL-BCB2111-LS-02 drawing), TX can lead order unknown
-syms.append(box_symbol('BOSA_OLT', [([('T1', 'LD_A', 'passive'), ('T2', 'LD_K', 'passive'), ('T3', 'MPD_A', 'passive'), ('T4', 'MPD_K', 'passive')],
-                                      [('2', 'VAPD', 'passive'), ('1', 'VCC', 'power_in'), ('5', 'OUT+', 'output'), ('3', 'OUT-', 'output'),
-                                       ('4', 'GND', 'power_in')])],
-                       'U', 'BOSA OLT', 'bridge:BOSA_OLT', 'GPON OLT BOSA (1490 nm DFB TX, 1310 nm burst APD-TIA RX); TX pad order to measure'))
+# Any pigtail BOSA lying on the board: its leads are formed by hand to these pads, so the pin order of the cans is not in the copper
+syms.append(box_symbol('BOSA_PADS', [([('T1', 'MPD_A', 'passive'), ('T2', 'LD_A', 'passive'), ('T3', 'LD_K', 'passive'), ('T4', 'CASE', 'passive')],
+                                       [('R1', 'VAPD', 'passive'), ('R2', 'GND', 'power_in'), ('R3', 'OUT+', 'output'), ('R4', 'OUT-', 'output'),
+                                        ('R5', 'VCC', 'power_in'), ('S', 'STRAP', 'passive')])],
+                       'U', 'BOSA', 'bridge:BOSA_PADS', 'Pigtail BOSA (laser can + APD-TIA can), leads lap-soldered to pad rows; '
+                       'a monitor diode cathode lead of its own goes to LD_A'))
 syms.append(box_symbol('SHIELD_CLIP', [([('1', 'GND', 'passive')], [])], 'SH', 'ICSRC6508SFR', 'bridge:SHIELD_CLIP_6.5x0.8',
                        'SMD clip for a 0.2 mm shield can wall (Innochips ICSRC6508SFR, LCSC C238199)'))
 def hsmc_symbol():
@@ -221,19 +222,24 @@ bosa_footprint()
 bosa_rx_footprint()
 hsmc_footprint()
 
-# OLT BOSA standing on its RX can (pads as BOSA_RX_TO46), TX can behind it with its 4 leads bent down into a row.
-# TX_BACK and the row's order are placeholders until a BOSA is measured.
-TX_BACK, TX_PITCH = 10.0, 2.0
-
-def bosa_olt_footprint():
-    pads = [[S('pad'), str(k + 1), S('thru_hole'), S('circle'), [S('at'), *polar(0, RX_PCD, -90 + 72 * k)], [S('size'), 0.9, 0.9],
-             [S('drill'), 0.6], [S('layers'), '*.Cu', '*.Mask']] for k in range(5)]
-    pads += [[S('pad'), f'T{k + 1}', S('thru_hole'), S('circle'), [S('at'), -TX_BACK, (k - 1.5) * TX_PITCH], [S('size'), PAD, PAD],
-              [S('drill'), DRILL], [S('layers'), '*.Cu', '*.Mask']] for k in range(4)]
-    body = [rect(-TX_BACK + 1.5, -BOSA_R, 6.0, BOSA_R, 'F.Fab', 0.1), rect(-TX_BACK - 1.0, -BOSA_R - 0.4, 6.25, BOSA_R + 0.4, 'F.CrtYd', 0.05),
-            rect(-TX_BACK + 1.35, -BOSA_R - 0.15, 5.7, BOSA_R + 0.15, 'F.SilkS', 0.12)]
-    write_footprint('BOSA_OLT', 'GPON OLT BOSA on its RX can (TO-46, 5 leads: 1 VCC, 2 Isource, 3 Dout-, 4 GND, 5 Dout+), fiber toward +x; '
-                    'TX can leads T1-T4 in a row behind: position and order to measure', 'through_hole', body + pads, (0, -4.6))
+# BOSA on its side, fibre toward +x, origin where the RX can's axis meets the body's. The laser can's leads leave the
+# back of the body (10 mm long, hand formed) to the west row, the receiver can's to the north row; pads are long so
+# bodies of other lengths fit by sliding along x. A wire over the body, soldered in the two S holes, holds and grounds it.
+def bosa_pads_footprint():
+    smd = lambda n, x, y, w, h: [S('pad'), n, S('smd'), S('roundrect'), [S('at'), x, y], [S('size'), w, h],
+                                 [S('layers'), 'F.Cu', 'F.Paste', 'F.Mask'], [S('roundrect_rratio'), 0.25]]
+    pads = [smd(f'T{k + 1}', -12.5, -3 + 2 * k, 5.0, 1.0) for k in range(4)]
+    pads += [smd(f'R{k + 1}', -4 + 2 * k, -11.25, 1.0, 4.5) for k in range(5)]
+    pads += [[S('pad'), 'S', S('thru_hole'), S('circle'), [S('at'), -4.5, y], [S('size'), 2.0, 2.0], [S('drill'), 1.0],
+              [S('layers'), '*.Cu', '*.Mask']] for y in (-5.0, 5.0)]
+    names = [('MPD', -16.2, -3), ('LD+', -16.2, -1), ('LD-', -16.2, 1), ('CASE', -16.6, 3),
+             ('APD', -4, -14.4), ('GND', -2, -14.4), ('D+', 0, -14.4), ('D-', 2, -14.4), ('VCC', 4.2, -14.4)]
+    text = [[S('fp_text'), S('user'), t, [S('at'), x, y, 90 if y < -14 else 0], [S('layer'), 'F.SilkS'],
+             [S('effects'), [S('font'), [S('size'), 0.7, 0.7], [S('thickness'), 0.1]]]] for t, x, y in names]
+    write_footprint('BOSA_PADS', 'Pigtail BOSA on its side, fibre toward +x: laser can leads to the west pad row (MPD, LD+, LD-, case), '
+                    'receiver can leads to the north row (APD, GND, D+, D-, VCC), strap wire holes S',
+                    'smd', [rect(-9.5, -3.4, 3.5, 3.4, 'F.Fab', 0.1), rect(-9.5, -3.4, 3.5, 3.4, 'F.SilkS', 0.12),
+                            rect(-15.3, -13.8, 3.8, 6.3, 'F.CrtYd', 0.05)] + pads + text, (-3, 0))
 
 # Innochips ICSRC6508SFR: land 6.7 x 0.9 mm, paste in three openings (drawing rev C)
 def shield_clip_footprint():
@@ -254,6 +260,6 @@ def vcxo_footprint():
     write_footprint('VCXO_7050_EP', 'LVDS VCXO 7.0 x 5.0 mm, 6 pads + centre pad (SiT3372 land), body 5 mm along x',
                     'smd', [rect(-2.5, -3.5, 2.5, 3.5, 'F.Fab', 0.1), rect(-3.3, -3.75, 3.3, 3.75, 'F.CrtYd', 0.05), mark] + pads, (0, -4.6))
 
-bosa_olt_footprint()
+bosa_pads_footprint()
 shield_clip_footprint()
 vcxo_footprint()

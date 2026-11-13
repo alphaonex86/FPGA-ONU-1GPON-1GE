@@ -55,6 +55,7 @@ def assign_balls(signals, clock):
 
 class Bridge(Board):
     serdes_w = 0.2   # router width of the SerDes netclass
+    serdes_nets = ()  # this board's own SerDes netclass patterns, besides pcbgen's
 
     def r(self, value, a, b, fp=R0402, **fields):
         return self.add('R', 'Device', 'R', value, fp, {'1': a, '2': b}, **fields)
@@ -490,10 +491,12 @@ def laser(b, p, data, dis, ben=None):
 def inline():
     """In-line GPON sniffer (../FPGA-USB-GPON-sniffer/README.md): in one ONU's drop fibre, both directions regenerated
     through the ECP5 and dumped over USB. OLT port: ONU-type BOSA (DS_ receiver, US_ burst laser); ONU port: OLT-type
-    BOSA (US_ burst receiver, DS_ laser). FT2232H: channel A 245 FIFO to the ECP5, channel B its JTAG and flash.
+    BOSA (US_ burst receiver, DS_ laser), both on pad rows that fit any lead order. FT2232H: channel A 245 FIFO to the ECP5, channel B its JTAG and flash.
     The upstream laser lights only while the ONU-port receiver sees light (US_QUIET low, no FPGA in that path) and
     the max-burst cutoff ends what stays on."""
     b = Bridge('inline', 'In-line GPON sniffer: USB, ECP5, OLT and ONU optical ports')
+    b.serdes_nets = ('DS_TIA_*', 'DS_DIN_*', 'DS_LA_*', 'DS_RX_*', 'DS_TX_*', 'US_TX_*', 'REFCLK_*', 'USB_D?', '*_LD_IN_*',
+                     '*_LD_OUT_*', '*_LD_BIAS_*', '*_LD_K', '*_LD_A')   # the lasers' currents too
     b.block = 'usb'
     b.add('J', 'Connector', 'USB_C_Receptacle_USB2.0_16P', 'USB-C', 'Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12',
           {'VBUS': 'VBUS', 'GND': 'GND', 'SHIELD': 'GND', 'CC1': 'USB_CC1', 'CC2': 'USB_CC2', 'D+': 'USB_DP', 'D-': 'USB_DM'},
@@ -555,10 +558,10 @@ def inline():
     # OLT port: downstream in (continuous: SY88993AV, squelched by its own LOS), upstream bursts out
     b.block = 'rx:DS_'
     b.fb('+3V3', '+3V3_DS_OPT'); b.decouple('+3V3_DS_OPT', 3, 1)
-    b.add('U', LIB, 'BOSA_GPON', 'GPON ONU BOSA (APD-TIA)', 'bridge:BOSA_GPON',
-          {'LD_A': 'US_LD_A', 'LD_K': 'US_LD_K', 'MPD_A': 'US_MPD_A', 'MPD_K': 'US_LD_A',
+    b.add('U', LIB, 'BOSA_PADS', 'GPON ONU BOSA', 'bridge:BOSA_PADS',
+          {'LD_A': 'US_LD_A', 'LD_K': 'US_LD_K', 'MPD_A': 'US_MPD_A', 'CASE': 'GND', 'STRAP': 'GND',
            'VAPD': 'DS_HV_APD', 'VCC': '+3V3_DS_OPT', 'OUT+': 'DS_TIA_P', 'OUT-': 'DS_TIA_N', 'GND': 'GND'},
-          MPN='ONU BOSA, APD-TIA receiver; pad order to measure')
+          MPN='GPON ONU BOSA, APD-TIA receiver (1310 nm DFB, 1490 nm APD)')
     for t in 'PN':
         b.c('100n', f'DS_TIA_{t}', f'DS_DIN_{t}'); b.r('49.9', f'DS_DIN_{t}', 'DS_VREF')
         b.c('100n', f'DS_LA_{t}', f'DS_RX_{t}')
@@ -581,10 +584,10 @@ def inline():
 
     # ONU port: upstream bursts in, downstream out; the fixed pad is on the fibre
     b.block = 'bosa:onu'
-    b.add('U', LIB, 'BOSA_OLT', 'XL-BCB2111-LS-02', 'bridge:BOSA_OLT',
-          {'LD_A': 'DS_LD_A', 'LD_K': 'DS_LD_K', 'MPD_A': 'DS_MPD_A', 'MPD_K': 'DS_LD_A',
+    b.add('U', LIB, 'BOSA_PADS', 'GPON OLT BOSA', 'bridge:BOSA_PADS',
+          {'LD_A': 'DS_LD_A', 'LD_K': 'DS_LD_K', 'MPD_A': 'DS_MPD_A', 'CASE': 'GND', 'STRAP': 'GND',
            'VAPD': 'US_HV_APD', 'VCC': '+3V3_US_OPT', 'OUT+': 'US_TIA_P', 'OUT-': 'US_TIA_N', 'GND': 'GND'},
-          MPN='XL-BCB2111-LS-02; TX pad order to measure')
+          MPN='XL-BCB2111-LS-02')
     receiver(b, 'US_', None, '220p', la='SY88149NDLMG', detect='LOS')
     # 19 mV across the termination holds the output at zero on the receiver's noise, in the 120 ns before LOS squelches
     b.r('5.1k', 'US_DIN_P', 'GND'); b.r('5.1k', 'US_DIN_N', 'GND', dnp=True)   # the other one if the BOSA's data is inverted
@@ -606,7 +609,7 @@ def inline():
     for net in ('SCL', 'SDA'):
         b.r('2.2k', net, '+3V3')
     b.block = 'shield'   # a hand-made 0.2 mm can over each receiver
-    for _ in range(7):
+    for _ in range(6):
         b.add('SH', LIB, 'SHIELD_CLIP', 'ICSRC6508SFR', 'bridge:SHIELD_CLIP_6.5x0.8', {'GND': 'GND'}, MPN='ICSRC6508SFR')
     b.holes(); b.holes()
     return b

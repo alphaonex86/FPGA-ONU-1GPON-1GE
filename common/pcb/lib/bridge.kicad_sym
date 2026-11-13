@@ -7004,25 +7004,25 @@
         (name "OUT-" (effects (font (size 1.27 1.27))))
         (number "5" (effects (font (size 1.27 1.27)))))))
   (symbol
-    "BOSA_OLT"
+    "BOSA_PADS"
     (pin_names (offset 1.016))
     (exclude_from_sim no)
     (in_bom yes)
     (on_board yes)
     (property "Reference" "U" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "BOSA OLT" (at 0 -13.97 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "bridge:BOSA_OLT" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "BOSA" (at 0 -16.51 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "bridge:BOSA_PADS" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (property
       "Description"
-      "GPON OLT BOSA (1490 nm DFB TX, 1310 nm burst APD-TIA RX); TX pad order to measure"
+      "Pigtail BOSA (laser can + APD-TIA can), leads lap-soldered to pad rows; a monitor diode cathode lead of its own goes to LD_A"
       (at 0 0 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (symbol
-      "BOSA_OLT_1_1"
+      "BOSA_PADS_1_1"
       (rectangle
         (start -8.89 2.54)
-        (end 8.89 -12.7)
+        (end 8.89 -15.24)
         (stroke (width 0.254) (type default))
         (fill (type background)))
       (pin
@@ -7030,28 +7030,28 @@
         line
         (at -11.43 0 0)
         (length 2.54)
-        (name "LD_A" (effects (font (size 1.27 1.27))))
+        (name "MPD_A" (effects (font (size 1.27 1.27))))
         (number "T1" (effects (font (size 1.27 1.27)))))
       (pin
         passive
         line
         (at -11.43 -2.54 0)
         (length 2.54)
-        (name "LD_K" (effects (font (size 1.27 1.27))))
+        (name "LD_A" (effects (font (size 1.27 1.27))))
         (number "T2" (effects (font (size 1.27 1.27)))))
       (pin
         passive
         line
         (at -11.43 -5.08 0)
         (length 2.54)
-        (name "MPD_A" (effects (font (size 1.27 1.27))))
+        (name "LD_K" (effects (font (size 1.27 1.27))))
         (number "T3" (effects (font (size 1.27 1.27)))))
       (pin
         passive
         line
         (at -11.43 -7.62 0)
         (length 2.54)
-        (name "MPD_K" (effects (font (size 1.27 1.27))))
+        (name "CASE" (effects (font (size 1.27 1.27))))
         (number "T4" (effects (font (size 1.27 1.27)))))
       (pin
         passive
@@ -7059,35 +7059,42 @@
         (at 11.43 0 180)
         (length 2.54)
         (name "VAPD" (effects (font (size 1.27 1.27))))
-        (number "2" (effects (font (size 1.27 1.27)))))
+        (number "R1" (effects (font (size 1.27 1.27)))))
       (pin
         power_in
         line
         (at 11.43 -2.54 180)
         (length 2.54)
-        (name "VCC" (effects (font (size 1.27 1.27))))
-        (number "1" (effects (font (size 1.27 1.27)))))
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "R2" (effects (font (size 1.27 1.27)))))
       (pin
         output
         line
         (at 11.43 -5.08 180)
         (length 2.54)
         (name "OUT+" (effects (font (size 1.27 1.27))))
-        (number "5" (effects (font (size 1.27 1.27)))))
+        (number "R3" (effects (font (size 1.27 1.27)))))
       (pin
         output
         line
         (at 11.43 -7.62 180)
         (length 2.54)
         (name "OUT-" (effects (font (size 1.27 1.27))))
-        (number "3" (effects (font (size 1.27 1.27)))))
+        (number "R4" (effects (font (size 1.27 1.27)))))
       (pin
         power_in
         line
         (at 11.43 -10.16 180)
         (length 2.54)
-        (name "GND" (effects (font (size 1.27 1.27))))
-        (number "4" (effects (font (size 1.27 1.27)))))))
+        (name "VCC" (effects (font (size 1.27 1.27))))
+        (number "R5" (effects (font (size 1.27 1.27)))))
+      (pin
+        passive
+        line
+        (at 11.43 -12.7 180)
+        (length 2.54)
+        (name "STRAP" (effects (font (size 1.27 1.27))))
+        (number "S" (effects (font (size 1.27 1.27)))))))
   (symbol
     "SHIELD_CLIP"
     (pin_names (offset 1.016))

@@ -328,7 +328,7 @@ def write_project(path, bd):
                                                 [{'netclass': 'SerDes', 'pattern': p} for p in
                                                  ('TX0_*', 'RX0_*', 'BEN_*', 'ONU_TD_*', 'ONU_RD_*', 'ONU_BEN_*', 'LD_*', 'TIA_*', 'RIN_*',
                                                   'ONU_TX_*', 'ONU_RX_*', 'SFP0_TD_*', 'SFP0_RD_*', 'SFP1_TD_*', 'SFP1_RD_*', 'GTS_*', 'US_TIA_*', 'US_DIN_*',
-                                                  'US_LA_*', 'US_RX_*')] +
+                                                  'US_LA_*', 'US_RX_*') + tuple(bd.serdes_nets)] +
                                                 [{'netclass': 'HV', 'pattern': '*' + HV_PREFIX + '*'}]}
     json.dump(pro, open(path, 'w'), indent=2, sort_keys=True)
 

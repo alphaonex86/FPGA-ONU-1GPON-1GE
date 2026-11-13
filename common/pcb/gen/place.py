@@ -179,8 +179,8 @@ def sniffer_layout():
 def inline_layout():
     """USB and the FT2232H north-west of the BGA, flash and JTAG west, both optical ports east with their fibres over
     the edge (OLT port north, ONU port south), each receiver's limiting amp at its can inside a ring of shield clips.
-    A first placement: the BOSA lands are placeholders until the parts are measured."""
-    lay = Layout(inline(), 92, 86)
+    The BOSA lands take any lead order (BOSA_PADS)."""
+    lay = Layout(inline(), 92, 92)
     one = lambda sym: refs(lay, sym)[0]
     by_net = lambda sym, pin: {lay.parts[r].conns[pin][:3]: r for r in refs(lay, sym)}
     lay.bga = one('LFE5UM-45F-BG381')
@@ -198,42 +198,38 @@ def inline_layout():
     lay.place(one('93LCxxBxxOT'), 9.0, 28.5)
     lay.place(one('W25Q32JVSS'), 15.0, 35.0)
     lay.place(one('Conn_01x06'), 4.0, 38.0)                          # JTAG
-    lay.place(one('LED'), 4.0, 60.0)
+    lay.place(one('LED'), 12.0, 88.0)
     lay.place(one('VCXO_LVDS_7050'), 39.0, 42.5)                     # south of the REFCLK balls Y11/Y12
-    for hole, xy in zip(refs(lay, 'MountingHole'), ((4, 4), (88, 4), (4, 82), (88, 82))):
+    for hole, xy in zip(refs(lay, 'MountingHole'), ((4, 4), (88, 4), (4, 88), (64, 88))):
         lay.place(hole, *xy)
-    # OLT port: RX can at (85.5, 47)
-    lay.place(one('BOSA_GPON'), 77.0, 47.0)
-    lay.place(one('SY88993AV'), 85.0, 40.0)
-    # ONU port: RX can at (86, 68), TX leads at x = 76
-    lay.place(one('BOSA_OLT'), 86.0, 68.0)
-    lay.place(one('SY88349NDL'), 85.0, 60.5)
-    drivers = by_net('MAX3643', '8')          # by the EN net: US_LD_DIS, DS_LASER_DIS
-    lay.place(drivers['US_'], 69.0, 47.0)
-    lay.place(drivers['DS_'], 69.0, 68.0)
+    # each port: BOSA body along the east edge, laser driver west of its lead row, limiting amp north of the receiver
+    # row inside three walls of shield clips (the fourth side is the BOSA)
+    ports = {lay.parts[r].conns['R3'][:3]: r for r in refs(lay, 'BOSA_PADS')}   # by the receiver: DS_ = OLT port
+    drivers = by_net('MAX3643', '2')
     tps, schottky = by_net('TPS61391', '5'), by_net('D_Schottky', '1')
-    for p, (x, y) in (('DS_', (56.0, 44.0)), ('US_', (56.0, 62.0))):
-        lay.place(tps[p], x, y)
-        lay.place(schottky[p], x, y + 3.6)
-    lay.place(one('74LVC1G07'), 61.5, 38.5)
-    gate, cut = sorted(refs(lay, '74LVC1G97'), key=lambda r: lay.parts[r].block != 'gate')
-    lay.place(gate, 67.0, 38.5)
-    lay.place(one('74LVC1G123'), 60.5, 53.5)
-    lay.place(cut, 66.5, 53.5)
-    lay.place(one('74LVC1G32'), 71.5, 53.5)
-    lay.place(one('TLV3501AIDBV'), 62.0, 59.0)
-    ddm = {lay.parts[r].conns['2']: r for r in refs(lay, 'AD5593R')}   # by A0
-    lay.place(ddm['GND'], 48.0, 53.0)
-    lay.place(ddm['+3V3'], 48.0, 70.0)
-    for r in refs(lay, 'D'):                  # each laser's dummy-load diodes beside its driver
-        driver = drivers[lay.parts[r].block[-3:]]
-        x, y = P(lay.fps[driver].GetPosition())
-        lay.place_near(r, x + 4.0, y - 4.0)
+    amp = {'DS_': one('SY88993AV'), 'US_': one('SY88349NDL')}
     clips = iter(refs(lay, 'SHIELD_CLIP'))
-    # west wall shared by both cans, open where a BOSA body crosses it
-    for x, y, rot in ((85.0, 36.0, 0), (80.3, 39.5, 90), (85.5, 52.0, 0), (80.3, 57.5, 90), (85.0, 56.4, 0),
-                      (80.3, 76.5, 90), (85.0, 73.6, 0)):
-        lay.place(next(clips), x, y, rot)
+    for rx, tx, y in (('DS_', 'US_', 48.0), ('US_', 'DS_', 79.0)):
+        lay.place(ports[rx], 86.5, y)
+        lay.place(amp[rx], 86.0, y - 19.0)
+        lay.place(drivers[tx], 65.0, y)
+        lay.place(tps[rx], 68.5, y - 18.0)
+        lay.place(schottky[rx], 68.5, y - 14.4)
+        for cx, cy, rot in ((86.0, y - 23.3, 0), (80.8, y - 19.0, 90), (91.0, y - 19.0, 90)):
+            lay.place(next(clips), cx, cy, rot)
+    lay.place(one('74LVC1G07'), 56.0, 38.5)
+    gate, cut = sorted(refs(lay, '74LVC1G97'), key=lambda r: lay.parts[r].block != 'gate')
+    lay.place(gate, 61.5, 38.5)
+    lay.place(one('74LVC1G123'), 55.0, 56.0)
+    lay.place(cut, 60.5, 56.0)
+    lay.place(one('74LVC1G32'), 65.5, 57.0)
+    lay.place(one('TLV3501AIDBV'), 62.0, 64.0)
+    ddm = {lay.parts[r].conns['2']: r for r in refs(lay, 'AD5593R')}   # by A0
+    lay.place(ddm['GND'], 47.0, 53.0)
+    lay.place(ddm['+3V3'], 47.0, 76.0)
+    for r in refs(lay, 'D'):                  # each laser's dummy-load diodes beside its driver
+        x, y = P(lay.fps[drivers[lay.parts[r].block[-3:]]].GetPosition())
+        lay.place_near(r, x + 4.0, y - 5.0)
     return lay
 
 def sniffer_serdes(lay):
