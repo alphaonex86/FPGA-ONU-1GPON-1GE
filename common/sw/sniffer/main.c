@@ -224,6 +224,8 @@ static void usage(void)
             "  -P FILE  OMCI profile: the OLT's requests with the ONU's answers\n"
             "  -r FILE  decode a raw dump instead of the board\n"
             "  -i PORT  the in-line sniffer's USB serial port, e.g. /dev/ttyACM0\n"
+            "  -L FILE  in-line sniffer: the unit's level file; both lasers restart from dark, then follow the received\n"
+            "           levels (else levels and lasers stay as the last run left them: dark after power-on)\n"
             "  -u DEV   the sniffer's UIO device (de25-standard/ghrd/uio_overlay.sh), e.g. /dev/uio0: waits on its\n"
             "           interrupt; else /dev/mem, polled\n"
             "  -b ADDR  HPS-to-FPGA lightweight bridge base, /dev/mem only (default 0x%08x)\n"
@@ -243,16 +245,17 @@ int main(int argc, char **argv)
     static struct sniffer s;
     static uint8_t serial[8];
     struct sniffer_options opt = {.onu_id = -1, .delimiter = 0xAB5983, .lead = 128, .width = 16, .text = stdout};
-    const char *dump = NULL, *profile = NULL, *text = NULL, *in = NULL, *uio = NULL, *port = NULL;
+    const char *dump = NULL, *profile = NULL, *text = NULL, *in = NULL, *uio = NULL, *port = NULL, *level_file = NULL;
     unsigned long value, bridge = LW_BRIDGE;
     int c;
-    while ((c = getopt(argc, argv, "w:P:t:r:i:u:b:o:s:a:p:Ad:l:W:h")) != -1) {
+    while ((c = getopt(argc, argv, "w:P:t:r:i:L:u:b:o:s:a:p:Ad:l:W:h")) != -1) {
         switch (c) {
         case 'w': dump = optarg; break;
         case 'P': profile = optarg; break;
         case 't': text = optarg; break;
         case 'r': in = optarg; break;
         case 'i': port = optarg; break;
+        case 'L': level_file = optarg; break;
         case 'u': uio = optarg; break;
         case 'b': if (parse_number(optarg, 0xFFFFFFFFul, &bridge) < 0) return 2; break;
         case 'o': if (parse_number(optarg, 254, &value) < 0) return 2; opt.onu_id = (int)value; break;
@@ -285,7 +288,7 @@ int main(int argc, char **argv)
         default: usage(); return 2;
         }
     }
-    if (optind != argc) {
+    if (optind != argc || (level_file && !port)) {
         usage();
         return 2;
     }
@@ -312,7 +315,7 @@ int main(int argc, char **argv)
         sniffer_stop(&s);
         fclose(file);
     } else if (port) {
-        result = inline_run(&s, port, &opt, &stopping);
+        result = inline_run(&s, port, level_file, &opt, &stopping);
     } else {
         result = live(&s, (uint32_t)bridge, uio, &opt);
     }

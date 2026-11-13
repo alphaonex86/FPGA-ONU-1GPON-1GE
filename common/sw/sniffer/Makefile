@@ -3,9 +3,10 @@
 RTL ?= ../../../out/rtl
 CFLAGS ?= -O2
 CFLAGS += -std=gnu11 -Wall -Wextra -Werror -I$(RTL) -I../omci
+LDLIBS = -lm
 REGS = $(RTL)/sniffer_regs.h $(RTL)/inline_regs.h
-CODE = sniffer.c inline.c ../omci/omci.c
-DEPS = $(CODE) sniffer.h inline.h $(REGS)
+CODE = sniffer.c inline.c levels.c ../omci/omci.c
+DEPS = $(CODE) sniffer.h inline.h levels.h $(REGS)
 
 all: sniffer
 
@@ -13,16 +14,19 @@ $(REGS):
 	@echo "$@ missing: generate the RTL first (sbt \"runMain pon.Generate\")" >&2; exit 1
 
 sniffer: main.c $(DEPS)
-	$(CC) $(CFLAGS) -o $@ main.c $(CODE)
+	$(CC) $(CFLAGS) -o $@ main.c $(CODE) $(LDLIBS)
 
-test_sniffer test_inline: %: %.c $(DEPS)
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -pthread -o $@ $< $(CODE)
+TESTS = test_sniffer test_inline test_levels
 
-test: test_sniffer test_inline
+$(TESTS): %: %.c $(DEPS)
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -pthread -o $@ $< $(CODE) $(LDLIBS)
+
+test: $(TESTS)
 	./test_sniffer
 	./test_inline
+	./test_levels
 
 clean:
-	rm -f sniffer test_sniffer test_inline
+	rm -f sniffer $(TESTS)
 
 .PHONY: all test clean

@@ -128,7 +128,7 @@ int main(void)
     d.alloc_keep[77] = d.port_keep[77] = 1; // a previous run's
     d.regs[INLINE_CTRL / 4] = INLINE_CTRL_ENABLE_MASK;
 
-    CHECK(inline_run(&s, port, &opt, &stopping) == 0);
+    CHECK(inline_run(&s, port, NULL, &opt, &stopping) == 0);
     CHECK(pthread_join(thread, NULL) == 0);
     CHECK(fclose(opt.text) == 0 && fclose(opt.dump) == 0);
     CHECK(!d.failed && d.strays == 0);

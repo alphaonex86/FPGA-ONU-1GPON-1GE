@@ -2,6 +2,7 @@
 // In-line sniffer over its USB serial port (CDC-ACM): the record stream in, the registers written and
 // read by 6-byte commands (the protocol: InlineDump's header, common/hw/spinal/pon/sniffer/InlineSniffer.scala).
 #include "inline.h"
+#include "levels.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -158,14 +159,20 @@ static int pump(struct link *l, int wanted, uint32_t *value, int ms)
     }
 }
 
-static int link_read(struct link *l, unsigned offset, uint32_t *value)
+static int reg_write(void *ctx, unsigned offset, uint32_t value) { return command(ctx, WRITE | offset / 4, value); }
+static int reg_ask(void *ctx, unsigned offset) { return command(ctx, offset / 4, 0); }
+
+static int reg_answer(void *ctx, unsigned offset, uint32_t *value)
 {
-    if (command(l, offset / 4, 0) < 0)
-        return -1;
-    int got = pump(l, (int)(offset / 4), value, REPLY_MS);
+    int got = pump(ctx, (int)(offset / 4), value, REPLY_MS);
     if (got == 0)
         fprintf(stderr, "sniffer: register 0x%02x not answered\n", offset);
     return got == 1 ? 0 : -1;
+}
+
+static int link_read(struct link *l, unsigned offset, uint32_t *value)
+{
+    return reg_ask(l, offset) < 0 ? -1 : reg_answer(l, offset, value);
 }
 
 // What a previous run left on its way, until the link is quiet.
@@ -242,9 +249,14 @@ static int report(struct link *l)
     return 0;
 }
 
-int inline_run(struct sniffer *s, const char *port, const struct sniffer_options *opt, const volatile sig_atomic_t *stopping)
+int inline_run(struct sniffer *s, const char *port, const char *level_file, const struct sniffer_options *opt,
+               const volatile sig_atomic_t *stopping)
 {
     static struct link l;
+    static struct levels lv;
+    const struct levels_link regs = {&l, reg_write, reg_ask, reg_answer};
+    if (level_file && levels_load(&lv, level_file) < 0)
+        return -1;
     memset(&l, 0, sizeof(l));
     l.s = s;
     l.state = ~0u;
@@ -252,8 +264,10 @@ int inline_run(struct sniffer *s, const char *port, const struct sniffer_options
     if (l.fd < 0)
         return -1;
     int result = start(&l, opt);
+    if (!result && level_file)
+        result = levels_start(&lv, &regs);
     while (!result && !*stopping)
-        result = report(&l) < 0 ? -1 : pump(&l, -1, NULL, REPORT_MS);
+        result = report(&l) < 0 || (level_file && levels_step(&lv) < 0) ? -1 : pump(&l, -1, NULL, REPORT_MS);
     if (l.started) {
         sniffer_stop(s);
         if (!result) // the records on their way, then the last counts
