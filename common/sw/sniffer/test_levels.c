@@ -33,7 +33,7 @@ struct box {
     struct bus bus[2];
     int dac[2][4], written[2][4];
     unsigned command;              // the ADC's
-    uint32_t lasers, answers[64];
+    uint32_t lasers, rx, answers[64];
     unsigned asked, answered, cleared;
     int disorder;                  // bias before its set point, laser before the bias
     // what the test sets
@@ -159,6 +159,8 @@ static int box_write(void *ctx, unsigned offset, uint32_t value)
         b->lasers = value;
     } else if (offset == INLINE_US_LEVEL) {
         b->cleared = 1;
+    } else if (offset == INLINE_RX) {
+        b->rx = value;
     } else {
         failures++;
     }
@@ -186,7 +188,7 @@ static const char UNIT[] =
     "# a unit's constants\n"
     "olt_apd_v = 40\nolt_rx_a_per_w = 8\n"
     "olt_tx_threshold_ma = 8\nolt_tx_mw_per_ma = 0.1\nolt_tx_max_dbm = 4\nolt_tx_start_dbm = 2\nolt_tx_md_mv_per_mw = 300\n"
-    "onu_apd_v = 45   # behind the pad\nonu_rx_a_per_w = 0.08\n"
+    "onu_apd_v = 45   # behind the pad\nonu_rx_a_per_w = 0.08\nonu_rx_inverted = 1\n"
     "onu_tx_threshold_ma = 10\nonu_tx_mw_per_ma = 0.001\nonu_tx_max_dbm = -16\nonu_tx_start_dbm = -26\nonu_tx_md_mv_per_mw = 33000\n";
 
 static int load(struct levels *lv, const char *text, const char *more)
@@ -234,6 +236,7 @@ int main(void)
     box_init(&b, -27, 2);
     CHECK(run(&lv, &b, 40) == 0);
     CHECK(b.dac[0][0] == 1013 && b.dac[1][0] == 945); // 40 V and 45 V
+    CHECK(b.rx == INLINE_RX_US_MASK);
     CHECK(b.lasers == (INLINE_LASERS_APD_MASK | INLINE_LASERS_US_MASK | INLINE_LASERS_DS_MASK));
     CHECK(fabs(sent_dbm(&b, LEVELS_ONU) - -26) < 0.3 && fabs(sent_dbm(&b, LEVELS_OLT) - 3) < 0.3);
     CHECK(abs(lv.burst_level_mv - 152) <= 4 && !lv.laser[0].limited && !lv.laser[1].limited);
@@ -271,6 +274,7 @@ int main(void)
     CHECK(load(&lv, UNIT, "olt_tx_power = 3\n") < 0);         // not a setting
     CHECK(load(&lv, UNIT, "gain_db = 1 dB\n") < 0);
     CHECK(load(&lv, UNIT, "onu_apd_v = 70\n") < 0);           // over the supply's range
+    CHECK(load(&lv, UNIT, "olt_rx_inverted = 2\n") < 0);
     CHECK(load(&lv, UNIT, "onu_tx_bias_ma = 20\n") < 0);      // regulated and fixed
     CHECK(load(&lv, "olt_apd_v = 40\nonu_apd_v = 45\nolt_tx_mw_per_ma = 0.1\n", "") < 0); // no threshold
     CHECK(load(&lv, "onu_apd_v = 45\n", "") < 0);

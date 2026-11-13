@@ -34,7 +34,7 @@ object InlineSnifferTest extends App {
   }
 
   val number = Seq("CTRL", "DELIMITER", "ALLOC_MAP", "PORT_MAP", "ID", "LASERS", "REGEN", "I2C", "STATUS", "ERRORS", "DS_LOST",
-    "US_LOST", "US_OVERFLOWS", "US_LEVEL").zipWithIndex.toMap
+    "US_LOST", "US_OVERFLOWS", "US_LEVEL", "RX").zipWithIndex.toMap
   def write(name: String, value: Long) = Seq(0x5A, 0x80 | number(name)) ++ (0 until 4).map(i => ((value >> (8 * i)) & 0xFF).toInt)
   def read(name: String) = Seq(0x5A, number(name), 0, 0, 0, 0)
 
@@ -47,7 +47,8 @@ object InlineSnifferTest extends App {
   var sdaLowSeen = false
   var i2cWrites = mutable.ArrayBuffer[Long]() // out clock of each change of the lines
 
-  SimConfig.compile(InlineSniffer(steadyBits = 8)).doSim(3) { dut =>
+  val compiled = SimConfig.compile(InlineSniffer(steadyBits = 8))
+  compiled.doSim(3) { dut =>
     zeros = dut.zeros
     dut.io.dsRx #= 0
     dut.io.usRx #= 0
@@ -169,5 +170,48 @@ object InlineSnifferTest extends App {
   val lit = ben.count(identity) * 5
   val need = bursts.map(b => 8 * (b._2.length + 11)).sum
   check(lit >= need && lit < need + bursts.length * 200, s"upstream: laser on for the bursts only ($lit bits for $need)")
+
+  // both receivers inverted (RX = 3) and their lines too: the same downstream bits and the same burst leave the box
+  val (burstAt, burstClear) = bursts.head
+  val usFrom = burstAt - 20000
+  val dsInverted, usInverted = mutable.ArrayBuffer[Int]()
+  compiled.doSim("inverted", 4) { dut =>
+    val commands = mutable.Queue[Int]() ++ write("RX", 3) ++ write("LASERS", 3)
+    dut.io.dsRx #= (BigInt(1) << 20) - 1
+    dut.io.usRx #= (BigInt(1) << 40) - 1
+    dut.io.dsSignal #= true
+    dut.io.usb.rx.valid #= false
+    dut.io.usb.tx.ready #= true
+    dut.io.scl #= true
+    dut.io.sda #= true
+    dut.io.usAbove #= false
+    dut.io.burstCut #= false
+    var dsWord, usWord = 0
+    dut.dsCd.onSamplings {
+      dut.io.dsRx #= (0 until 20).map(k => BigInt(1 - dsBits(20 * dsWord + k)) << k).sum
+      dsWord += 1
+    }
+    dut.clockDomain.onSamplings(if (dut.io.dsLaser.toBoolean) dsInverted ++= (0 until 20).map(k => ((dut.io.dsTx.toBigInt >> k) & 1).toInt))
+    dut.usCd.onSamplings {
+      dut.io.usRx #= (0 until 40).map(k => BigInt(1 - usBits(usFrom + 10 * usWord + k / 4)) << k).sum
+      usWord += 1
+      usInverted ++= (0 until 40 by 4).map(k => ((dut.io.usTx.toBigInt >> k) & 1).toInt)
+    }
+    dut.usbCd.onSamplings {
+      if (dut.io.usb.rx.valid.toBoolean && dut.io.usb.rx.ready.toBoolean) commands.dequeue()
+      dut.io.usb.rx.valid #= commands.nonEmpty
+      if (commands.nonEmpty) dut.io.usb.rx.payload #= commands.head
+    }
+    dut.clockDomain.forkStimulus(20)
+    fork { sleep(7); dut.dsCd.forkStimulus(20) }
+    dut.outCd.forkStimulus(32)
+    fork { sleep(3); dut.usCd.forkStimulus(20) }
+    fork { sleep(5); dut.usbCd.forkStimulus(42) }
+    dut.usCd.waitSampling(2000 + burstClear.length + 400)
+  }
+  val dsAt = dsInverted.indexOfSlice(dsBits.slice(30000, 30064))
+  check(dsAt >= 0 && dsInverted.slice(dsAt, dsAt + 10000) == dsBits.slice(30000, 40000).toSeq, "inverted receivers: downstream sent again bit for bit")
+  val burstBits = usBits.slice(burstAt - 24, burstAt + 8 * burstClear.length).toSeq
+  check(usInverted.indexOfSlice(burstBits.take(burstBits.lastIndexOf(1) + 1)) >= 0, "inverted receivers: the burst sent again from its delimiter")
   println("PASS InlineSnifferTest")
 }

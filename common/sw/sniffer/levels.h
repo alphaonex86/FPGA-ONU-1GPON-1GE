@@ -18,7 +18,7 @@ struct levels_link { // the device's registers; -1 on an error (logged)
 };
 
 struct levels_port { // a connector's receiver and laser; NAN: not in the file
-    double apd_v, rx_a_per_w;
+    double apd_v, rx_a_per_w, rx_inverted; // inverted: 1 when the BOSA's TIA pair gives the data inverted
     double tx_threshold_ma, tx_mw_per_ma, tx_max_dbm, tx_start_dbm, tx_md_mv_per_mw; // the regulated laser
     double tx_bias_ma, tx_mod_ma;                                                    // or fixed currents, to calibrate
 };

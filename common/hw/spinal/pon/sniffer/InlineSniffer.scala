@@ -29,6 +29,7 @@ case class InlineDump(benDelay: Int = 0) extends Component {
     val scl, sda = in Bool ()
     // to and from the line side, another clock: steady or synchronized there
     val dsLaser, usLaser, apdOn = out Bool ()
+    val dsInvert, usInvert = out Bool ()
     val head = out UInt (3 bits)
     val garble = out UInt (2 bits)
     val benDelay = out UInt (4 bits)
@@ -121,6 +122,9 @@ case class InlineDump(benDelay: Int = 0) extends Component {
     bursts := 0
     above := 0
   }
+  val RX = busif.newReg("Receivers whose BOSA gives the data inverted (no datasheet says which lead of the TIA pair rises with light)")
+  io.dsInvert := RX.field(Bool(), AccessType.RW, 0, "ds: the OLT port's, the downstream")(SymbolName("ds"))
+  io.usInvert := RX.field(Bool(), AccessType.RW, 0, "us: the ONU port's, the upstream (its offset resistor then goes on the other input)")(SymbolName("us"))
   busif.accept(DocCHeader("inline_regs", "INLINE")) // inline_regs.h next to the Verilog
 
   // commands: parsed, then one APB access; a read answered before the next command is taken
@@ -230,11 +234,12 @@ case class InlineSniffer(steadyBits: Int = 22, tail: Int = 4, benDelay: Int = 0,
     val synced = out Bool () // out domain, for a LED
   }
   val bridge = SnifferBridge(inline = true, dsDomain = dsCd, outDomain = outCd)
-  bridge.io.dsWord := io.dsRx
   bridge.io.dsSignal := io.dsSignal
   io.txFaster := bridge.io.vcxo
 
   val dump = outCd(InlineDump(benDelay))
+  val dsInvert = dsCd(BufferCC(dump.io.dsInvert, False))
+  bridge.io.dsWord := dsInvert ? ~io.dsRx | io.dsRx
   dump.io.dsWord := bridge.io.dsPins
   val toHost = StreamFifoCC(Bits(8 bits), 64, outCd, usbCd)
   toHost.io.push << dump.io.link.tx
@@ -271,7 +276,8 @@ case class InlineSniffer(steadyBits: Int = 22, tail: Int = 4, benDelay: Int = 0,
 
   val upstream = new ClockingArea(usCd) {
     val clean = UsClean()
-    clean.io.samples := io.usRx.reversed
+    val invert = BufferCC(dump.io.usInvert, False)
+    clean.io.samples := (invert ? ~io.usRx | io.usRx).reversed
     val regen = UsRegen(spb = 4)
     regen.io.bits := clean.io.clean
     regen.io.enable := BufferCC(dump.io.usLaser, False)

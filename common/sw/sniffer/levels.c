@@ -43,6 +43,7 @@ static const struct {
 static const struct { const char *name; size_t offset; } PORT_KEYS[] = {
     {"apd_v", offsetof(struct levels_port, apd_v)},
     {"rx_a_per_w", offsetof(struct levels_port, rx_a_per_w)},
+    {"rx_inverted", offsetof(struct levels_port, rx_inverted)},
     {"tx_threshold_ma", offsetof(struct levels_port, tx_threshold_ma)},
     {"tx_mw_per_ma", offsetof(struct levels_port, tx_mw_per_ma)},
     {"tx_max_dbm", offsetof(struct levels_port, tx_max_dbm)},
@@ -85,6 +86,8 @@ static int check(const struct levels *lv, const char *path)
         }
         if (port->rx_a_per_w <= 0)
             wrong = "rx_a_per_w must be over 0";
+        else if (!isnan(port->rx_inverted) && port->rx_inverted != 0 && port->rx_inverted != 1)
+            wrong = "rx_inverted is 0 or 1";
         else if (regulated(port) && fixed(port))
             wrong = "tx_mw_per_ma (regulated) with tx_bias_ma / tx_mod_ma (fixed currents)";
         else if (regulated(port) && !(port->tx_mw_per_ma > 0 && port->tx_threshold_ma >= 0 && !isnan(port->tx_max_dbm) &&
@@ -265,7 +268,10 @@ int levels_start(struct levels *lv, const struct levels_link *link)
     lv->burst_mv = lv->burst_step = STEP_MAX_MV;
     lv->burst_up = lv->burst_run = lv->burst_level_mv = 0;
     lv->shown_dbm[0] = lv->shown_dbm[1] = NAN;
-    if (reg_write(lv, INLINE_LASERS, 0) < 0 || adc(lv, DS_APD_MON, &mv) < 0) // a conversion: reference on
+    const uint32_t inverted = (lv->port[LEVELS_OLT].rx_inverted == 1 ? INLINE_RX_DS_MASK : 0) |
+                              (lv->port[LEVELS_ONU].rx_inverted == 1 ? INLINE_RX_US_MASK : 0);
+    if (reg_write(lv, INLINE_LASERS, 0) < 0 || reg_write(lv, INLINE_RX, inverted) < 0 ||
+        adc(lv, DS_APD_MON, &mv) < 0) // a conversion: reference on
         return -1;
     for (unsigned p = 0; p < 2; p++) {
         lv->laser[p] = (struct levels_laser){.sent_mw = NAN, .shown_dbm = NAN};
