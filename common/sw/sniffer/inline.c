@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: CERN-OHL-S-2.0
-// In-line sniffer over its FT2232H channel A, a plain serial port: the record stream in, the registers written and
+// In-line sniffer over its USB serial port (CDC-ACM): the record stream in, the registers written and
 // read by 6-byte commands (the protocol: InlineDump's header, common/hw/spinal/pon/sniffer/InlineSniffer.scala).
 #include "inline.h"
 

@@ -223,7 +223,7 @@ static void usage(void)
             "  -t FILE  decoded records (default stdout, '-' none)\n"
             "  -P FILE  OMCI profile: the OLT's requests with the ONU's answers\n"
             "  -r FILE  decode a raw dump instead of the board\n"
-            "  -i PORT  the in-line sniffer's serial port (its FT2232H channel A), e.g. /dev/ttyUSB0\n"
+            "  -i PORT  the in-line sniffer's USB serial port, e.g. /dev/ttyACM0\n"
             "  -u DEV   the sniffer's UIO device (de25-standard/ghrd/uio_overlay.sh), e.g. /dev/uio0: waits on its\n"
             "           interrupt; else /dev/mem, polled\n"
             "  -b ADDR  HPS-to-FPGA lightweight bridge base, /dev/mem only (default 0x%08x)\n"

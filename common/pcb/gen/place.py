@@ -182,10 +182,10 @@ def sniffer_layout():
     return lay
 
 def inline_layout():
-    """USB and the FT2232H north-west of the BGA, flash and JTAG west, both optical ports east with their fibres over
+    """USB and its ULPI PHY north-west of the BGA, flash and JTAG west, both optical ports east with their fibres over
     the edge (OLT port north, ONU port south), each receiver's limiting amp at its can inside a ring of shield clips.
     The BOSA lands take any lead order (BOSA_PADS). The Artix-7 turned so its ball A1 is north-east: the GTP quad
-    (rows A-F) faces the ports, the FT2232H bus (rows AA/AB, columns 1-8) the north-west, the config flash bank
+    (rows A-F) faces the ports, the ULPI bus (rows Y-AB, columns 1-8) the north-west, the config flash bank
     (columns 19-22) the south-west."""
     lay = Layout(inline(), 92, 92)
     one = lambda sym: refs(lay, sym)[0]
@@ -203,9 +203,7 @@ def inline_layout():
     lay.place(one('TLV75512PDBV'), 56.0, 35.0, 0, True)
     lay.place(one('USB_C_Receptacle_USB2.0_16P'), 16.0, 4.2, 180)   # mouth over the north edge
     lay.place(one('USBLC6-2SC6'), 25.5, 5.0)
-    lay.place(one('FT2232HL'), 12.5, 18.0)
-    lay.place(one('Crystal_GND24'), 3.5, 27.0, 90)
-    lay.place(one('93LCxxBxxOT'), 9.0, 28.5)
+    lay.place(one('USB3320'), 13.0, 16.0)                             # between the USB-C and bank 34 (ULPI)
     lay.place(one('W25Q32JVSS'), 12.5, 36.0)
     lay.place(one('Conn_01x06'), 4.0, 38.0)                          # JTAG
     lay.place(one('LED'), 12.0, 88.0)

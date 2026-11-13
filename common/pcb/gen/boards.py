@@ -541,7 +541,8 @@ def laser(b, p, data, dis, ben=None):
 def inline():
     """In-line GPON sniffer (../FPGA-USB-GPON-sniffer/README.md): in one ONU's drop fibre, both directions regenerated
     through the Artix-7 and dumped over USB. OLT port: ONU-type BOSA (DS_ receiver, US_ burst laser); ONU port: OLT-type
-    BOSA (US_ burst receiver, DS_ laser), both on pad rows that fit any lead order. FT2232H: channel A 245 FIFO to the FPGA, channel B its JTAG and flash.
+    BOSA (US_ burst receiver, DS_ laser), both on pad rows that fit any lead order. USB: USB3320 ULPI PHY to the FPGA (LUNA serial device); flash and FPGA
+    written over the JTAG header.
     The upstream laser lights only while the ONU-port receiver sees light (US_QUIET low, no FPGA in that path) and
     the max-burst cutoff ends what stays on."""
     b = Bridge('inline', 'In-line GPON sniffer: USB, Artix-7, OLT and ONU optical ports')
@@ -555,30 +556,23 @@ def inline():
     b.r('5.1k', 'USB_CC1', 'GND'); b.r('5.1k', 'USB_CC2', 'GND')
     b.add('U', 'Power_Protection', 'USBLC6-2SC6', 'USBLC6-2SC6', 'Package_TO_SOT_SMD:SOT-23-6',
           {'I/O1': 'USB_DP', 'I/O2': 'USB_DM', 'VBUS': 'VBUS', 'GND': 'GND'}, MPN='USBLC6-2SC6')
-    ft = {'DP': 'USB_DP', 'DM': 'USB_DM', 'REF': 'FT_REF', 'OSCI': 'FT_OSCI', 'OSCO': 'FT_OSCO', 'TEST': 'GND', '~{RESET}': '+3V3',
-          'VREGIN': '+3V3', 'VREGOUT': '+1V8_FT', 'VCORE': '+1V8_FT', 'VCCIO': '+3V3', 'VPHY': '+3V3_FTPHY', 'VPLL': '+3V3_FTPLL',
-          'GND': 'GND', 'AGND': 'GND', 'EECS': 'EE_CS', 'EECLK': 'EE_CLK', 'EEDATA': 'EE_DATA',
-          'ACBUS0': 'FT_RXF_N', 'ACBUS1': 'FT_TXE_N', 'ACBUS2': 'FT_RD_N', 'ACBUS3': 'FT_WR', 'ACBUS4': 'FT_SIWU',
-          'BDBUS0': 'TCK', 'BDBUS1': 'TDI', 'BDBUS2': 'TDO', 'BDBUS3': 'TMS'}
-    ft.update({f'ADBUS{i}': f'FT_D{i}' for i in range(8)})
-    b.add('U', 'Interface_USB', 'FT2232HL', 'FT2232HL', 'Package_QFP:LQFP-64_10x10mm_P0.5mm', ft, MPN='FT2232HL')
-    b.decouple('+3V3', 5, 1); b.decouple('+1V8_FT', 3); b.c('4.7u', '+1V8_FT')
-    for rail in ('+3V3_FTPHY', '+3V3_FTPLL'):
-        b.fb('+3V3', rail); b.decouple(rail, 1); b.c('4.7u', rail)
-    b.r('12k', 'FT_REF', 'GND', MPN='1 %')
-    b.add('Y', 'Device', 'Crystal_GND24', '12MHz', 'Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm',
-          {'1': 'FT_OSCI', '3': 'FT_OSCO', '2': 'GND', '4': 'GND'}, MPN='X322512MSB4SI')
-    b.c('27p', 'FT_OSCI'); b.c('27p', 'FT_OSCO')   # crystal CL 20 pF
-    b.add('U', 'Memory_EEPROM', '93LCxxBxxOT', '93LC56BT-I/OT', 'Package_TO_SOT_SMD:SOT-23-6',   # channel A: 245 FIFO
-          {'CS': 'EE_CS', 'CLK': 'EE_CLK', 'DI': 'EE_DATA', 'DO': 'EE_DO', 'VCC': '+3V3', 'GND': 'GND'}, MPN='93LC56BT-I/OT')
-    b.r('2.2k', 'EE_DO', 'EE_DATA'); b.r('10k', 'EE_DO', '+3V3'); b.decouple('+3V3', 1)
-    # with a blank EEPROM ACBUS3 / ACBUS4 are LED outputs: never tied hard
-    b.r('330', 'FT_WR_N', 'FT_WR'); b.r('10k', 'FT_SIWU', '+3V3')
-    for net in ('FT_RD_N', 'FT_WR_N'):   # idle while the FPGA is unconfigured
-        b.r('10k', net, '+3V3')
-    # balls: banks 34 (FT2232H) and 16 (optics) on the outer rows toward their parts once the BGA is turned a quarter
-    misc = {**{f'FT_D{i}': ball for i, ball in enumerate(('AB1', 'AB2', 'AB3', 'AB5', 'AB6', 'AB7', 'AB8', 'AA1'))},
-            'FT_RXF_N': 'AA3', 'FT_TXE_N': 'AA4', 'FT_RD_N': 'AA5', 'FT_WR_N': 'AA6',
+    # USB3320 ULPI PHY in output clock mode: its reference (24 MHz) from the FPGA, which holds it in reset until then
+    phy = {'CLKOUT': 'ULPI_CLK', 'DIR': 'ULPI_DIR', 'NXT': 'ULPI_NXT', 'STP': 'ULPI_STP', 'RESETB': 'ULPI_RST_N',
+           'REFCLK': 'ULPI_REFCLK', 'REFSEL0': '+3V3', 'REFSEL1': '+3V3', 'REFSEL2': '+3V3', 'RBIAS': 'USB_RBIAS',
+           'VBAT': '+5V', 'VDD33': 'USB_VDD33', 'VDD18': '+1V8_USB', 'VDDIO': '+3V3', 'VBUS': 'USB_VBUS_SENSE',
+           'DP': 'USB_DP', 'DM': 'USB_DM', 'ID': 'USB_VDD33', 'GND': 'GND'}
+    phy.update({f'DATA{i}': f'ULPI_D{i}' for i in range(8)})
+    b.add('U', LIB, 'USB3320', 'USB3320C-EZK-TR', 'Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm', phy,
+          MPN='USB3320C-EZK-TR')
+    b.c('2.2u', 'USB_VDD33'); b.decouple('+3V3', 1)   # VDD33: its regulator's output, 2.2 uF < 1 ohm ESR
+    b.fb('+1V8', '+1V8_USB'); b.decouple('+1V8_USB', 2); b.c('1u', '+1V8_USB')
+    b.r('8.06k', 'USB_RBIAS', 'GND', MPN='1 %')
+    b.r('10k', 'USB_VBUS_SENSE', 'VBUS')   # RVBUS, device only (Table 5-7)
+    b.r('10k', 'ULPI_RST_N', 'GND')        # PHY off while the FPGA is unconfigured
+    # balls: banks 34 (USB PHY; its clock on an SRCC input) and 16 (optics) on the outer rows toward their parts once
+    # the BGA is turned a quarter
+    misc = {**{f'ULPI_D{i}': ball for i, ball in enumerate(('AB1', 'AB2', 'AB3', 'AB5', 'AB6', 'AB7', 'AB8', 'AA1'))},
+            'ULPI_DIR': 'AA3', 'ULPI_NXT': 'AA4', 'ULPI_STP': 'AA5', 'ULPI_RST_N': 'AA6', 'ULPI_CLK': 'Y4', 'ULPI_REFCLK': 'AA8',
             'US_BEN': 'B22', 'US_LASER_DIS': 'C22', 'DS_LASER_DIS': 'D22', 'DS_LOS': 'E22', 'US_ABOVE': 'G22',
             'BURST_CUT': 'B21', 'SCL': 'D21', 'SCL2': 'E21', 'SDA': 'F21', 'LED_SYNC': 'G21', 'APD_EN': 'A21'}
     b.artix7(misc)

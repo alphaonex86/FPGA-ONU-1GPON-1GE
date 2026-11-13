@@ -9,7 +9,7 @@ import pon.gpon.GponCodes._
 import pon.gpon.GtcDsTest.{check, bigToBytes, bytesToBig}
 import pon.sniffer.SnifferTest.Record
 
-/** The in-line sniffer whole, its three clocks and an FT2232H model on the link: both directions sent again bit for
+/** The in-line sniffer whole, its three clocks and a USB host on the link: both directions sent again bit for
   * bit, the lasers on only when they must, the registers over the link, the records of both directions as the
   * byte-wide chain's. Throws on failure. */
 object InlineSnifferTest extends App {
@@ -44,7 +44,7 @@ object InlineSnifferTest extends App {
   val ben = mutable.ArrayBuffer[Boolean]() // per half-word
   var zeros = 0 // the dut's
   var laserBeforeData, benWithoutLaser = false
-  var sdaLowSeen, strobeError = false
+  var sdaLowSeen = false
   var i2cWrites = mutable.ArrayBuffer[Long]() // out clock of each change of the lines
 
   SimConfig.compile(InlineSniffer(steadyBits = 8)).doSim(3) { dut =>
@@ -52,9 +52,8 @@ object InlineSnifferTest extends App {
     dut.io.dsRx #= 0
     dut.io.usRx #= 0
     dut.io.dsSignal #= true
-    dut.io.link.rxfN #= true
-    dut.io.link.txeN #= false
-    dut.io.link.read #= 0
+    dut.io.usb.rx.valid #= false
+    dut.io.usb.tx.ready #= false
     dut.io.scl #= true
     dut.io.usAbove #= false
     dut.io.burstCut #= false
@@ -80,36 +79,17 @@ object InlineSnifferTest extends App {
       ben += ((dut.io.usBen.toInt >> 1) & 1) == 1
       ben += (dut.io.usBen.toInt & 1) == 1
     }
-    // the FT2232H: a byte to the device while RD# is low, a byte taken at WR#; each flag away 4 clocks after its strobe
-    var rdLow, wrLow, rxWait, txWait = 0
-    var written = 0
+    // the USB host: takes a byte when it can (stalls at random), sends its bytes in order
+    dut.usbCd.onSamplings {
+      if (dut.io.usb.tx.valid.toBoolean && dut.io.usb.tx.ready.toBoolean) fromDevice += dut.io.usb.tx.payload.toInt
+      if (dut.io.usb.rx.valid.toBoolean && dut.io.usb.rx.ready.toBoolean) toDevice.dequeue()
+      dut.io.usb.tx.ready #= rand.nextInt(4) != 0
+      dut.io.usb.rx.valid #= toDevice.nonEmpty
+      if (toDevice.nonEmpty) dut.io.usb.rx.payload #= toDevice.head
+    }
     var lines = (false, false)
     dut.outCd.onSamplings {
       outClock += 1
-      val (rd, wr) = (!dut.io.link.rdN.toBoolean, !dut.io.link.wrN.toBoolean)
-      if (rd && wr || rd && dut.io.link.drive.toBoolean) strobeError = true
-      if (wr) {
-        if (wrLow == 0) written = dut.io.link.write.toInt
-        if (!dut.io.link.drive.toBoolean || dut.io.link.write.toInt != written) strobeError = true
-        wrLow += 1
-      } else if (wrLow > 0) {
-        if (wrLow < 3 || !dut.io.link.drive.toBoolean || dut.io.link.write.toInt != written) strobeError = true
-        fromDevice += written
-        wrLow = 0
-        txWait = 4
-      }
-      if (rd) rdLow += 1
-      else if (rdLow > 0) {
-        if (rdLow < 3) strobeError = true
-        toDevice.dequeue()
-        rdLow = 0
-        rxWait = 4
-      }
-      if (txWait > 0) txWait -= 1
-      if (rxWait > 0) rxWait -= 1
-      dut.io.link.txeN #= wr || txWait > 0
-      dut.io.link.rxfN #= toDevice.isEmpty || rxWait > 0 || (rdLow == 0 && rd)
-      if (toDevice.nonEmpty) dut.io.link.read #= toDevice.head
       val now = (dut.io.sclLow.toBoolean, dut.io.sdaLow.toBoolean)
       if (now != lines) i2cWrites += outClock
       lines = now
@@ -119,17 +99,17 @@ object InlineSnifferTest extends App {
     fork { sleep(7); dut.dsCd.forkStimulus(20) }
     dut.outCd.forkStimulus(32)
     fork { sleep(3); dut.usCd.forkStimulus(20) }
+    fork { sleep(5); dut.usbCd.forkStimulus(42) }
     dut.outCd.waitSampling(20)
     toDevice ++= Seq(0x11, 0x22) ++ read("ID") // bytes before a command are skipped
     toDevice ++= write("CTRL", 0x10501) ++ write("LASERS", 3) ++ write("DELIMITER", usDelimiter.toLong)
     toDevice ++= DsLine.allocIds.flatMap(id => write("ALLOC_MAP", 0x1000 | id)) ++ DsLine.portIds.flatMap(id => write("PORT_MAP", 0x1000 | id))
     toDevice ++= write("I2C", 1) ++ write("I2C", 3) ++ write("I2C", 2) ++ read("I2C") ++ write("I2C", 3)
-    dut.clockDomain.waitSampling(dsBits.length / 20 - 6000) // the link, 10 clocks per byte, is empty by then
+    dut.clockDomain.waitSampling(dsBits.length / 20 - 6000) // the link is empty by then
     toDevice ++= Seq("STATUS", "ERRORS", "DS_LOST", "US_LOST", "US_OVERFLOWS", "US_LEVEL").flatMap(read) ++ write("US_LEVEL", 0) ++ read("US_LEVEL")
     dut.clockDomain.waitSampling(7000)
   }
 
-  check(!strobeError, "link: RD# and WR# 3 clocks low, never together, data driven and stable around WR#")
   val records = mutable.ArrayBuffer[Record]()
   var at = 0
   var padError = false

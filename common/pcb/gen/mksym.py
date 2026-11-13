@@ -123,6 +123,19 @@ syms.append(box_symbol('VCXO_LVDS_7050', [([('1', 'VIN', 'input'), ('2', 'OE', '
                                             [('6', 'VDD', 'power_in'), ('4', 'OUT+', 'tri_state'), ('5', 'OUT-', 'tri_state')])],
                        'Y', 'VCXO_LVDS_7050', 'bridge:VCXO_7050_EP',
                        'LVDS VCXO 3.3 V, 7x5 mm, 6 pads 2.54 mm pitch + centre pad (GND): VIN control voltage, OE high = on'))
+# USB3320 ULPI PHY (Microchip DS00001792), QFN-32 5x5 EZK, exposed pad = GND
+syms.append(box_symbol('USB3320', [([('1', 'CLKOUT', 'output'), ('31', 'DIR', 'output'), ('2', 'NXT', 'output'), ('29', 'STP', 'input'),
+                                      ('27', 'RESETB', 'input'), ('26', 'REFCLK', 'input'), ('25', 'XO', 'output'),
+                                      ('8', 'REFSEL0', 'input'), ('11', 'REFSEL1', 'input'), ('14', 'REFSEL2', 'input'),
+                                      ('24', 'RBIAS', 'passive'), ('12', 'NC', 'no_connect')] +
+                                     [(n, f'DATA{i}', 'bidirectional') for i, n in enumerate(('3', '4', '5', '6', '7', '9', '10', '13'))],
+                                     [('21', 'VBAT', 'power_in'), ('20', 'VDD33', 'power_out'), ('28', 'VDD18', 'power_in'),
+                                      ('30', 'VDD18', 'passive'), ('32', 'VDDIO', 'power_in'), ('22', 'VBUS', 'passive'),
+                                      ('18', 'DP', 'bidirectional'), ('19', 'DM', 'bidirectional'), ('23', 'ID', 'input'),
+                                      ('17', 'CPEN', 'output'), ('15', 'SPK_L', 'passive'), ('16', 'SPK_R', 'passive'),
+                                      ('33', 'GND', 'power_in')])],
+                       'U', 'USB3320C-EZK', 'Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm',
+                       'Hi-Speed USB 2.0 ULPI transceiver, 1.8-3.3 V I/O, internal 3.3 V regulator; VDD18 external'))
 # Any pigtail BOSA lying on the board: its leads are formed by hand to these pads, so the pin order of the cans is not in the copper
 syms.append(box_symbol('BOSA_PADS', [([('T1', 'MPD_A', 'passive'), ('T2', 'LD_A', 'passive'), ('T3', 'LD_K', 'passive'), ('T4', 'CASE', 'passive')],
                                        [('R1', 'VAPD', 'passive'), ('R2', 'GND', 'power_in'), ('R3', 'OUT+', 'output'), ('R4', 'OUT-', 'output'),
