@@ -82,6 +82,7 @@ class Layout:
         self.parts = {p.ref: p for p in bd.parts if p.on_board and p.footprint}
         self.fps, self.rects = {}, {'F': [], 'B': []}
         self.keepout = {'F': [], 'B': []}
+        self.tied = set()   # (ref, pad) of plane-net pads a cell gave their via: plane_vias leaves them
         self.core, self.pitch, self.island = '+1V1', 0.8, None   # the BGA's core rail, ball pitch, core plane island
         root = uid(bd.name, 'sheet')
         for ref, part in self.parts.items():
@@ -400,7 +401,7 @@ def plane_vias(lay, clear=0.12):
     added, missed = 0, []
     via_in_pad = {(fp.GetReference(), p.GetNumber()) for fp in lay.pcb.GetFootprints() for p in fp.Pads() if p.HasHole()}
     pads = [(fp, p) for fp in lay.pcb.GetFootprints() if fp.GetReference() != lay.bga for p in fp.Pads()
-            if not p.HasHole() and p.GetNetname().startswith(POWER_PREFIX) and (fp.GetReference(), p.GetNumber()) not in via_in_pad]
+            if not p.HasHole() and p.GetNetname().startswith(POWER_PREFIX) and (fp.GetReference(), p.GetNumber()) not in via_in_pad | lay.tied]
     for fp, p in sorted(pads, key=lambda fp_p: fp_p[1].GetNetname() == 'GND'):  # GND last: the outer pours also tie it
         net = p.GetNetname()
         cx, cy = P(fp.GetPosition())
