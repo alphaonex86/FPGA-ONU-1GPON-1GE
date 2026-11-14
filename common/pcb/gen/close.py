@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 """Closes the open connections of a DRC report on F.Cu / B.Cu with a grid A* (KiCad's DRC stays the oracle).
 
-    close.py BOARD DRC.json OUT [NET | LEADER:FOLLOWER]...
+    close.py BOARD DRC.json OUT [NET | LEADER:FOLLOWER | REF.PAD]...
 
 LEADER:FOLLOWER: a pair; the leader prefers room for two, the follower prefers the leader's side.
 A net with an inner plane is closed by a via into the plane at each end that has none.
+REF.PAD: that pad gets its own via into its net's plane (never in a pad), whatever the report says.
 KEEP="X0,Y0,X1,Y1;..." (layout mm): boxes a net with no pad inside may not enter (a receiver's leads).
 GRID / MARGIN (mm) in the environment: a finer raster for a tight spot; VIA_MM: the track length a via is worth. Existing copper is never moved. GND is left to the pours unless named.
 """
@@ -22,8 +23,10 @@ IU = pcbnew.FromMM
 ERR = IU(0.005)
 
 board_path, drc_path, out_path = sys.argv[1:4]
-pairs = dict(a.split(':') for a in sys.argv[4:] if ':' in a)
-only = [n for a in sys.argv[4:] for n in a.split(':')]
+ties = [a for a in sys.argv[4:] if re.fullmatch(r'[A-Z]+[0-9]+[.][A-Z0-9]+', a)]
+named = [a for a in sys.argv[4:] if a not in ties]
+pairs = dict(a.split(':') for a in named if ':' in a)
+only = [n for a in named for n in a.split(':')]
 pcb = pcbnew.LoadBoard(board_path)
 box = pcb.GetBoardEdgesBoundingBox()
 X0, Y0 = box.GetX(), box.GetY()
@@ -293,14 +296,32 @@ def lay(path, net, width, exact):
             pcb.Add(t)
 
 
+failed = 0
+for tie in ties:
+    ref, number = tie.split('.')
+    part = pcb.FindFootprintByReference(ref)
+    pad = part.FindPadByNumber(number)
+    net, name = pad.GetNetCode(), pad.GetNetname()
+    width, clear, sites = netclass(name)['track_width'], netclass(name)['clearance'], plane(net)
+    if sites is None:
+        sys.exit(f'{tie}: {name} has no inner plane')
+    blocked, via = rasters(net, width, clear)
+    x, y = (round((v - o) / IU(G)) for v, o in ((pad.GetPosition().x, X0), (pad.GetPosition().y, Y0)))
+    path = search(blocked, via, [(1 if part.IsFlipped() else 0, x, y)], [], sites=sites & ~via)
+    if path is None:
+        failed += 1
+        print(f'FAIL {tie}: no way to a plane via')
+        continue
+    layer, x, y = path[-1]
+    lay(path + [(1 - layer, x, y)], net, width, [pad.GetPosition(), point(x, y)])
+    print(f'ok   {tie} {name} plane via at {x * G:.2f} {y * G:.2f}, {len(path) * G:.1f} mm')
 opens = []
-for u in json.load(open(drc_path)).get('unconnected_items', []):
+for u in json.load(open(drc_path)).get('unconnected_items', []) if named or not ties else []:
     name = re.search(r'\[([^\]]+)\]', u['items'][0]['description']).group(1)
     if (name in only) if only else name != 'GND':
         a, b = u['items']
         span = math.hypot(a['pos']['x'] - b['pos']['x'], a['pos']['y'] - b['pos']['y'])
         opens.append((span, name, a, b))
-failed = 0
 for span, name, a, b in sorted(opens, key=lambda o: only.index(o[1]) if only else o[0]):
     net = pcb.FindNet(name).GetNetCode()
     width, clear = netclass(name)['track_width'], netclass(name)['clearance']

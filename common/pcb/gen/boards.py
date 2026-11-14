@@ -190,7 +190,8 @@ class Bridge(Board):
                 **{f'VCCO_{k}': '+3V3' for k in (0, 13, 14, 15, 16, 34, 35)}, 'CFGBVS_0': '+3V3', 'M0_0': '+3V3',
                 'PROGRAM_B_0': 'PROGRAM_B', 'INIT_B_0': 'INIT_B', 'DONE_0': 'DONE', 'CCLK_0': 'CCLK',
                 'TCK_0': 'TCK', 'TDI_0': 'TDI', 'TDO_0': 'TDO', 'TMS_0': 'TMS',
-                'T19': 'FLASH_CS', 'P22': 'MOSI', 'R22': 'MISO', **gt, **{ball: net for net, ball in misc.items()}}   # FCS_B, D00_MOSI, D01_DIN
+                'T19': 'FLASH_CS', 'P22': 'MOSI', 'R22': 'MISO', **gt, **{ball: net for net, ball in misc.items()},   # FCS_B, D00_MOSI, D01_DIN
+                'U22': '+3V3'}   # PUDC_B high (UG470: never floating): no pull-ups while configuring, the board's own resistors rule
         self.add('U', 'FPGA_Xilinx_Artix7', 'XC7A35T-FGG484', 'XC7A35T-2FGG484I', 'Package_BGA:Xilinx_FGG484', conn,
                  MPN='XC7A35T-2FGG484I')
         self.block = 'fpga_support'
@@ -290,8 +291,8 @@ def apd_bias(b, p='', r_top='300k', en=None):
     b.c('220p', f'{p}HV_APD', fp=C0603, **hv)
     b.r(r_top, f'{p}HV_OUT', f'{p}APD_FB', fp='Resistor_SMD:R_0603_1608Metric')   # 0603: 55 V across it
     b.r('10k', f'{p}APD_FB', 'GND'); b.r('20k', f'{p}APD_FB', f'{p}APD_ADJ')
-    b.r('33k', f'{p}APD_ISHORT', 'GND')   # 3 mA short limit
-    b.c('47n', f'{p}APD_CAP')
+    b.r('39k', f'{p}APD_ISHORT', 'GND')   # 2.6 mA limit (100 / kOhm): under an APD's 3 mA maximum, over the host's 2 mA cut
+    b.c('10n', f'{p}APD_CAP', **hv)       # CAP sits at the output voltage (85 V pin; TI's EVM: 4.7 nF 100 V)
     b.r('10', f'+3V3_{p}APD', f'+3V3_{p}APDA'); b.c('2.2u', f'+3V3_{p}APDA')
     b.r('1.5k', f'{p}APD_MON', 'GND'); b.c('10p', f'{p}APD_MON')     # 4:5 mirror: 2 mA APD -> 2.4 V
     b.r('3.01k', f'{p}APD_MON2', 'GND'); b.c('10p', f'{p}APD_MON2')
