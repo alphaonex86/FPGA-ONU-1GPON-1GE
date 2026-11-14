@@ -4842,7 +4842,7 @@
 				)
 			)
 		)
-		(property "Value" "47n"
+		(property "Value" "10n"
 			(at 0 1.16 0)
 			(layer "F.Fab")
 			(uuid "779e52fb-ed2b-41d1-ac5c-f70bcf36d832")
@@ -4883,6 +4883,18 @@
 			(effects
 				(font
 					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "MPN" "100 V X7R"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "1636d758-3b74-4d01-ba78-0f9c6da7d3d9")
+			(effects
+				(font
+					(size 1.27 1.27)
 					(thickness 0.15)
 				)
 			)
@@ -8508,7 +8520,7 @@
 				)
 			)
 		)
-		(property "Value" "33k"
+		(property "Value" "39k"
 			(at 0 1.17 0)
 			(layer "F.Fab")
 			(uuid "0000f61c-eaf1-48ab-9127-95c9a9da5738")

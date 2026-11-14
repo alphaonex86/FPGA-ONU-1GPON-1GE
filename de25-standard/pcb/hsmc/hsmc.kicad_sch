@@ -9482,7 +9482,7 @@
     (dnp no)
     (uuid "8111d1d9-7362-5d8d-a4f3-b6e2163c0c6b")
     (property "Reference" "R47" (at 386.08 439.42 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "33k" (at 386.08 454.66 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "39k" (at 386.08 454.66 0) (effects (font (size 1.27 1.27))))
     (property
       "Footprint"
       "Resistor_SMD:R_0402_1005Metric"
@@ -9515,13 +9515,14 @@
     (dnp no)
     (uuid "4d66694c-2a08-5803-90bb-c3131e0c28ac")
     (property "Reference" "C56" (at 403.86 439.42 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "47n" (at 403.86 454.66 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "10n" (at 403.86 454.66 0) (effects (font (size 1.27 1.27))))
     (property
       "Footprint"
       "Capacitor_SMD:C_0402_1005Metric"
       (at 403.86 447.04 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (property "Datasheet" "" (at 403.86 447.04 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "MPN" "100 V X7R" (at 403.86 447.04 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "95a80a47-8823-5465-b591-9a690ea25ae4"))
     (pin "2" (uuid "b88606fa-6fdc-5f99-92c7-1b6898ab03f3"))
     (instances

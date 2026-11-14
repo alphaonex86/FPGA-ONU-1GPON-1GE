@@ -15623,7 +15623,7 @@
     (dnp no)
     (uuid "2a60f896-8d96-55e5-815f-485966b4a374")
     (property "Reference" "R30" (at 398.78 683.26 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "33k" (at 398.78 698.5 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "39k" (at 398.78 698.5 0) (effects (font (size 1.27 1.27))))
     (property
       "Footprint"
       "Resistor_SMD:R_0402_1005Metric"
@@ -15656,13 +15656,14 @@
     (dnp no)
     (uuid "9f9b1550-bc96-50a0-a93a-a8d73e541389")
     (property "Reference" "C91" (at 419.1 683.26 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "47n" (at 419.1 698.5 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "10n" (at 419.1 698.5 0) (effects (font (size 1.27 1.27))))
     (property
       "Footprint"
       "Capacitor_SMD:C_0402_1005Metric"
       (at 419.1 690.88 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (property "Datasheet" "" (at 419.1 690.88 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "MPN" "100 V X7R" (at 419.1 690.88 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "7d9b67be-c899-5749-9e40-1dbd1daf144f"))
     (pin "2" (uuid "76cad3cf-37d6-58e2-88b3-6c82555a6cff"))
     (instances
@@ -16457,7 +16458,7 @@
     (dnp no)
     (uuid "c53d6a4c-049f-57af-a91d-b4470453db7f")
     (property "Reference" "R39" (at 398.78 739.14 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "33k" (at 398.78 754.38 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "39k" (at 398.78 754.38 0) (effects (font (size 1.27 1.27))))
     (property
       "Footprint"
       "Resistor_SMD:R_0402_1005Metric"
@@ -16490,13 +16491,14 @@
     (dnp no)
     (uuid "8df72e42-3d8a-5edd-95f4-73133e9998d7")
     (property "Reference" "C100" (at 419.1 739.14 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "47n" (at 419.1 754.38 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "10n" (at 419.1 754.38 0) (effects (font (size 1.27 1.27))))
     (property
       "Footprint"
       "Capacitor_SMD:C_0402_1005Metric"
       (at 419.1 746.76 0)
       (effects (font (size 1.27 1.27)) (hide yes)))
     (property "Datasheet" "" (at 419.1 746.76 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "MPN" "100 V X7R" (at 419.1 746.76 0) (effects (font (size 1.27 1.27)) (hide yes)))
     (pin "1" (uuid "3c0830d9-3bd8-5f2e-b442-40e3319173cf"))
     (pin "2" (uuid "84cce5bf-22ca-573c-8725-a405f92071b2"))
     (instances
