@@ -257,13 +257,13 @@ class Layout:
         z.SetThermalReliefGap(mm(0.2)); z.SetThermalReliefSpokeWidth(mm(0.25))
         self.pcb.Add(z)
 
-    def no_vias(self, poly):
-        """Rule area: no via may cut this plane neck; tracks still pass."""
+    def rule_area(self, poly, layers, vias=True, tracks=True):
+        """Rule area on `layers`: no via (a plane neck) and / or no track (a quiet zone) inside; pours still fill it."""
         z = pcbnew.ZONE(self.pcb)
         z.SetIsRuleArea(True)
-        z.SetDoNotAllowVias(True); z.SetDoNotAllowTracks(False); z.SetDoNotAllowPads(False)
+        z.SetDoNotAllowVias(not vias); z.SetDoNotAllowTracks(not tracks); z.SetDoNotAllowPads(False)
         z.SetDoNotAllowZoneFills(False); z.SetDoNotAllowFootprints(False)
-        z.SetLayerSet(pcbnew.LSET.AllCuMask())
+        z.SetLayerSet(layers)
         ol = z.Outline(); ol.NewOutline()
         for x, y in poly:
             ol.Append(mm(OX + x), mm(OY + y))

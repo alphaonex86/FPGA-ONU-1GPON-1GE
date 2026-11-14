@@ -183,9 +183,9 @@ def bosa_footprint():
     labels = [label(n, x, y, 0, bosa.RX_CAN) for n, x, y, *_ in rx] + [label(n, x, y, bosa.TX_X, bosa.TX_CAN) for n, x, y, *_ in tx]
     x0, y0, x1, y1 = bosa.BODY
     m, w = 0.5, 2.5
-    boots = [rect(xa, -w, xb, w, 'Dwgs.User', 0.1) for xa, xb in ((x0 - bosa.BOOT, x0), (x1, x1 + bosa.BOOT))]
-    write_footprint('BOSA_GPON', 'GPON BOSA with both TO cans under the body (X100DG land, measured on scans): RX TO-46 '
-                    'pads A-E, TX TO-56 pads T1-T4; Dwgs.User: the fibre boot at either end, 3 mm up (low parts only under it)',
+    boots = [rect(x0 - bosa.BOOT, -w, x0, w, 'Dwgs.User', 0.1)]
+    write_footprint('BOSA_GPON', 'GPON BOSA (X100DG land, measured on scans): RX TO-46 under the body, pads A-E; TX can on the fibre axis, '
+                    'its leads bent down into pads T1-T4; Dwgs.User: the fibre sleeve, 2.6 mm up (low parts only under it)',
                     'through_hole', [rect(x0, y0, x1, y1, 'F.Fab', 0.1), rect(x0 - m, y0 - m, x1 + m, y1 + m, 'F.CrtYd', 0.05)]
                     + boots + cans + pads + labels, (bosa.TX_X / 2, 0))
 

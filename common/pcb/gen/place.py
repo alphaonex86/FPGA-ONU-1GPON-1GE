@@ -196,8 +196,8 @@ def sniffer_layout():
 def inline_layout():
     """Compact: USB and its ULPI PHY north-west of the BGA, the flash socket and the logic south of it, both optical
     ports east (OLT port north, ONU port south): each BOSA across the east edge, TX can at the edge, RX can inside with
-    its limiting amp in a ring of shield clips. The fibre leaves over the edge or, from the other end, passes above the
-    low parts west of the RX can (bosa.BOOT): nothing tall there. The Artix-7 turned so its ball A1 is north-east: the
+    its limiting amp in a ring of shield clips. The fibre leaves the body's RX end and passes above the low parts west
+    of the RX can (bosa.BOOT): nothing tall there. The Artix-7 turned so its ball A1 is north-east: the
     GTP quad (rows A-F) faces the ports, the ULPI bus (rows Y-AB, columns 1-8) the north-west, the config flash bank
     (columns 19-22) the south-west."""
     w, h = 84, 54
@@ -228,14 +228,17 @@ def inline_layout():
         lay.place(hole, *xy)
     ports = bosa_ports(lay)   # DS_ = OLT port
     drivers = by_net('MAX3643', '2')
-    tps, schottky = by_net('TPS61391', '5'), by_net('D_Schottky', '1')
+    tps = by_net('TPS61391', '5')
     amp = {'DS_': one('SY88993AV'), 'US_': one('SY88349NDL')}
     clips = iter(refs(lay, 'SHIELD_CLIP'))
     rx_x = w - 5.0 - bosa.TX_X
-    for rx, tx, y in (('DS_', 'US_', 17.0), ('US_', 'DS_', 42.0)):   # y: the BOSA's axis
+    # y: the BOSA's axis; turn: its APD boost's SW pin east and the row south into the gap between the ports (the pairs to
+    # the FPGA pass west of it), or SW west and the row north (the board ends south of it)
+    for rx, tx, y, turn in (('DS_', 'US_', 17.0, 270), ('US_', 'DS_', 42.0, 90)):
         lay.place(ports[rx], rx_x, y)
         lay.place(amp[rx], rx_x - 4.0, y - 8.5, 180)      # north-west of the can: inputs east at its leads A / B, outputs west
         tia_pair(lay, amp[rx], ports[rx], rx, rx_x, y - 6.5)
+        quiet_leads(lay, ports[rx])
         for t, dx in (('P', -0.2), ('N', -1.2)):          # AC caps to a top-escaped lane: on top, inside the can, toward
             cap = next((r for r, p in lay.parts.items()   # its open south side (the clips wall the other three)
                         if r.startswith('C') and f'{rx}RX_{t}' in p.conns.values()), None)
@@ -246,13 +249,9 @@ def inline_layout():
         for cx, cy, rot in ((rx_x - 4.0, y - 12.8, 0), (rx_x - 8.9, y - 8.5, 90), (rx_x + 2.9, y - 8.5, 90)):
             lay.place(next(clips), cx, cy, rot)
         lay.place(drivers[tx], w - 5.0, y - 8.0, 270, True)   # bottom, on the TX can's axis: outputs (pins 13-18) face its leads
-        laser_cell(lay, drivers[tx], tx)
-        lay.place(tps[rx], rx_x - 5.0, y + 7.5, 0, True)  # APD bias south-west of the RX can, on the bottom with its parts
-        cap = part_on(lay, f'{rx}APD_CAP', 'C')            # its CAP pin is boxed in by its neighbours' tracks: the capacitor at the pin, north of the diode
-        px, py = pad_of_net(lay, tps[rx], f'{rx}APD_CAP')
-        lay.place_pad(cap, next(n for n, v in lay.parts[cap].conns.items() if v == f'{rx}APD_CAP'), px + 1.25, py - 0.8, (1, 0))
-        lay.track(f'{rx}APD_CAP', [(px, py), (px + 0.45, py), (px + 1.25, py - 0.8)], 0.2, pcbnew.B_Cu)
-        lay.place(schottky[rx], rx_x - 0.4, y + 7.5, 0, True)
+        laser_cell(lay, drivers[tx], tx, ports[rx])
+        lay.place(tps[rx], rx_x - 5.0, y + 7.5, turn, True)  # APD bias south-west of the RX can, on the bottom with its parts
+        boost_cell(lay, tps[rx], rx)
     gate, cut = sorted(refs(lay, '74LVC1G97'), key=lambda r: lay.parts[r].block != 'gate')
     chain = (one('74LVC1G07'), gate, one('74LVC1G123'), cut)   # the upstream laser's gate and cutoff: on top, over the bucks
     for k, r in enumerate(chain):
@@ -349,7 +348,61 @@ def pecl_outputs(lay, la, p):
         lay.via(rx, vx, vy + 0.75 * away)
         lay.rects['B'].append((vx - 0.45, vy + 0.75 * away - 0.45, vx + 0.45, vy + 0.75 * away + 0.45))   # no bottom part on the via
 
-def laser_cell(lay, driver, p):
+def boost_cell(lay, chip, p):
+    """The APD boost's switching node swings tens of volts beside a receiver: the inductor straight out of the SW pin,
+    then the diode and the output capacitor in a row along the chip's side, away from its other pins (left to the
+    placer the node was 12 mm long). The CAP capacitor at its pin, which its neighbours' tracks box in; the mirror's
+    series resistor at the MONIN pin (behind the inductor its 0.2 mm clearance found no way to the pin); the input
+    capacitor at the inductor's other end."""
+    sw, out, cap_net, monin, rail = f'{p}HV_SW', f'{p}HV_OUT', f'{p}APD_CAP', f'{p}HV_MONIN', f'+3V3_{p}APD'
+    pad = lambda r, net: next(n for n, v in lay.parts[r].conns.items() if v == net)
+    (sx, sy), (gx, gy), (cx, cy) = lay.pad_xy(chip, '8'), lay.pad_xy(chip, '7'), P(lay.fps[chip].GetPosition())
+    ax, ay = round((sx - gx) / 0.5), round((sy - gy) / 0.5)                    # along the pin row, from pin 7 to SW
+    ox, oy = (0, 1 if sy > cy else -1) if ax else (1 if sx > cx else -1, 0)    # out of the chip
+    at = lambda x, y, away, along: (x + ox * away + ax * along, y + oy * away + ay * along)
+    coil, diode = part_on(lay, sw, 'L'), part_on(lay, sw, 'D')
+    cout = next(r for r, q in lay.parts.items() if r.startswith('C') and set(q.conns.values()) == {out, 'GND'})
+    lay.place_pad(coil, pad(coil, sw), *at(sx, sy, 1.75, 1.05), (ox, oy))
+    lay.place_pad(diode, pad(diode, sw), *at(sx, sy, 1.75, 3.2), (ax, ay))
+    lay.place_pad(cout, pad(cout, out), *at(sx, sy, 1.75, 6.7), (ax, ay))
+    lay.track(sw, [(sx, sy), at(sx, sy, 1.75, 0), at(sx, sy, 1.75, 3.2)], 0.3, pcbnew.B_Cu)
+    lay.track(out, [at(sx, sy, 1.75, 5.4), at(sx, sy, 1.75, 6.7)], 0.2, pcbnew.B_Cu)
+    lay.track('GND', [(gx, gy), at(gx, gy, -0.7, 0)], 0.2, pcbnew.B_Cu)   # pin 7 into the thermal pad: the cell takes its via's place
+    lay.tied.add((chip, '7'))
+    px, py = pad_of_net(lay, chip, cap_net)          # the next side's first pin: out of the chip there is `along` here
+    cap = part_on(lay, cap_net, 'C')
+    lay.place_pad(cap, pad(cap, cap_net), *at(px, py, 0.8, 1.25), (ax, ay))
+    lay.track(cap_net, [(px, py), at(px, py, 0, 0.45), at(px, py, 0.8, 1.25)], 0.2, pcbnew.B_Cu)
+    mx, my = pad_of_net(lay, chip, monin)
+    series = part_on(lay, monin, 'R')
+    lay.place_pad(series, pad(series, monin), *at(mx, my, 1.15, 0), (-ax, -ay))
+    lay.track(monin, [(mx, my), at(mx, my, 1.15, 0)], 0.2, pcbnew.B_Cu)
+    cin = next(r for r, q in lay.parts.items() if q.value == '10u' and set(q.conns.values()) == {rail, 'GND'})
+    lay.place_pad(cin, pad(cin, rail), *at(sx, sy, 5.25, 1.05), (ax, ay))
+    lay.track(rail, [at(sx, sy, 3.55, 1.05), at(sx, sy, 5.25, 1.05)], 0.3, pcbnew.B_Cu)
+
+def quiet_leads(lay, port, margin=2.0, slot=0.5):
+    """The RX can's leads carry its microamps, and no can covers their ends on the bottom: within `margin` of them no
+    foreign track on either side (a laser's current passed at 2 mm on the bottom, a laser's data pair between two
+    leads on top; over the planes 0.2 mm away, 2 mm is ten heights). Bottom: no track at all. Top: the pair leaves
+    north inside its cell, the supply and APD leads south through two slots, laid here; the rest is closed. The
+    outer ground pours fill both sides."""
+    at = {lead: lay.pad_xy(port, lead) for lead in 'ABCDE'}
+    x0, x1 = min(x for x, _ in at.values()) - margin, max(x for x, _ in at.values()) + margin
+    y0, y1 = min(y for _, y in at.values()) - margin, max(y for _, y in at.values()) + margin
+    lay.rule_area([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], pcbnew.LSET().AddLayer(pcbnew.B_Cu), tracks=False)
+    lay.keepout['B'].append((x0, y0, x1, y1))
+    (dx, dy), (ex, _) = at['D'], at['E']
+    west, east, south = at['A'][0] - 1.0, at['C'][0] + 1.0, dy + 1.0
+    for poly in ([(x0, y0), (west, y0), (west, south), (dx - slot, south), (dx - slot, y1), (x0, y1)],
+                 [(dx + slot, south), (ex - slot, south), (ex - slot, y1), (dx + slot, y1)],
+                 [(east, y0), (x1, y0), (x1, y1), (ex + slot, y1), (ex + slot, south), (east, south)]):
+        lay.rule_area(poly, pcbnew.LSET().AddLayer(pcbnew.F_Cu), tracks=False)
+    for lead, width in (('D', 0.3), ('E', 0.2)):
+        x, y = at[lead]
+        lay.track(lay.parts[port].conns[lead], [(x, y), (x, y1 + 0.3)], width)
+
+def laser_cell(lay, driver, p, port):
     """The laser current's parts between the driver's output pins and the TX can: the series resistors in a row south
     of their pins, each dummy-load diode beside its resistor; the input pair's termination north of its pins; the three
     current-setting resistors at their pins (IMAX east, MODSET / BIASSET west). Their tracks are laid here: straight,
@@ -373,6 +426,23 @@ def laser_cell(lay, driver, p):
         wire(net, part_on(lay, net, 'R'), x, row, (0, 1), 0.5)
         if dx:
             lay.place_near(part_on(lay, f'{net}_D', 'D'), x + 3.2 * dx, row + 1.0, bottom=True, rot=90)
+    # at the TX can, away from the RX can: the anode's feed (resistor and inductor side by side) west of its lead,
+    # the monitor diode's load east of its lead
+    part = lambda prefix, a, b: next((r for r, q in lay.parts.items() if r.startswith(prefix) and set(q.conns.values()) == {a, b}), None)
+    pad = lambda r, net: next(n for n, v in lay.parts[r].conns.items() if v == net)
+    anode, monitor, vcc = f'{p}LD_A', f'{p}MPD_A', f'+3V3_{p}LD'
+    (ax, ay), (mx, my) = pad_of_net(lay, port, anode), pad_of_net(lay, port, monitor)
+    feed = [part('R', vcc, anode), part('L', vcc, anode)]
+    for r, dy in zip(feed, (-0.5, 0.5)):
+        lay.place_pad(r, pad(r, anode), ax - 2.7, ay + dy, (-1, 0))
+    lay.track(anode, [(ax, ay), (ax - 2.7, ay)], 0.3, pcbnew.B_Cu)
+    lay.track(anode, [(ax - 2.7, ay - 0.5), (ax - 2.7, ay + 0.5)], 0.3, pcbnew.B_Cu)
+    lay.track(vcc, [pad_of_net(lay, r, vcc) for r in feed], 0.3, pcbnew.B_Cu)
+    load, cap = part('R', monitor, 'GND'), part('C', monitor, 'GND')
+    lay.place_pad(load, pad(load, monitor), mx + 1.7, my - 1.1, (0, -1))
+    if cap:
+        lay.place_pad(cap, pad(cap, monitor), mx + 1.7, my, (0, 1))
+    lay.track(monitor, [(mx, my), (mx + 1.7, my), (mx + 1.7, my - 1.1)], 0.2, pcbnew.B_Cu)
 
 def sniffer_serdes(lay):
     """RX0 (Y5/Y6, downstream) and RX1 (Y7/Y8, upstream) straight south to their AC caps; TX balls stay open."""
@@ -698,7 +768,7 @@ def planes(lay):
                                        (i2 + 0.5, i1 - 0.5), (i2 + 0.5, i3 + 0.5), (neck, i3 + 0.5), (neck, cy + 0.55),
                                        (x1, cy + 0.55), (x1, y1), (x0, y1)],
              priority=1, clearance=0.2, min_width=0.15)
-    lay.no_vias([(x1, cy - 0.55), (neck, cy - 0.55), (neck, cy + 0.55), (x1, cy + 0.55)])
+    lay.rule_area([(x1, cy - 0.55), (neck, cy - 0.55), (neck, cy + 0.55), (x1, cy + 0.55)], pcbnew.LSET.AllCuMask(), vias=False)
     # outer GND pours come after routing (finish.py): poured copper would wall the router in
 
 

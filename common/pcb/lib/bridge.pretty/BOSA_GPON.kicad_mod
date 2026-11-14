@@ -4,7 +4,7 @@
   (generator "mksym.py")
   (layer "F.Cu")
   (descr
-    "GPON BOSA with both TO cans under the body (X100DG land, measured on scans): RX TO-46 pads A-E, TX TO-56 pads T1-T4; Dwgs.User: the fibre boot at either end, 3 mm up (low parts only under it)")
+    "GPON BOSA (X100DG land, measured on scans): RX TO-46 under the body, pads A-E; TX can on the fibre axis, its leads bent down into pads T1-T4; Dwgs.User: the fibre sleeve, 2.6 mm up (low parts only under it)")
   (property
     "Reference"
     "REF**"
@@ -31,14 +31,8 @@
     (fill no)
     (layer "F.CrtYd"))
   (fp_rect
-    (start -12.5 -2.5)
+    (start -20.5 -2.5)
     (end -4.5 2.5)
-    (stroke (width 0.1) (type solid))
-    (fill no)
-    (layer "Dwgs.User"))
-  (fp_rect
-    (start 15.91 -2.5)
-    (end 23.91 2.5)
     (stroke (width 0.1) (type solid))
     (fill no)
     (layer "Dwgs.User"))

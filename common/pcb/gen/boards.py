@@ -538,7 +538,7 @@ def laser(b, p, data, dis, ben=None):
         b.r('1k', f'{p}MPD_A', 'GND'); b.c('10p', f'{p}MPD_A')
         b.r('10k', n('MDOUT'), n('MD')); b.c('1n', n('MD'))
     else:
-        b.r('3.3k', f'{p}MPD_A', 'GND')
+        b.r('1.5k', f'{p}MPD_A', 'GND')   # XL-BCB2111: 0.05 to 0.65 mA per mW; 2.5 mW stays under the ADC's 2.5 V
         b.r('10k', f'{p}MPD_A', n('MD')); b.c('100n', n('MD'))
 
 def inline():
