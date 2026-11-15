@@ -11,7 +11,8 @@ import spinal.lib.bus.regif._
   * each way), its registers written and read over the same link. Per clock: 32 downstream and 16 upstream line bits, first in the MSB.
   * Records as the passive sniffer's (RecordWriter format): PLOAM, BWmap entry, GEM fragment (WideSnifferDs), burst
   * (SnifferUs behind UsReplay), each followed by zeros to a multiple of 4 bytes (RecordPad): the stream is a dump file
-  * of the host tool. Time in downstream bytes (4 per clock).
+  * of the host tool. Time in downstream bytes (4 per clock). The dump rules (RuleStore) choose which frames of the
+  * kept Port-IDs become records.
   * Host to device, 6 bytes: 0x5A, the register's number (its address / 4; bit 7: write), the value (32 bits LE, any
   * for a read). A read is answered by a record of kind 4: the number, the value (LE). A command stops being parsed
   * after 2^22 clocks without a byte. The I2C lines move 256 clocks apart at least (a write to I2C holds the next
@@ -78,6 +79,8 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   ds.io.allPloams := allPloams
   ds.io.allocMap << allocMap
   ds.io.portMap << portMap
+  val store = RuleStore(readers = 1)
+  ds.io.rules <> store.io.read(0)
 
   val crossDrops = Reg(UInt(16 bits)) init (0)
   when(io.usDropped)(crossDrops := crossDrops + 1)
@@ -125,6 +128,11 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   val RX = busif.newReg("Receivers whose BOSA gives the data inverted (no datasheet says which lead of the TIA pair rises with light)")
   io.dsInvert := RX.field(Bool(), AccessType.RW, 0, "ds: the OLT port's, the downstream")(SymbolName("ds"))
   io.usInvert := RX.field(Bool(), AccessType.RW, 0, "us: the ONU port's, the upstream (its offset resistor then goes on the other input)")(SymbolName("us"))
+  val rules = RuleStore.Registers(busif, store)
+  ds.io.defaultAction := rules.defaultAction
+  ds.io.snap := rules.snap
+  val FILTERED = busif.newReg("Fragments of the kept Port-IDs a dump rule dropped, counts")
+  FILTERED.field(UInt(16 bits), AccessType.RO, 0, "ds")(SymbolName("ds")) := ds.io.filtered.resized
   busif.accept(DocCHeader("inline_regs", "INLINE")) // inline_regs.h next to the Verilog
 
   // commands: parsed, then one APB access; a read answered before the next command is taken

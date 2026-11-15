@@ -67,12 +67,13 @@ object DsFields {
 }
 
 /** Kind 2 record head: Port-ID (16), PLI (16), crypto-counter (48), then the fragment's bytes as received, still
-  * ciphered (the software decrypts with the counter); flags 2..0: PTI, 3: cut short. */
+  * ciphered (the software decrypts with the counter); flags 2..0: PTI, 3: cut short, 4: a dump rule kept the
+  * frame's first bytes only (nothing more of it follows). */
 object GemRecord {
-  def head(portId: UInt, pli: UInt, counter: UInt, pti: Bits, cut: Bool, time: UInt): RecordHead = {
+  def head(portId: UInt, pli: UInt, counter: UInt, pti: Bits, cut: Bool, time: UInt, snap: Bool = False): RecordHead = {
     val h = RecordHead(10)
     h.kind := RecordKind.gem
-    h.flags := B(0, 4 bits) ## cut ## pti
+    h.flags := B(0, 3 bits) ## snap ## cut ## pti
     h.time := time
     h.extra := B(0, 4 bits) ## portId ## B(0, 4 bits) ## pli ## B(0, 2 bits) ## counter
     h

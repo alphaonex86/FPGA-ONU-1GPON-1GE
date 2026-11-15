@@ -51,10 +51,21 @@ case class WideDsBench() extends Component {
     val word = in Bits (32 bits)
     val allocMap = slave Flow (KeepWrite())
     val portMap = slave Flow (KeepWrite())
+    val ruleWrite = slave Flow (RuleWrite(16))
+    val ruleSet = slave Flow (RuleSet(16))
+    val defaultAction = in Bits (2 bits)
+    val snap = in UInt (12 bits)
     val output = master Stream (Fragment(Bits(8 bits)))
     val synced = out Bool ()
-    val drops, truncations, hecErrors, plendErrors, syncLosses = out UInt (32 bits)
+    val drops, truncations, hecErrors, plendErrors, syncLosses, filtered = out UInt (32 bits)
   }
+  val store = RuleStore(readers = 1)
+  store.io.write << io.ruleWrite
+  store.io.set << io.ruleSet
+  sniffer.io.rules <> store.io.read(0)
+  sniffer.io.defaultAction := io.defaultAction
+  sniffer.io.snap := io.snap
+  io.filtered := sniffer.io.filtered
   deframer.io.word := io.word
   sniffer.io.ploam := deframer.io.ploam
   sniffer.io.alloc := deframer.io.alloc
@@ -118,28 +129,65 @@ object DsLine {
 
 }
 
+/** A dump rule and what the hardware must do with it, in software. `bytes`: (frame byte, value, mask). */
+case class DumpRule(action: Int, bytes: Seq[(Int, Int, Int)], port: Option[Int] = None, us: Boolean = false, enable: Boolean = true) {
+  val need = if (bytes.isEmpty) 0 else bytes.map(_._1).max + 1
+  def matches(upstream: Boolean, portId: Int, frame: Seq[Int]): Boolean =
+    enable && us == upstream && port.forall(_ == portId) && need <= frame.length && bytes.forall { case (at, value, mask) => ((frame(at) ^ value) & mask) == 0 }
+}
+
+object DumpRule {
+  def write(write: Flow[RuleWrite], set: Flow[RuleSet], rules: Seq[DumpRule], cd: ClockDomain): Unit = {
+    for ((r, i) <- rules.zipWithIndex) {
+      for (w <- 0 until 5) {
+        def word(pick: ((Int, Int, Int)) => Int) = (0 until 4).foldLeft(0L)((a, b) => (a << 8) | r.bytes.filter(_._1 == 4 * w + b).map(pick).headOption.getOrElse(0))
+        write.valid #= true; write.rule #= i; write.word #= w
+        write.bytes.value #= word(_._2); write.bytes.mask #= word(_._3)
+        cd.waitSampling()
+      }
+      write.valid #= false
+      set.valid #= true; set.rule #= i
+      set.config.enable #= r.enable; set.config.us #= r.us; set.config.onPort #= r.port.nonEmpty
+      set.config.port #= r.port.getOrElse[Int](0); set.config.action #= r.action; set.config.need #= r.need
+      cd.waitSampling()
+      set.valid #= false
+    }
+  }
+
+  def verdict(rules: Seq[DumpRule], default: Int, upstream: Boolean, portId: Int, frame: Seq[Int]): Int =
+    rules.find(_.matches(upstream, portId, frame)).map(_.action).getOrElse(default)
+}
+
 /** The wide deframer against the byte-wide one on the same line: the same records, FEC off and on, on several bit
-  * alignments; a corrupted GEM header; a full-rate burst (whole fragments dropped, each counted). Throws on failure. */
+  * alignments; a corrupted GEM header; a full-rate burst (whole fragments dropped, each counted); dump rules against
+  * their software model. Throws on failure. */
 object WideDsTest extends App {
   import DsLine._
 
   /** The line, `shift` bits late, through the wide chain; `corrupt`: (byte, mask) flipped on the line. The counters
     * are read where the line ends: the zeros that follow (time to drain) are no frame. */
-  def wide(compiled: SimCompiled[WideDsBench], line: Seq[Int], shift: Int, corrupt: Option[(Int, Int)] = None) = {
+  def wide(compiled: SimCompiled[WideDsBench], line: Seq[Int], shift: Int, corrupt: Option[(Int, Int)] = None,
+           rules: Seq[DumpRule] = Nil, default: Int = RuleAction.keep, snap: Int = 64) = {
     val bytes = line.toArray
     corrupt.foreach { case (at, mask) => bytes(at) ^= mask }
     def bit(i: Int): Int = if (i < shift || (i - shift) / 8 >= bytes.length) 0 else (bytes((i - shift) / 8) >> (7 - (i - shift) % 8)) & 1
     var records = Seq[Record]()
     var counters = (0L, 0L, 0L, 0L, 0L)
+    filtered = 0
     compiled.doSim(shift) { dut =>
       val cd = dut.clockDomain
       val sink = new RecordSink(dut.io.output, cd, 2)
       dut.io.allocMap.valid #= false
       dut.io.portMap.valid #= false
       dut.io.word #= 0
+      dut.io.ruleWrite.valid #= false
+      dut.io.ruleSet.valid #= false
+      dut.io.defaultAction #= default
+      dut.io.snap #= snap
       cd.forkStimulus(10)
       writeMap(dut.io.allocMap, allocIds, cd)
       writeMap(dut.io.portMap, portIds, cd)
+      DumpRule.write(dut.io.ruleWrite, dut.io.ruleSet, rules, cd)
       for (w <- 0 until bytes.length / 4 + 12000) {
         dut.io.word #= (0 until 32).foldLeft(BigInt(0))((a, k) => (a << 1) | bit(32 * w + k))
         cd.waitSampling()
@@ -147,8 +195,30 @@ object WideDsTest extends App {
           counters = (dut.io.drops.toLong, dut.io.truncations.toLong, dut.io.hecErrors.toLong, dut.io.plendErrors.toLong, dut.io.syncLosses.toLong)
       }
       records = sink.records.toSeq
+      filtered = dut.io.filtered.toLong
     }
     (records, counters)
+  }
+  var filtered = 0L
+
+  /** The GEM records the rules leave of `expect`: (flags, payload, bytes a head-only record must have at least). */
+  def ruled(expect: Seq[Record], rules: Seq[DumpRule], default: Int, snap: Int): (Seq[(Int, Seq[Int], Int)], Int) = {
+    var open: Option[(Int, Boolean)] = None
+    var dropped = 0
+    val left = expect.filter(_.kind == RecordKind.gem).flatMap { r =>
+      val port = ((r.payload(0) << 8) | r.payload(1)) & 0xFFF
+      val fragment = r.payload.drop(10)
+      val action = open.filter(_._1 == port).map(o => if (o._2) RuleAction.keep else RuleAction.drop)
+        .getOrElse(DumpRule.verdict(rules, default, upstream = false, port, fragment))
+      open = if ((r.flags & 9) == 0) Some((port, action == RuleAction.keep)) else None
+      if (action == RuleAction.drop) dropped += 1
+      action match {
+        case RuleAction.keep => Some((r.flags, r.payload, 0))
+        case RuleAction.head => Some((r.flags | 0x10, r.payload, 10 + (fragment.length min snap)))
+        case _ => None
+      }
+    }
+    (left, dropped)
   }
 
   def body(r: Record) = (r.flags, r.payload)
@@ -173,6 +243,29 @@ object WideDsTest extends App {
       val (got, counters) = wide(compiled, line, 5, Some((line.indexOfSlice(psyncBytes) + 2 * frameBytes + 31, 0x10)))
       check(counters == (0, 0, 1, 0, 0), s"one HEC error counted for a corrupted idle header $counters")
       check(of(got, RecordKind.gem) == of(expect, RecordKind.gem), "the GEM records of the next frames are whole")
+    }
+  }
+  for (fec <- Seq(false, true)) {
+    val (line, expect) = reference(fec)
+    val multicast = DumpRule(RuleAction.drop, Seq((0, 0x01, 0x01)), port = Some(0x100))
+    val tagged = DumpRule(RuleAction.head, Seq((12, 0x80, 0xC0), (13, 0x00, 0x00)))
+    val deep = DumpRule(RuleAction.drop, Seq((16, 0x00, 0x80), (19, 0x02, 0x03)), port = Some(0x101))
+    val sets = Seq(
+      ("drop and head rules", Seq(DumpRule(RuleAction.drop, Nil, us = true), DumpRule(RuleAction.drop, Nil, enable = false), multicast, tagged, deep), RuleAction.keep, 40),
+      ("keep rule, the rest dropped", Seq(DumpRule(RuleAction.keep, Seq((1, 0x80, 0x80))), tagged), RuleAction.drop, 100))
+    for ((what, rules, default, snap) <- sets; shift <- Seq(0, 9, 18, 27)) {
+      val name = s"${if (fec) "FEC" else "no FEC"}, $shift bits late, $what"
+      val (got, counters) = wide(compiled, line, shift, rules = rules, default = default, snap = snap)
+      val (want, dropped) = ruled(expect, rules, default, snap)
+      val gems = got.filter(_.kind == RecordKind.gem)
+      val heads = want.count(_._3 > 0)
+      check(dropped > 2 && heads > 0 && want.length - heads > 2, s"$name: the model drops $dropped, shortens $heads, keeps ${want.length - heads} whole")
+      check(gems.length == want.length && gems.zip(want).forall { case (g, (flags, payload, least)) =>
+        g.flags == flags && (if (least == 0) g.payload == payload
+        else payload.startsWith(g.payload) && g.payload.length >= least && g.payload.length <= (least + 3 min payload.length))
+      }, s"$name: the GEM records the rules leave (${gems.length} of ${want.length})")
+      check(filtered == dropped && counters == (0, 0, 0, 0, 0), s"$name: $filtered fragments counted as filtered, none lost $counters")
+      check(of(got, RecordKind.alloc) == of(expect, RecordKind.alloc), s"$name: BWmap records untouched")
     }
   }
   val (line, expect) = reference(fec = false, heavy = true)

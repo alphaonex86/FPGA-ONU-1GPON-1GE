@@ -330,9 +330,11 @@ case class WideDsDeframer() extends Component {
 }
 
 /** The records of one ONU from a WideDsDeframer: SnifferDs's, same formats. GEM fragments of the Port-IDs set in the
-  * port map; a fragment is taken whole or not at all (room for it in the chunk FIFO, else dropped and counted), then
-  * its bytes go one per clock to the record writer. */
-case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048) extends Component {
+  * port map, less what the dump rules drop: a frame's first fragment is judged on its first bytes (RuleMatch), its
+  * later ones follow it. A fragment is taken whole or not at all (room for it in the chunk queue, else dropped and
+  * counted): it is queued while judged and taken back on a drop, then its bytes go one per clock to the record
+  * writer. Nothing here slows the line: what is dropped never leaves the queue's push side. */
+case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount: Int = 16) extends Component {
   val io = new Bundle {
     val ploam = slave Flow (Checked(Bits(96 bits)))
     val alloc = slave Flow (Checked(Allocation()))
@@ -342,9 +344,13 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048) extends C
     val allPloams = in Bool ()
     val allocMap = slave Flow (KeepWrite())
     val portMap = slave Flow (KeepWrite())
+    val rules = master(RuleRead(ruleCount))
+    val defaultAction = in Bits (2 bits)
+    val snap = in UInt (12 bits)
     val output = master Stream (Fragment(Bits(8 bits)))
     val drops = out UInt (32 bits)
     val truncations = out UInt (32 bits)
+    val filtered = out UInt (32 bits) // fragments of the port map's Port-IDs a rule dropped
   }
   val pcbd = SnifferPcbd()
   pcbd.io.ploam := io.ploam
@@ -354,34 +360,103 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048) extends C
   pcbd.io.allPloams := io.allPloams
   pcbd.io.allocMap << io.allocMap
 
-  // the map answers a clock after the header; the item waits two
+  // the map answers a clock after the header; the item waits two, where the rules read it
   val portMap = Mem(Bool(), 4096) init (Seq.fill(4096)(False))
   portMap.write(io.portMap.id, io.portMap.keep, io.portMap.valid)
-  val hit = RegNext(portMap.readSync(io.gem.header.portId))
-  val header = io.gem.header.stage().stage()
-  val chunk = io.gem.chunk.stage().stage()
-  val chunks = StreamFifo(GemChunk(), chunkDepth)
+  val read = new Area {
+    val header = io.gem.header.stage().stage()
+    val chunk = io.gem.chunk.stage().stage()
+    val hit = RegNext(portMap.readSync(io.gem.header.portId))
+    val matcher = RuleMatch(us = false, ruleCount)
+    matcher.io.table <> io.rules
+    matcher.io.defaultAction := io.defaultAction
+    matcher.io.start.valid := header.valid
+    matcher.io.start.port := header.portId
+    matcher.io.start.length := header.pli
+    // the frame in words of 4 bytes from its first: a chunk's word is whole with the next chunk, the last a clock later
+    val inside = Reg(Bool()) init (False)
+    val flush = RegNext(chunk.valid && chunk.last) init (False)
+    val first = Reg(Bool())
+    val shift = Reg(UInt(2 bits))
+    val held = Reg(Bits(32 bits))
+    when(chunk.valid) {
+      inside := !chunk.last
+      held := chunk.bytes
+      first := !inside
+      when(!inside)(shift := chunk.first)
+    }
+    matcher.io.word.valid := (chunk.valid && inside) || flush
+    matcher.io.word.bytes := ((held ## chunk.bytes) |<< (shift << 3))(63 downto 32)
+    matcher.io.word.first := first
+    matcher.io.word.last := flush
+  }
+
+  // pushed two clocks later: a fragment's verdict is there with its last chunk at the latest
+  val verdict = read.matcher.io.verdict
+  val header = read.header.stage().stage()
+  val chunk = read.chunk.stage().stage()
+  val hit = Delay(read.hit, 2)
+  val chunks = CommitFifo(GemChunk(), chunkDepth)
   val heads = StreamFifo(RecordHead(10), 16)
   val room = chunks.io.availability > ((header.pli +^ 3) >> 2) + 2 && heads.io.availability > 1
-  val take = hit && room
-  val keeping = Reg(Bool()) init (False)
+  val frame = new Area { // the last fragment was not its frame's end: the next one of that Port-ID follows its verdict
+    val open = Reg(Bool()) init (False)
+    val port = Reg(UInt(12 bits))
+    val keep = Reg(Bool())
+  }
+  val wanted, lost, decided, over = Reg(Bool()) init (False)
+  val action = Reg(Bits(2 bits))
+  val sent = Reg(UInt(12 bits))
   val meta = Reg(WideGemHeader())
   val start = Reg(UInt(64 bits))
-  val keepNow = header.valid ? take | keeping
-  val metaNow = header.valid ? header.payload | meta
-  val startNow = header.valid ? io.time | start
+  val isNew = header.valid
+  val continued = frame.open && frame.port === header.portId
+  val wantedNow = isNew ? (hit && room) | wanted
+  val lostNow = isNew ? (hit && !room) | lost
+  val knownBefore = isNew ? continued | decided
+  val actionBefore = isNew ? (frame.keep ? B(RuleAction.keep, 2 bits) | B(RuleAction.drop, 2 bits)) | action
+  val decidedNow = knownBefore || verdict.valid
+  val actionNow = knownBefore ? actionBefore | verdict.payload
+  val overNow = !isNew && over
+  val sentNow = isNew ? U(0, 12 bits) | sent
+  val metaNow = isNew ? header.payload | meta
+  val startNow = isNew ? io.time | start
+  val dropped = decidedNow && actionNow === RuleAction.drop
+  val headOnly = decidedNow && actionNow === RuleAction.head
+  val push = chunk.valid && wantedNow && !overNow && !dropped
+  val closing = chunk.last || (headOnly && sentNow + chunk.count >= io.snap)
   val gemDrops = Reg(UInt(32 bits)) init (0)
-  when(header.valid) {
-    keeping := take
+  val filtered = Reg(UInt(32 bits)) init (0)
+  io.filtered := filtered
+  when(isNew) {
+    wanted := wantedNow
+    lost := lostNow
     meta := header.payload
     start := io.time
-    when(hit && !room)(gemDrops := gemDrops + 1)
+    over := False
+    sent := 0
   }
-  when(chunk.valid && chunk.last)(keeping := False)
-  chunks.io.push.valid := chunk.valid && keepNow
+  decided := decidedNow
+  action := actionNow
+  when(dropped)(over := True)
+  when(push) {
+    sent := sentNow + chunk.count
+    when(closing)(over := True)
+  }
+  when(chunk.valid && chunk.last) {
+    frame.open := !metaNow.pti(0) && !chunk.cut
+    frame.port := metaNow.portId
+    frame.keep := actionNow === RuleAction.keep
+    when(lostNow && !dropped)(gemDrops := gemDrops + 1)
+    when((wantedNow || lostNow) && dropped)(filtered := filtered + 1)
+  }
+  chunks.io.push.valid := push
   chunks.io.push.payload := chunk.payload
-  heads.io.push.valid := chunk.valid && keepNow && chunk.last
-  heads.io.push.payload := GemRecord.head(metaNow.portId, metaNow.pli, metaNow.counter, metaNow.pti, chunk.cut, startNow)
+  chunks.io.push.last.allowOverride := closing
+  chunks.io.commit := push && decidedNow
+  chunks.io.rollback := dropped && wantedNow && !overNow
+  heads.io.push.valid := push && closing
+  heads.io.push.payload := GemRecord.head(metaNow.portId, metaNow.pli, metaNow.counter, metaNow.pti, chunk.cut && chunk.last, startNow, headOnly)
 
   val gems = RecordWriter(10, gemDepth, 32)
   val popped = chunks.io.pop.stage() // registered: the queues' memories are slow to read
