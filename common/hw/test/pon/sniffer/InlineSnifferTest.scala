@@ -9,9 +9,9 @@ import pon.gpon.GponCodes._
 import pon.gpon.GtcDsTest.{check, bigToBytes, bytesToBig}
 import pon.sniffer.SnifferTest.Record
 
-/** The in-line sniffer whole, its three clocks and a USB host on the link: both directions sent again bit for
-  * bit, the lasers on only when they must, the registers over the link, the records of both directions as the
-  * byte-wide chain's. Throws on failure. */
+/** The in-line sniffer whole, its clocks and a USB host on both links: both directions sent again bit for
+  * bit, the lasers on only when they must, the registers over the serial link, the records of both directions as
+  * the byte-wide chain's, on the serial link first and on the wide one once the host asks. Throws on failure. */
 object InlineSnifferTest extends App {
   // the reference's line to its last whole frame, then its first frame (idle) again while the link empties
   val (reference, expect) = DsLine.reference(fec = false)
@@ -34,12 +34,12 @@ object InlineSnifferTest extends App {
   }
 
   val number = Seq("CTRL", "DELIMITER", "ALLOC_MAP", "PORT_MAP", "ID", "LASERS", "REGEN", "I2C", "STATUS", "ERRORS", "DS_LOST",
-    "US_LOST", "US_OVERFLOWS", "US_LEVEL", "RX").zipWithIndex.toMap
+    "US_LOST", "US_OVERFLOWS", "US_LEVEL", "RX", "LINK").zipWithIndex.toMap
   def write(name: String, value: Long) = Seq(0x5A, 0x80 | number(name)) ++ (0 until 4).map(i => ((value >> (8 * i)) & 0xFF).toInt)
   def read(name: String) = Seq(0x5A, number(name), 0, 0, 0, 0)
 
   val toDevice = mutable.Queue[Int]()
-  val fromDevice = mutable.ArrayBuffer[Int]()
+  val fromDevice, fromWide = mutable.ArrayBuffer[Int]()
   val dsOut, usOut = mutable.ArrayBuffer[Int]()
   val ben = mutable.ArrayBuffer[Boolean]() // per half-word
   var zeros = 0 // the dut's
@@ -55,6 +55,8 @@ object InlineSnifferTest extends App {
     dut.io.dsSignal #= true
     dut.io.usb.rx.valid #= false
     dut.io.usb.tx.ready #= false
+    dut.io.ss.tx.ready #= false
+    dut.io.ss.up #= true
     dut.io.scl #= true
     dut.io.usAbove #= false
     dut.io.burstCut #= false
@@ -88,6 +90,10 @@ object InlineSnifferTest extends App {
       dut.io.usb.rx.valid #= toDevice.nonEmpty
       if (toDevice.nonEmpty) dut.io.usb.rx.payload #= toDevice.head
     }
+    dut.ssCd.onSamplings { // a word's first byte in its low bits
+      if (dut.io.ss.tx.valid.toBoolean && dut.io.ss.tx.ready.toBoolean) fromWide ++= bigToBytes(dut.io.ss.tx.payload.toBigInt, 4).reverse
+      dut.io.ss.tx.ready #= rand.nextInt(4) != 0
+    }
     var lines = (false, false)
     dut.outCd.onSamplings {
       outClock += 1
@@ -101,35 +107,47 @@ object InlineSnifferTest extends App {
     dut.outCd.forkStimulus(32)
     fork { sleep(3); dut.usCd.forkStimulus(20) }
     fork { sleep(5); dut.usbCd.forkStimulus(42) }
+    fork { sleep(9); dut.ssCd.forkStimulus(20) }
     dut.outCd.waitSampling(20)
     toDevice ++= Seq(0x11, 0x22) ++ read("ID") // bytes before a command are skipped
     toDevice ++= write("CTRL", 0x10501) ++ write("LASERS", 3) ++ write("DELIMITER", usDelimiter.toLong)
     toDevice ++= DsLine.allocIds.flatMap(id => write("ALLOC_MAP", 0x1000 | id)) ++ DsLine.portIds.flatMap(id => write("PORT_MAP", 0x1000 | id))
     toDevice ++= write("I2C", 1) ++ write("I2C", 3) ++ write("I2C", 2) ++ read("I2C") ++ write("I2C", 3)
-    dut.clockDomain.waitSampling(dsBits.length / 20 - 6000) // the link is empty by then
+    dut.clockDomain.waitSampling(dsBits.length / 160)
+    toDevice ++= write("LINK", 1) ++ read("LINK") // the records to the wide link from here
+    dut.clockDomain.waitSampling(dsBits.length / 20 - dsBits.length / 160 - 6000) // the links are empty by then
     toDevice ++= Seq("STATUS", "ERRORS", "DS_LOST", "US_LOST", "US_OVERFLOWS", "US_LEVEL").flatMap(read) ++ write("US_LEVEL", 0) ++ read("US_LEVEL")
     dut.clockDomain.waitSampling(7000)
   }
 
-  val records = mutable.ArrayBuffer[Record]()
-  var at = 0
-  var padError = false
-  while (at + 12 <= fromDevice.length && (fromDevice(at) & 0xF8) == 0xA0) {
-    val length = fromDevice(at + 2) | (fromDevice(at + 3) << 8)
-    records += Record(fromDevice(at) & 7, fromDevice(at + 1), bytesToBig(fromDevice.slice(at + 4, at + 12).reverse.toSeq), fromDevice.slice(at + 12, at + 12 + length).toSeq)
-    val padded = (12 + length + 3) & ~3
-    if (fromDevice.slice(at + 12 + length, at + padded).exists(_ != 0)) padError = true
-    at += padded
+  def parse(bytes: mutable.ArrayBuffer[Int], link: String) = {
+    val records = mutable.ArrayBuffer[Record]()
+    var at = 0
+    var padError = false
+    while (at + 12 <= bytes.length && (bytes(at) & 0xF8) == 0xA0) {
+      val length = bytes(at + 2) | (bytes(at + 3) << 8)
+      records += Record(bytes(at) & 7, bytes(at + 1), bytesToBig(bytes.slice(at + 4, at + 12).reverse.toSeq), bytes.slice(at + 12, at + 12 + length).toSeq)
+      val padded = (12 + length + 3) & ~3
+      if (bytes.slice(at + 12 + length, at + padded).exists(_ != 0)) padError = true
+      at += padded
+    }
+    check(at == bytes.length && records.nonEmpty && !padError, s"$link link: ${bytes.length} bytes, all of them whole records padded with zeros to 4 bytes (${records.length})")
+    records
   }
-  check(at == fromDevice.length && records.nonEmpty && !padError, s"link: ${fromDevice.length} bytes, all of them whole records padded with zeros to 4 bytes (${records.length})")
+  val (serial, wide) = (parse(fromDevice, "serial"), parse(fromWide, "wide"))
+  def kinds(records: Iterable[Record]) = (0 to 4).map(k => records.count(_.kind == k)).mkString("/")
+  check(serial.exists(_.kind != RecordKind.reply) && wide.forall(_.kind != RecordKind.reply) && Seq(RecordKind.gem, RecordKind.burst).forall(k => wide.exists(_.kind == k)),
+    s"records on the serial link until the host asks for the wide one, replies always on the serial one (PLOAM/BWmap/GEM/burst/reply: ${kinds(serial)}, ${kinds(wide)})")
+  val records = serial ++ wide
   val replies = records.filter(_.kind == RecordKind.reply).map(r => (r.payload.head, bytesToBig(r.payload.drop(1).reverse).toLong))
-  check(replies.map(_._1) == Seq("ID", "I2C", "STATUS", "ERRORS", "DS_LOST", "US_LOST", "US_OVERFLOWS", "US_LEVEL", "US_LEVEL").map(number), s"registers: one reply per read, in order (${replies.map(_._1)})")
+  check(replies.map(_._1) == Seq("ID", "I2C", "LINK", "STATUS", "ERRORS", "DS_LOST", "US_LOST", "US_OVERFLOWS", "US_LEVEL", "US_LEVEL").map(number), s"registers: one reply per read, in order (${replies.map(_._1)})")
   check(replies(0)._2 == 0x47530001L, f"registers: identity (${replies(0)._2}%x)")
   check(replies(1)._2 == 0x102 && sdaLowSeen, f"I2C: the lines written and read back (${replies(1)._2}%x)")
+  check(replies(2)._2 == 3, f"link: wide asked and up (${replies(2)._2}%x)")
   check(i2cWrites.length == 4 && i2cWrites.zip(i2cWrites.drop(1)).forall { case (a, b) => b - a >= 256 }, s"I2C: line changes 256 clocks apart (${i2cWrites.mkString(" ")})")
-  check((replies(2)._2 & 0xF) == 0xD && math.abs((replies(2)._2 >> 16) - 0x8000) < 0x2000, f"status: synced, no FEC, signal, downstream on, the VCXO duty near its middle (${replies(2)._2}%x)")
-  check(replies.slice(3, 7).forall(_._2 == 0), s"no error, record lost or burst left out (${replies.slice(3, 7).map(_._2)})")
-  check(replies(7)._2 == 0x0203 && replies(8)._2 == 0 && !benWithoutLaser, f"upstream level: 3 bursts, 2 over the comparator's level, cleared by a write (${replies(7)._2}%x)")
+  check((replies(3)._2 & 0xF) == 0xD && math.abs((replies(3)._2 >> 16) - 0x8000) < 0x2000, f"status: synced, no FEC, signal, downstream on, the VCXO duty near its middle (${replies(3)._2}%x)")
+  check(replies.slice(4, 8).forall(_._2 == 0), s"no error, record lost or burst left out (${replies.slice(4, 8).map(_._2)})")
+  check(replies(8)._2 == 0x0203 && replies(9)._2 == 0 && !benWithoutLaser, f"upstream level: 3 bursts, 2 over the comparator's level, cleared by a write (${replies(8)._2}%x)")
 
   def body(r: Record) = (r.flags, r.payload)
   for ((kind, what) <- Seq((RecordKind.ploam, "PLOAM"), (RecordKind.alloc, "BWmap"), (RecordKind.gem, "GEM"))) {
@@ -182,6 +200,8 @@ object InlineSnifferTest extends App {
     dut.io.dsSignal #= true
     dut.io.usb.rx.valid #= false
     dut.io.usb.tx.ready #= true
+    dut.io.ss.tx.ready #= true
+    dut.io.ss.up #= false
     dut.io.scl #= true
     dut.io.sda #= true
     dut.io.usAbove #= false
@@ -207,6 +227,7 @@ object InlineSnifferTest extends App {
     dut.outCd.forkStimulus(32)
     fork { sleep(3); dut.usCd.forkStimulus(20) }
     fork { sleep(5); dut.usbCd.forkStimulus(42) }
+    fork { sleep(9); dut.ssCd.forkStimulus(20) }
     dut.usCd.waitSampling(2000 + burstClear.length + 400)
   }
   val dsAt = dsInverted.indexOfSlice(dsBits.slice(30000, 30064))

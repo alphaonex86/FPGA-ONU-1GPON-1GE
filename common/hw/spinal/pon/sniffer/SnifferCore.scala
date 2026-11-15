@@ -7,18 +7,27 @@ import spinal.lib.bus.amba3.apb._
 import spinal.lib.bus.misc.SizeMapping
 import spinal.lib.bus.regif._
 
+object RecordWords {
+  def of(bytes: Stream[Fragment[Bits]]): Stream[Fragment[Bits]] = {
+    val words = RecordWords()
+    words.io.input << bytes
+    words.io.output
+  }
+}
+
 /** Record bytes in 32-bit words, first byte in bits 31-24; a record's last word is padded with zeros. */
 case class RecordWords() extends Component {
   val io = new Bundle {
     val input = slave Stream (Fragment(Bits(8 bits)))
-    val output = master Stream (Bits(32 bits))
+    val output = master Stream (Fragment(Bits(32 bits)))
   }
   val held = Reg(Bits(24 bits))
   val count = Reg(UInt(2 bits)) init (0) // bytes held
   val full = io.input.last || count === 3
   val word = held ## io.input.fragment
   io.output.valid := io.input.valid && full
-  io.output.payload := word |<< ((U(3, 2 bits) - count) << 3)
+  io.output.fragment := word |<< ((U(3, 2 bits) - count) << 3)
+  io.output.last := io.input.last
   io.input.ready := !full || io.output.ready
   when(io.input.fire) {
     held := word(23 downto 0)
@@ -64,7 +73,7 @@ case class SnifferCore(usDomain: ClockDomain, gemDepth: Int = 4096, burstDepth: 
   val dsWords = RecordWords()
   dsWords.io.input << ds.io.output.m2sPipe() // registered both sides at 311.04 MHz
   val dsFifo = StreamFifo(Bits(32 bits), 128)
-  dsFifo.io.push << dsWords.io.output.m2sPipe()
+  dsFifo.io.push << dsWords.io.output.m2sPipe().map(_.fragment)
 
   val us = usDomain(SnifferUs(depth = burstDepth))
   us.io.line := enable ? io.usLine | B(0, 8 bits)
@@ -76,7 +85,7 @@ case class SnifferCore(usDomain: ClockDomain, gemDepth: Int = 4096, burstDepth: 
     words.io.input << us.io.output
   }
   val usFifo = StreamFifoCC(Bits(32 bits), usWords, usDomain, ClockDomain.current)
-  usFifo.io.push << usWordsArea.words.io.output
+  usFifo.io.push << usWordsArea.words.io.output.map(_.fragment)
 
   val LEVEL = busif.newReg("Record words waiting, and the downstream sync")
   LEVEL.field(UInt(8 bits), AccessType.RO, 0, "dsWords")(SymbolName("dsWords")) := dsFifo.io.occupancy.resized

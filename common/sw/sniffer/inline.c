@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: CERN-OHL-S-2.0
 // In-line sniffer over its USB serial port (CDC-ACM): the record stream in, the registers written and
 // read by 6-byte commands (the protocol: InlineDump's header, common/hw/spinal/pon/sniffer/InlineSniffer.scala).
+// When its SuperSpeed link has a host (register LINK) the records come there (wide.h), the replies stay here.
 #include "inline.h"
 #include "levels.h"
+#include "wide.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -28,13 +30,20 @@ _Static_assert(INLINE_CTRL == SNIFFER_CTRL && INLINE_DELIMITER == SNIFFER_DELIMI
 #define STALE_BYTES (1u << 20)
 #define DUTY_MARGIN 0x0CCDu       // 5 %: the VCXO control is at a rail
 
+struct stream {
+    uint8_t bytes[1 << 17]; // received, parsed up to `at`
+    size_t at, have, skipped;
+};
+
 struct link {
     int fd;
     struct sniffer *s;
+    struct wide *wide;      // the SuperSpeed side, or NULL
     int started;            // the decoder takes the records
-    int failed;             // a command was not sent (logged)
-    uint8_t bytes[1 << 17]; // received, parsed up to `at`
-    size_t at, have, skipped;
+    int failed;             // a command was not sent, or the decoder failed on a SuperSpeed record (logged)
+    int stale;              // SuperSpeed bytes are a previous run's: counted in stale_bytes, not parsed
+    size_t stale_bytes;
+    struct stream serial, usb;
     uint32_t state, counters[4]; // as last reported
 };
 
@@ -98,6 +107,61 @@ static int now_ms(int64_t *ms)
     return 0;
 }
 
+// The stream's whole records go to the decoder. Returns 1 at the reply of register number `wanted` (its value in
+// *value), 0 when the rest is no whole record yet, -1 on an error (logged).
+static int parse(struct link *l, struct stream *in, int wanted, uint32_t *value)
+{
+    while (in->at < in->have) {
+        struct sniffer_record r;
+        int used = sniffer_parse(in->bytes + in->at, in->have - in->at, &r);
+        if (used == 0)
+            break;
+        if (used < 0) {
+            in->at++;
+            in->skipped++;
+            continue;
+        }
+        if (in->skipped) {
+            fprintf(stderr, "sniffer: %zu link bytes that are no record, skipped\n", in->skipped);
+            in->skipped = 0;
+        }
+        in->at += (size_t)used;
+        if (r.kind != SNIFFER_REPLY) {
+            if (l->started && sniffer_handle(l->s, &r) < 0)
+                return -1;
+        } else if (r.length == 5 && r.payload[0] == wanted) {
+            *value = r.payload[1] | (uint32_t)r.payload[2] << 8 | (uint32_t)r.payload[3] << 16 | (uint32_t)r.payload[4] << 24;
+            return 1;
+        } else {
+            fprintf(stderr, "sniffer: a reply not asked for (%u bytes)\n", r.length);
+        }
+    }
+    memmove(in->bytes, in->bytes + in->at, in->have - in->at);
+    in->have -= in->at;
+    in->at = 0;
+    return 0;
+}
+
+// wide.h's sink
+static void wide_bytes(void *ctx, const uint8_t *bytes, size_t size)
+{
+    struct link *l = ctx;
+    struct stream *in = &l->usb;
+    if (l->stale) {
+        l->stale_bytes += size;
+        return;
+    }
+    while (size && !l->failed) {
+        size_t part = sizeof(in->bytes) - in->have < size ? sizeof(in->bytes) - in->have : size;
+        memcpy(in->bytes + in->have, bytes, part);
+        in->have += part;
+        bytes += part;
+        size -= part;
+        if (parse(l, in, -1, NULL) < 0)
+            l->failed = 1;
+    }
+}
+
 // The records received go to the decoder. Returns 1 at the reply of register number `wanted` (its value in *value),
 // 0 after `ms` or, when no reply is wanted, at a signal; -1 on an error (logged).
 static int pump(struct link *l, int wanted, uint32_t *value, int ms)
@@ -107,45 +171,17 @@ static int pump(struct link *l, int wanted, uint32_t *value, int ms)
         return -1;
     end += ms;
     for (;;) {
-        while (l->at < l->have) {
-            struct sniffer_record r;
-            int used = sniffer_parse(l->bytes + l->at, l->have - l->at, &r);
-            if (used == 0)
-                break;
-            if (used < 0) {
-                l->at++;
-                l->skipped++;
-                continue;
-            }
-            if (l->skipped) {
-                fprintf(stderr, "sniffer: %zu link bytes that are no record, skipped\n", l->skipped);
-                l->skipped = 0;
-            }
-            l->at += (size_t)used;
-            if (r.kind != SNIFFER_REPLY) {
-                if (l->started && sniffer_handle(l->s, &r) < 0)
-                    return -1;
-            } else if (r.length == 5 && r.payload[0] == wanted) {
-                *value = r.payload[1] | (uint32_t)r.payload[2] << 8 | (uint32_t)r.payload[3] << 16 | (uint32_t)r.payload[4] << 24;
-                return 1;
-            } else {
-                fprintf(stderr, "sniffer: a reply not asked for (%u bytes)\n", r.length);
-            }
-        }
-        if (l->failed)
-            return -1;
-        memmove(l->bytes, l->bytes + l->at, l->have - l->at);
-        l->have -= l->at;
-        l->at = 0;
+        int found = parse(l, &l->serial, wanted, value);
+        if (found || l->failed)
+            return l->failed ? -1 : found;
         if (now_ms(&now) < 0)
             return -1;
         if (now >= end)
             return 0;
-        struct pollfd wait = {l->fd, POLLIN, 0};
-        int ready = poll(&wait, 1, (int)(end - now));
+        int ready = wide_poll(l->wide, l->fd, (int)(end - now));
         if (ready == 0)
             continue;
-        ssize_t got = ready > 0 ? read(l->fd, l->bytes + l->have, sizeof(l->bytes) - l->have) : ready;
+        ssize_t got = ready > 0 ? read(l->fd, l->serial.bytes + l->serial.have, sizeof(l->serial.bytes) - l->serial.have) : ready;
         if (got < 0 && errno == EINTR) {
             if (wanted < 0)
                 return 0;
@@ -155,7 +191,7 @@ static int pump(struct link *l, int wanted, uint32_t *value, int ms)
             fprintf(stderr, "sniffer: link: %s\n", got ? strerror(errno) : "closed");
             return -1;
         }
-        l->have += (size_t)got;
+        l->serial.have += (size_t)got;
     }
 }
 
@@ -197,18 +233,52 @@ static int drain(int fd)
     return -1;
 }
 
+// The SuperSpeed side when it has a host: emptied of a previous run's bytes, then given the records.
+static int start_wide(struct link *l)
+{
+    uint32_t state;
+    int64_t now, end;
+    if (link_read(l, INLINE_LINK, &state) < 0)
+        return -1;
+    if (!(state & INLINE_LINK_UP_MASK))
+        return 0;
+    l->wide = wide_open(wide_bytes, l);
+    if (!l->wide) {
+        fprintf(stderr, "sniffer: the SuperSpeed link is up but not usable: records on the serial port\n");
+        return 0;
+    }
+    l->stale = 1;
+    for (size_t seen = 1; seen != l->stale_bytes;) {
+        seen = l->stale_bytes;
+        if (seen >= STALE_BYTES) {
+            fprintf(stderr, "sniffer: the SuperSpeed link keeps sending with the records disabled\n");
+            return -1;
+        }
+        if (now_ms(&end) < 0)
+            return -1;
+        for (now = end, end += QUIET_MS; now < end;)
+            if ((wide_poll(l->wide, -1, (int)(end - now)) < 0 && errno != EINTR) || now_ms(&now) < 0)
+                return -1;
+    }
+    l->stale = 0;
+    fprintf(stderr, "sniffer: records on the SuperSpeed link\n");
+    return command(l, WRITE | INLINE_LINK / 4, INLINE_LINK_WIDE_MASK);
+}
+
 static int start(struct link *l, const struct sniffer_options *opt)
 {
     // zeros end a command a killed run left half sent, without starting one
     static const uint8_t resync[5] = {0};
     uint32_t id;
-    if (send_bytes(l, resync, sizeof(resync)) < 0 || command(l, WRITE | INLINE_CTRL / 4, 0) < 0 || drain(l->fd) < 0 ||
-        link_read(l, INLINE_ID, &id) < 0)
+    if (send_bytes(l, resync, sizeof(resync)) < 0 || command(l, WRITE | INLINE_CTRL / 4, 0) < 0 ||
+        command(l, WRITE | INLINE_LINK / 4, 0) < 0 || drain(l->fd) < 0 || link_read(l, INLINE_ID, &id) < 0)
         return -1;
     if (id != MAGIC) {
         fprintf(stderr, "sniffer: identity %08x, an in-line sniffer's is %08x\n", id, MAGIC);
         return -1;
     }
+    if (start_wide(l) < 0)
+        return -1;
     const struct sniffer_regs regs = {l, NULL, link_write};
     if (sniffer_start(l->s, &regs, opt) < 0)
         return -1;
@@ -272,6 +342,11 @@ int inline_run(struct sniffer *s, const char *port, const char *level_file, cons
         sniffer_stop(s);
         if (!result) // the records on their way, then the last counts
             result = report(&l);
+    }
+    if (l.wide) {
+        if (command(&l, WRITE | INLINE_LINK / 4, 0) < 0)
+            result = -1;
+        wide_close(l.wide);
     }
     if (close(l.fd) < 0) {
         perror("sniffer: close");

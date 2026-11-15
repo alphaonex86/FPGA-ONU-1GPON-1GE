@@ -54,22 +54,25 @@ object SnifferTest extends App {
   case class Record(kind: Int, flags: Int, time: BigInt, payload: Seq[Int])
 
   /** Collects the record stream, ready 3 clocks in 4; checks the framing of every record. */
-  class RecordSink(s: Stream[Fragment[Bits]], cd: ClockDomain, seed: Int) {
+  /** Takes 3 clocks in 4, or one in `every`. */
+  class RecordSink(s: Stream[Fragment[Bits]], cd: ClockDomain, seed: Int, every: Int = 0) {
     val records = mutable.ArrayBuffer[Record]()
     private val bytes = mutable.ArrayBuffer[Int]()
     private val rand = new scala.util.Random(seed)
+    private val wide = s.fragment.getWidth / 8
     s.ready #= false
     cd.onSamplings {
       if (s.valid.toBoolean && s.ready.toBoolean) {
-        bytes += s.fragment.toInt
+        bytes ++= bigToBytes(s.fragment.toBigInt, wide) // a word's first byte in its top bits
         if (s.last.toBoolean) {
           val length = bytes(2) | (bytes(3) << 8)
-          if ((bytes(0) & 0xF8) != 0xA0 || bytes.length != 12 + length) check(false, s"record framing (${bytes.take(4)}, ${bytes.length} bytes)")
-          records += Record(bytes(0) & 7, bytes(1), bytesToBig(bytes.slice(4, 12).reverse.toSeq), bytes.drop(12).toSeq)
+          val whole = (12 + length + wide - 1) / wide * wide // zeros to a whole word
+          if ((bytes(0) & 0xF8) != 0xA0 || bytes.length != whole || bytes.drop(12 + length).exists(_ != 0)) check(false, s"record framing (${bytes.take(4)}, ${bytes.length} bytes)")
+          records += Record(bytes(0) & 7, bytes(1), bytesToBig(bytes.slice(4, 12).reverse.toSeq), bytes.slice(12, 12 + length).toSeq)
           bytes.clear()
         }
       }
-      s.ready #= rand.nextInt(4) != 0
+      s.ready #= (if (every > 0) rand.nextInt(every) == 0 else rand.nextInt(4) != 0)
     }
   }
 

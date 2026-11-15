@@ -134,6 +134,25 @@ syms.append(box_symbol('USB3320', [([('1', 'CLKOUT', 'output'), ('31', 'DIR', 'o
                                       ('33', 'GND', 'power_in')])],
                        'U', 'USB3320C-EZK', 'Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm',
                        'Hi-Speed USB 2.0 ULPI transceiver, 1.8-3.3 V I/O, internal 3.3 V regulator; VDD18 external'))
+# HD3SS3212 (TI SLASE74), RKS 2.5 x 4.5 mm: pins 1 / 20 and 10 / 11 on the short ends; SEL low: A to B, high: A to C
+syms.append(box_symbol('HD3SS3212', [([('3', 'A0p', 'bidirectional'), ('4', 'A0n', 'bidirectional'), ('7', 'A1p', 'bidirectional'),
+                                        ('8', 'A1n', 'bidirectional'), ('9', 'SEL', 'input'), ('2', 'OEn', 'input'),
+                                        ('6', 'VCC', 'power_in'), ('5', 'GND', 'power_in'), ('11', 'GND', 'passive'),
+                                        ('20', 'GND', 'passive'), ('21', 'GND', 'passive')],
+                                       [('19', 'B0p', 'bidirectional'), ('18', 'B0n', 'bidirectional'), ('17', 'B1p', 'bidirectional'),
+                                        ('16', 'B1n', 'bidirectional'), ('15', 'C0p', 'bidirectional'), ('14', 'C0n', 'bidirectional'),
+                                        ('13', 'C1p', 'bidirectional'), ('12', 'C1n', 'bidirectional'),
+                                        ('1', 'RSVD1', 'no_connect'), ('10', 'RSVD2', 'no_connect')])],
+                       'U', 'HD3SS3212IRKSR', 'Package_DFN_QFN:DHVQFN-20-1EP_2.5x4.5mm_P0.5mm_EP1x3mm',
+                       'TI HD3SS3212 two-channel differential 2:1 switch, 10 Gb/s (USB-C plug orientation), VQFN-20'))
+# TPD4E05U06 (TI SLVSBO7), USON-10: each line enters on one pad and leaves on the pad facing it (6, 7, 9, 10: no
+# connection inside), so both pads carry its net
+syms.append(box_symbol('TPD4E05U06', [([('1', 'D1+', 'passive'), ('2', 'D1-', 'passive'), ('4', 'D2+', 'passive'), ('5', 'D2-', 'passive'),
+                                         ('3', 'GND', 'power_in')],
+                                        [('10', 'D1+', 'passive'), ('9', 'D1-', 'passive'), ('7', 'D2+', 'passive'), ('6', 'D2-', 'passive'),
+                                         ('8', 'GND', 'passive')])],
+                       'U', 'TPD4E05U06DQAR', 'Package_SON:USON-10_2.5x1.0mm_P0.5mm',
+                       'TI TPD4E05U06 four-line ESD protection, 0.5 pF, flow-through USON-10'))
 syms.append(box_symbol('SHIELD_CLIP', [([('1', 'GND', 'passive')], [])], 'SH', 'ICSRC6508SFR', 'bridge:SHIELD_CLIP_6.5x0.8',
                        'SMD clip for a 0.2 mm shield can wall (Innochips ICSRC6508SFR, LCSC C238199)'))
 def hsmc_symbol():

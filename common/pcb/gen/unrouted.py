@@ -9,6 +9,7 @@ import paths
 
 board, home = sys.argv[1:3]
 here = os.path.dirname(os.path.abspath(__file__))
+paths.ROUTED[board] = os.path.join(paths.board_dir(board), board + '.kicad_pcb')
 paths.BOARD_HOME[board] = os.path.abspath(home)
 os.makedirs(paths.board_dir(board), exist_ok=True)
 for script in ('gen.py', 'place.py'):

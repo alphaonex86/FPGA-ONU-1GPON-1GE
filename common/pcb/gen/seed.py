@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 """A newer generated board seeded with the part of an adopted routing that is still good.
-seed.py OLD_GENERATED ADOPTED NEW_GENERATED OUT X_MM [NET...] [-NET...] [REF:DX,DY...]
+seed.py OLD_GENERATED ADOPTED NEW_GENERATED OUT X_MM [NET...] [-NET...] [NET>X...] [REF:DX,DY...]
 Kept: the routed copper of the nets whose pads are all west of X_MM (layout mm) and of the nets named, when none of
 their pads moved and none of their tracks lies in a no-track area of the new board.  -NET: not kept after all.
+NET>X: only that net's copper east of X (layout mm) is kept, whatever moved west of it (a matched pair's far part).
 REF:DX,DY moves a part of the new board (mm), without its generated stubs.  A generated pad-to-via stub of the new board that lands on kept copper
 is removed (the router ties that pad instead); any other clash is listed."""
 import sys, collections
@@ -55,7 +56,8 @@ def clash(a, b):
 old, adopted, new = (pcbnew.LoadBoard(p) for p in sys.argv[1:4])
 west = pcbnew.FromMM(float(sys.argv[5]) + OX)
 options = sys.argv[6:]
-named = {a for a in options if not a.startswith('-') and ':' not in a}
+named = {a for a in options if not a.startswith('-') and ':' not in a and '>' not in a}
+east = {net: pcbnew.FromMM(float(x) + OX) for net, x in (a.split('>') for a in options if '>' in a)}
 dropped = {a[1:] for a in options if a.startswith('-')}
 left = set()   # where the moved parts' pads were: their generated stubs go too
 for ref, move in (a.split(':') for a in options if ':' in a):
@@ -71,13 +73,16 @@ for t in adopted.GetTracks():
 areas = [z for z in new.Zones() if z.GetIsRuleArea() and z.GetDoNotAllowTracks()]
 inside = lambda t: t.GetClass() != 'PCB_VIA' and any(
     z.IsOnLayer(t.GetLayer()) and z.Outline().Collide(pcbnew.SEG(t.GetStart(), t.GetEnd()), t.GetWidth() // 2) for z in areas)
-was, now = pads(old), pads(new)
+was, now = pads(adopted), pads(new)   # the adopted board's pads: the generator keeps a part where it was routed
 names = new.GetNetsByName()
 kept = []
 for net, tracks in sorted(routed.items()):
-    if net in dropped or not (net in named or all(p[2] < west for p in now[net])):
+    if net in east:
+        tracks = [t for t in tracks if all(e.x >= east[net] for e in ends(t))]
+    elif net in dropped or not (net in named or all(p[2] < west for p in now[net])):
         continue
-    if was[net] != now[net]:
+    here = lambda pads: {p for p in pads if p[2] >= east.get(net, p[2])}
+    if here(was[net]) != here(now[net]):
         print('not kept, a pad moved:', net)
     elif any(inside(t) for t in tracks):
         print('not kept, in a no-track area:', net)

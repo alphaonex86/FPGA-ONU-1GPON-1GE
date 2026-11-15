@@ -3,7 +3,9 @@
 
     close.py BOARD DRC.json OUT [NET | LEADER:FOLLOWER | REF.PAD]...
 
-LEADER:FOLLOWER: a pair; the leader prefers room for two, the follower prefers the leader's side.
+LEADER:FOLLOWER: a pair; farther than NEAR mm from its ends the leader takes only room for two (vias too) and the
+follower stays at the leader's side; when that fails they only prefer it ("loose").
+A connection leaves from any end of the copper already joined to its item (a fanned-out ball: its via's far side).
 A net with an inner plane is closed by a via into the plane at each end that has none.
 REF.PAD: that pad gets its own via into its net's plane (never in a pad), whatever the report says.
 KEEP="X0,Y0,X1,Y1;..." (layout mm): boxes a net with no pad inside may not enter (a receiver's leads).
@@ -17,6 +19,7 @@ from pcbgen import OX, OY
 G, MARGIN = float(os.environ.get('GRID', 0.05)), float(os.environ.get('MARGIN', 0.03))
 VIA_D, VIA_DRILL, VIA_COST = 0.45, 0.2, round(float(os.environ.get('VIA_MM', 3)) / G)
 DEAR = 3    # a pair's cells away from where it wants to be cost this many times a step
+NEAR = 2.5  # mm around a pair's ends where its legs are on their own
 EDGE, HOLE_CLEAR, HOLE_HOLE, PAD_VIA = 0.3, 0.2, 0.25, 0.1
 LAYERS = [pcbnew.F_Cu, pcbnew.B_Cu]
 IU = pcbnew.FromMM
@@ -263,6 +266,39 @@ def ends(item):
     return [(layer, x, y) for layer in layers]
 
 
+def island(item, net):
+    """The ends of the copper joined to a DRC item, {cell: exact position}: track ends, vias on both layers, pads."""
+    key = lambda layer, p: (layer, round((p.x - X0) / IU(G)), round((p.y - Y0) / IU(G)))
+    nodes = []
+    for t in pcb.GetTracks():
+        if t.GetNetCode() == net:
+            if t.Type() == pcbnew.PCB_VIA_T:
+                nodes.append({key(layer, t.GetPosition()): t.GetPosition() for layer in (0, 1)})
+            elif t.GetLayer() in LAYERS:
+                nodes.append({key(LAYERS.index(t.GetLayer()), p): p for p in (t.GetStart(), t.GetEnd())})
+    for pad in pcb.GetPads():
+        if pad.GetNetCode() == net:
+            nodes.append({key(i, pad.GetPosition()): pad.GetPosition() for i, layer in enumerate(LAYERS) if pad.IsOnLayer(layer)})
+    at = pcbnew.VECTOR2I(IU(item['pos']['x']), IU(item['pos']['y']))
+    ports = {cell: at for cell in ends(item)}
+    grew = True
+    while grew:
+        grew = False
+        for node in nodes:
+            if not node.keys() <= ports.keys() and node.keys() & ports.keys():
+                ports.update(node)
+                grew = True
+    return ports
+
+
+def around(ports):
+    """Cells within NEAR of the ports."""
+    near = Raster()
+    for at in ports.values():
+        near.disc(at, NEAR)
+    return near.array()
+
+
 def point(x, y):
     return pcbnew.VECTOR2I(X0 + x * IU(G), Y0 + y * IU(G))
 
@@ -326,7 +362,7 @@ for span, name, a, b in sorted(opens, key=lambda o: only.index(o[1]) if only els
     net = pcb.FindNet(name).GetNetCode()
     width, clear = netclass(name)['track_width'], netclass(name)['clearance']
     blocked, via = rasters(net, width, clear)
-    starts, goals = ends(a), ends(b)
+    starts, goals = island(a, net), island(b, net)
     pitch = width + netclass(name)['diff_pair_gap']
     dear = None
     if name in pairs:
@@ -334,6 +370,10 @@ for span, name, a, b in sorted(opens, key=lambda o: only.index(o[1]) if only els
     elif name in pairs.values():
         leader = next(l for l, f in pairs.items() if f == name)
         dear = beside(pcb.FindNet(leader).GetNetCode(), pitch + G - width / 2)
+    strict = None
+    if dear is not None:
+        far = ~around({**starts, **goals})
+        strict = [blocked[i] | (dear[i] & far) for i in (0, 1)]
     sites = plane(net)
     loose = [i for i in (a, b) if ' - ' not in i['description']] if sites is not None else []
     for item in loose:
@@ -348,7 +388,9 @@ for span, name, a, b in sorted(opens, key=lambda o: only.index(o[1]) if only els
         print(f'ok   {name} plane via at {x * G:.2f} {y * G:.2f}, {len(path) * G:.1f} mm')
     if loose:
         continue
-    path = search(blocked, via, starts, goals, dear)
+    path = strict and search(strict, via | (dear[0] | dear[1]) & far if name in pairs else via, starts, goals)
+    relaxed = strict is not None and path is None
+    path = path or search(blocked, via, starts, goals, dear)
     if path is None:
         failed += 1
         print(f'FAIL {name} {span:.1f} mm (width {width}, clearance {clear})')
@@ -356,10 +398,9 @@ for span, name, a, b in sorted(opens, key=lambda o: only.index(o[1]) if only els
             print(label, [(c[0], round(c[1] * G, 2), round(c[2] * G, 2), bool(blocked[c[0]][c[2], c[1]])) for c in cells],
                   'reaches', reach(blocked, via, cells))
         continue
-    exact = [pcbnew.VECTOR2I(IU(i['pos']['x']), IU(i['pos']['y'])) for i in (a, b)]
-    lay(path, net, width, exact)
+    lay(path, net, width, [starts[path[0]], goals[path[-1]]])
     vias = sum(1 for p, q in zip(path, path[1:]) if p[0] != q[0])
-    print(f'ok   {name} {len(path) * G:.1f} mm, {vias} via(s), width {width}')
+    print(f'ok   {name} {len(path) * G:.1f} mm, {vias} via(s), width {width}' + (', loose' if relaxed else ''))
 if not pcbnew.SaveBoard(out_path, pcb):
     sys.exit('cannot save ' + out_path)
 sys.exit(1 if failed else 0)

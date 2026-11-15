@@ -80,7 +80,7 @@ class Layout:
             self.pcb.Add(ni)
             self.nets[name] = ni
         self.parts = {p.ref: p for p in bd.parts if p.on_board and p.footprint}
-        self.fps, self.rects = {}, {'F': [], 'B': []}
+        self.fps, self.rects, self.parked = {}, {'F': [], 'B': []}, set()
         self.keepout = {'F': [], 'B': []}
         self.tied = set()   # (ref, pad) of plane-net pads a cell gave their via: plane_vias leaves them
         self.core, self.pitch, self.island = '+1V1', 0.8, None   # the BGA's core rail, ball pitch, core plane island
@@ -108,14 +108,21 @@ class Layout:
                 pad.SetNet(self.nets[net])
             self.fps[ref] = fp
 
+    def add(self, ref):
+        """The part on the board, once: one removed and added again is lost at save, so a part without a place is parked."""
+        fp = self.fps[ref]
+        if fp.GetBoard() is None:
+            self.pcb.Add(fp)
+        self.parked.discard(ref)
+        return fp
+
     def rect(self, fp, margin=0.15):
         bb = fp.GetBoundingBox(False)
         x0, y0 = P(bb.GetOrigin()); x1, y1 = P(bb.GetEnd())
         return (x0 - margin, y0 - margin, x1 + margin, y1 + margin)
 
     def place(self, ref, x, y, rot=0, bottom=False):
-        fp = self.fps[ref]
-        self.pcb.Add(fp)
+        fp = self.add(ref)
         if fp.IsFlipped() != bottom:
             fp.SetLayerAndFlip(pcbnew.B_Cu if bottom else pcbnew.F_Cu)
         fp.SetOrientationDegrees(rot)
@@ -131,11 +138,10 @@ class Layout:
         ov = lambda a, b: a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
         return not any(ov(r, o) for o in self.rects[side] + self.keepout[side])
 
-    def place_near(self, ref, x, y, bottom=False, rot=0, step=0.25, limit=25, within=None):
-        fp = self.fps[ref]
-        self.pcb.Add(fp)
-        if bottom:
-            fp.SetLayerAndFlip(pcbnew.B_Cu)
+    def place_near(self, ref, x, y, bottom=False, rot=0, step=0.25, limit=25, within=None, outside=None):
+        fp = self.add(ref)
+        if fp.IsFlipped() != bottom:
+            fp.SetLayerAndFlip(pcbnew.B_Cu if bottom else pcbnew.F_Cu)
         fp.SetOrientationDegrees(rot)
         side = 'B' if bottom else 'F'
         for radius in range(0, int(limit / step)):
@@ -146,16 +152,16 @@ class Layout:
                 fp.SetPosition(V(px, py))
                 r = self.rect(fp, self.gap)
                 inside = within is None or (within[0] <= r[0] and within[1] <= r[1] and r[2] <= within[2] and r[3] <= within[3])
-                if inside and self.free(r, side):
+                clear = outside is None or r[0] >= outside[2] or r[2] <= outside[0] or r[1] >= outside[3] or r[3] <= outside[1]
+                if inside and clear and self.free(r, side):
                     self.rects[side].append(r)
                     return fp
-        self.pcb.Remove(fp)
+        self.parked.add(ref)
         raise RuntimeError(f'{self.bd.name}: no room for {ref} near ({x:.1f}, {y:.1f})')
 
     def place_pad(self, ref, num, x, y, toward, bottom=True):
         """2-pad part: pad `num` at (x, y), the other pad in direction `toward`."""
-        fp = self.fps[ref]
-        self.pcb.Add(fp)
+        fp = self.add(ref)
         if fp.IsFlipped() != bottom:
             fp.SetLayerAndFlip(pcbnew.B_Cu if bottom else pcbnew.F_Cu)
         fp.SetPosition(V(0, 0))
@@ -170,6 +176,20 @@ class Layout:
         fp.SetPosition(V(x - a[0], y - a[1]))
         self.rects['B' if bottom else 'F'].append(self.rect(fp))
 
+    def place_if_free(self, ref, at, rot, bottom):
+        """The part at exactly this place (board units: no rounding) when nothing is there; else left off the board (False)."""
+        fp = self.add(ref)
+        if fp.IsFlipped() != bottom:
+            fp.SetLayerAndFlip(pcbnew.B_Cu if bottom else pcbnew.F_Cu)
+        fp.SetOrientationDegrees(rot)
+        fp.SetPosition(at)
+        r, side = self.rect(fp, self.gap), 'B' if bottom else 'F'
+        if not self.free(r, side):
+            self.parked.add(ref)
+            return False
+        self.rects[side].append(r)
+        return True
+
     def pad_xy(self, ref, num):
         for p in self.fps[ref].Pads():
             if p.GetNumber() == num:
@@ -177,7 +197,7 @@ class Layout:
         raise KeyError((ref, num))
 
     def placed_refs(self):
-        return [r for r, fp in self.fps.items() if fp.GetBoard() is not None]
+        return [r for r, fp in self.fps.items() if fp.GetBoard() is not None and r not in self.parked]
 
     def pads_of(self, net):
         return [(r, P(p.GetPosition())) for r in self.placed_refs() for p in self.fps[r].Pads() if p.GetNetname() == net]
@@ -294,6 +314,11 @@ class Layout:
                         self.track(net, [(x, y), (nx, ny)], 0.1)
 
     def save(self):
+        for ref in self.parked:
+            self.pcb.Remove(self.fps[ref])
+        lost = set(self.placed_refs()) - {f.GetReference() for f in self.pcb.GetFootprints()}
+        if lost:
+            raise RuntimeError(f'{self.bd.name}: placed parts not on the board: {sorted(lost)}')
         d = board_dir(self.bd.name)
         path = f'{d}/{self.bd.name}.kicad_pcb'
         self.pcb.Save(path)
@@ -315,7 +340,7 @@ def write_project(path, bd):
         'rules': {'allow_blind_buried_vias': False, 'allow_microvias': False, 'min_clearance': 0.1,
                   'min_track_width': 0.1, 'min_via_diameter': VIA_D, 'min_through_hole_diameter': VIA_HOLE,
                   'min_via_annular_width': 0.1, 'min_hole_clearance': 0.2, 'min_hole_to_hole': 0.25,
-                  'min_copper_edge_clearance': 0.3, 'min_silk_clearance': 0.0},
+                  'min_copper_edge_clearance': bd.edge_clear, 'min_silk_clearance': 0.0},
         'rule_severities': {'lib_footprint_mismatch': 'ignore'},   # finish_footprint moves silk to fab on purpose
         'track_widths': [0.1, 0.15, 0.2, 0.3, 0.5], 'via_dimensions': [{'diameter': VIA_D, 'drill': VIA_HOLE}]}}
     power = [n for n in bd.nets() if n.startswith(POWER_PREFIX) or n in bd.power_nets]

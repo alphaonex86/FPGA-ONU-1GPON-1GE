@@ -44,14 +44,14 @@ case class WideDsReference(fec: Boolean) extends Component {
 }
 
 /** The 4-byte-wide chain. Test only. */
-case class WideDsBench() extends Component {
+case class WideDsBench(gemWords: Int = 4096, chunkDepth: Int = 2048) extends Component {
   val deframer = WideDsDeframer()
-  val sniffer = WideSnifferDs()
+  val sniffer = WideSnifferDs(gemWords, chunkDepth)
   val io = new Bundle {
     val word = in Bits (32 bits)
     val allocMap = slave Flow (KeepWrite())
     val portMap = slave Flow (KeepWrite())
-    val output = master Stream (Fragment(Bits(8 bits)))
+    val output = master Stream (Fragment(Bits(32 bits)))
     val synced = out Bool ()
     val drops, truncations, hecErrors, plendErrors, syncLosses = out UInt (32 bits)
   }
@@ -119,13 +119,15 @@ object DsLine {
 }
 
 /** The wide deframer against the byte-wide one on the same line: the same records, FEC off and on, on several bit
-  * alignments; a corrupted GEM header; a full-rate burst (whole fragments dropped, each counted). Throws on failure. */
+  * alignments; a corrupted GEM header; a full-rate burst (all of it to a host that reads, whole fragments dropped
+  * and counted with a slow one). Throws on failure. */
 object WideDsTest extends App {
   import DsLine._
 
-  /** The line, `shift` bits late, through the wide chain; `corrupt`: (byte, mask) flipped on the line. The counters
-    * are read where the line ends: the zeros that follow (time to drain) are no frame. */
-  def wide(compiled: SimCompiled[WideDsBench], line: Seq[Int], shift: Int, corrupt: Option[(Int, Int)] = None) = {
+  /** The line, `shift` bits late, through the wide chain; `corrupt`: (byte, mask) flipped on the line; `every`: a
+    * reader that takes a word in that many clocks. The counters are read where the line ends: the zeros that follow
+    * (time to drain) are no frame. */
+  def wide(compiled: SimCompiled[WideDsBench], line: Seq[Int], shift: Int, corrupt: Option[(Int, Int)] = None, every: Int = 0) = {
     val bytes = line.toArray
     corrupt.foreach { case (at, mask) => bytes(at) ^= mask }
     def bit(i: Int): Int = if (i < shift || (i - shift) / 8 >= bytes.length) 0 else (bytes((i - shift) / 8) >> (7 - (i - shift) % 8)) & 1
@@ -133,14 +135,14 @@ object WideDsTest extends App {
     var counters = (0L, 0L, 0L, 0L, 0L)
     compiled.doSim(shift) { dut =>
       val cd = dut.clockDomain
-      val sink = new RecordSink(dut.io.output, cd, 2)
+      val sink = new RecordSink(dut.io.output, cd, 2, every)
       dut.io.allocMap.valid #= false
       dut.io.portMap.valid #= false
       dut.io.word #= 0
       cd.forkStimulus(10)
       writeMap(dut.io.allocMap, allocIds, cd)
       writeMap(dut.io.portMap, portIds, cd)
-      for (w <- 0 until bytes.length / 4 + 12000) {
+      for (w <- 0 until bytes.length / 4 + 12000 * (4 * every).max(1)) {
         dut.io.word #= (0 until 32).foldLeft(BigInt(0))((a, k) => (a << 1) | bit(32 * w + k))
         cd.waitSampling()
         if (w == bytes.length / 4 - 8)
@@ -176,11 +178,15 @@ object WideDsTest extends App {
     }
   }
   val (line, expect) = reference(fec = false, heavy = true)
-  val (got, counters) = wide(compiled, line, 7)
-  val (g, e) = (of(got, RecordKind.gem), of(expect, RecordKind.gem))
-  val rest = e.iterator
-  check(counters._1 > 0 && e.length - g.length == counters._1 && g.forall(r => rest.contains(r)),
-    s"full-rate burst: ${g.length} of ${e.length} GEM records, whole and in order, the ${counters._1} others counted as drops")
-  check(of(expect, RecordKind.ploam).endsWith(of(got, RecordKind.ploam)) && of(got, RecordKind.alloc) == of(expect, RecordKind.alloc), "full-rate burst: no PLOAM or BWmap record lost")
+  val e = of(expect, RecordKind.gem)
+  val small = SimConfig.compile(WideDsBench(gemWords = 512, chunkDepth = 512))
+  for ((every, what) <- Seq((0, "full-rate burst"), (24, "full-rate burst, slow reader and small queues"))) {
+    val (got, counters) = wide(if (every == 0) compiled else small, line, 7, every = every)
+    val g = of(got, RecordKind.gem)
+    val rest = e.iterator
+    check((every == 0) == (counters._1 == 0) && e.length - g.length == counters._1 && g.forall(r => rest.contains(r)),
+      s"$what: ${g.length} of ${e.length} GEM records, whole and in order, the ${counters._1} others counted as drops")
+    check(of(expect, RecordKind.ploam).endsWith(of(got, RecordKind.ploam)) && of(got, RecordKind.alloc) == of(expect, RecordKind.alloc), s"$what: no PLOAM or BWmap record lost")
+  }
   println("PASS WideDsTest")
 }

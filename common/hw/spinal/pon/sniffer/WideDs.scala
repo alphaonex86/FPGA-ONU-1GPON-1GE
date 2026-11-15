@@ -329,10 +329,11 @@ case class WideDsDeframer() extends Component {
   }
 }
 
-/** The records of one ONU from a WideDsDeframer: SnifferDs's, same formats. GEM fragments of the Port-IDs set in the
-  * port map; a fragment is taken whole or not at all (room for it in the chunk FIFO, else dropped and counted), then
-  * its bytes go one per clock to the record writer. */
-case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048) extends Component {
+/** The records of one ONU from a WideDsDeframer: SnifferDs's, same formats, as 32-bit words (first byte in bits
+  * 31-24, each record padded with zeros to a whole word). GEM fragments of the Port-IDs set in the port map; a
+  * fragment is taken whole or not at all (room for it in the chunk FIFO, else dropped and counted), then goes a
+  * chunk per clock to the record writer. */
+case class WideSnifferDs(gemWords: Int = 4096, chunkDepth: Int = 2048) extends Component {
   val io = new Bundle {
     val ploam = slave Flow (Checked(Bits(96 bits)))
     val alloc = slave Flow (Checked(Allocation()))
@@ -342,7 +343,7 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048) extends C
     val allPloams = in Bool ()
     val allocMap = slave Flow (KeepWrite())
     val portMap = slave Flow (KeepWrite())
-    val output = master Stream (Fragment(Bits(8 bits)))
+    val output = master Stream (Fragment(Bits(32 bits)))
     val drops = out UInt (32 bits)
     val truncations = out UInt (32 bits)
   }
@@ -383,25 +384,26 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048) extends C
   heads.io.push.valid := chunk.valid && keepNow && chunk.last
   heads.io.push.payload := GemRecord.head(metaNow.portId, metaNow.pli, metaNow.counter, metaNow.pti, chunk.cut, startNow)
 
-  val gems = RecordWriter(10, gemDepth, 32)
+  val gems = WideRecordWriter(10, gemWords, 32)
   val popped = chunks.io.pop.stage() // registered: the queues' memories are slow to read
   val head = heads.io.pop.stage()
-  val byteIndex = Reg(UInt(3 bits)) init (0)
-  val lastByte = byteIndex + 1 >= popped.count
-  val finish = lastByte && (!popped.last || head.valid) // a fragment's last byte waits for its head
-  val data = Flow(Bits(8 bits))
+  val pause = Reg(Bool()) init (False) // the clock after a fragment's last chunk is the writer's
+  // a fragment's last chunk waits for its head, all of them for room in the writer: fragments are lost whole, above
+  val go = popped.valid && !pause && gems.io.room && (!popped.last || head.valid)
+  val data = Flow(WideBytes())
   val close = Flow(RecordHead(10))
-  data.valid := popped.valid && popped.count =/= 0 && (!lastByte || finish)
-  data.payload := Vec(popped.bytes.subdivideIn(8 bits).reverse)((popped.first + byteIndex).resize(2))
-  close.valid := popped.valid && finish && popped.last
+  data.valid := go && popped.count =/= 0
+  data.bytes := popped.bytes |<< (popped.first << 3)
+  data.count := popped.count
+  close.valid := go && popped.last
   close.payload := head.payload
-  popped.ready := finish
+  popped.ready := go
   head.ready := close.valid
+  pause := close.valid
   gems.io.data << data.stage() // both a clock later: the queue's memory is slow to read
   gems.io.close << close.stage()
-  when(popped.valid)(byteIndex := finish ? U(0, 3 bits) | (lastByte ? byteIndex | byteIndex + 1))
 
-  io.output << StreamArbiterFactory.roundRobin.fragmentLock.on(pcbd.io.outputs ++ Seq(gems.io.output))
+  io.output << StreamArbiterFactory.roundRobin.fragmentLock.on(pcbd.io.outputs.map(RecordWords.of) ++ Seq(gems.io.output))
   io.drops := pcbd.io.drops + gems.io.drops + gemDrops
   io.truncations := pcbd.io.truncations + gems.io.truncations
 }

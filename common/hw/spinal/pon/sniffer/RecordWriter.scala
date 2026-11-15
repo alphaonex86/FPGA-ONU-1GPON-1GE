@@ -23,23 +23,6 @@ object RecordHead {
       (0 until 8).map(i => time.asBits(8 * i + 7 downto 8 * i))
 }
 
-/** A record stream as bytes, zeros after each record to a multiple of 4 bytes (as RecordWords' last word). */
-case class RecordPad() extends Component {
-  val io = new Bundle {
-    val input = slave Stream (Fragment(Bits(8 bits)))
-    val output = master Stream (Bits(8 bits))
-  }
-  val count = Reg(UInt(2 bits)) init (0) // bytes sent, modulo 4
-  val padding = Reg(Bool()) init (False)
-  io.output.valid := padding || io.input.valid
-  io.output.payload := padding ? B(0, 8 bits) | io.input.fragment
-  io.input.ready := !padding && io.output.ready
-  when(io.output.fire) {
-    count := count + 1
-    padding := count =/= 3 && (padding || io.input.last)
-  }
-}
-
 case class RecordEntry(extraBytes: Int) extends Bundle {
   val head = RecordHead(extraBytes)
   val length = UInt(16 bits) // payload bytes, extra included
@@ -111,4 +94,104 @@ case class RecordWriter(extraBytes: Int, dataDepth: Int, headDepth: Int) extends
   datas.io.pop.ready := heads.io.pop.valid && !inHeader && io.output.ready
   heads.io.pop.ready := io.output.fire && io.output.last
   when(io.output.fire)(index := io.output.last ? U(0, 16 bits) | index + 1)
+}
+
+/** Up to 4 bytes of a record's payload: `count` of them, the first in bits 31-24. */
+case class WideBytes() extends Bundle {
+  val bytes = Bits(32 bits)
+  val count = UInt(3 bits)
+}
+
+/** RecordWriter for a source of up to 4 payload bytes a clock, read as 32-bit words: the same record, first byte in
+  * bits 31-24, its last word padded with zeros. The clock after a `close` must carry nothing: the bytes still held
+  * leave then. The data FIFO holds words, the payload already where it goes behind the header's last bytes.
+  * A source that can wait sends nothing 3 clocks after `room` falls: no record is then cut or lost here. */
+case class WideRecordWriter(extraBytes: Int, dataWords: Int, headDepth: Int) extends Component {
+  val io = new Bundle {
+    val data = slave Flow (WideBytes())
+    val close = slave Flow (RecordHead(extraBytes))
+    val output = master Stream (Fragment(Bits(32 bits)))
+    val room = out Bool ()
+    val drops = out UInt (32 bits)       // records lost whole
+    val truncations = out UInt (32 bits) // records cut short (flag bit 7)
+  }
+  val headBytes = 12 + extraBytes
+  val offset = headBytes % 4 // header bytes in the first data word
+  val heads = StreamFifo(RecordEntry(extraBytes), headDepth)
+  val datas = StreamFifo(Bits(32 bits), dataWords)
+
+  // input: one open record, kept or dropped as a whole at its first clock; its bytes packed into words
+  val idle = RegInit(True)
+  val finishing = RegInit(False) // the clock after the close
+  val kept, truncated = Reg(Bool())
+  val held = Reg(UInt(2 bits))   // bytes waiting for a full word, in `pending` from bit 23 down
+  val pending = Reg(Bits(24 bits))
+  val fed, stored = Reg(UInt(16 bits)) // payload bytes taken, and those in the words pushed
+  val closing = Reg(RecordHead(extraBytes))
+  val starting = idle && (io.data.valid || io.close.valid)
+  // the head is pushed two clocks after the close; room is a clock old: at most one push since, one entry left
+  val room = RegNext(heads.io.availability > 2) init (False)
+  io.room := room && RegNext(datas.io.availability > 8, False)
+  val keep = starting ? room | kept
+  val heldNow = starting ? U(offset, 2 bits) | held
+  val count = io.data.valid ? io.data.count | U(0, 3 bits)
+  val masked = io.data.bytes & ~(B(0xFFFFFFFFL, 32 bits) |>> (count << 3))
+  val joined = ((starting ? B(0, 24 bits) | pending) ## B(0, 32 bits)) | ((masked ## B(0, 24 bits)) |>> (heldNow << 3))
+  val total = heldNow +^ count
+  val full = total >= 4
+  val fedNow = (starting ? U(0, 16 bits) | fed) + count
+  val want = !finishing && (io.data.valid || io.close.valid) && keep && !(!starting && truncated) && full
+  val last = finishing && kept && !truncated && fed =/= stored
+  datas.io.push.valid := want || last
+  datas.io.push.payload := finishing ? (pending ## B(0, 8 bits)) | joined(55 downto 24)
+  when(!finishing && (io.data.valid || io.close.valid)) {
+    idle := False
+    kept := keep
+    truncated := (!starting && truncated) || (want && !datas.io.push.ready)
+    held := (full ? (total - 4) | total).resized
+    pending := full ? joined(23 downto 0) | joined(55 downto 32)
+    fed := fedNow
+    stored := (want && datas.io.push.ready) ? (fedNow - (total - 4).resized) | (starting ? U(0, 16 bits) | stored)
+    closing := io.close.payload
+    finishing := io.close.valid
+  }
+  val cut = truncated || (last && !datas.io.push.ready)
+  val head = Flow(RecordEntry(extraBytes))
+  head.valid := finishing && kept
+  head.head := closing
+  head.head.flags(7) := cut
+  head.length := ((last && datas.io.push.ready) ? fed | stored) + extraBytes
+  val headStaged = head.stage()
+  heads.io.push.valid := headStaged.valid
+  heads.io.push.payload := headStaged.payload
+  val drops = Reg(UInt(32 bits)) init (0)
+  val truncations = Reg(UInt(32 bits)) init (0)
+  when(finishing) {
+    idle := True
+    finishing := False
+    when(!kept)(drops := drops + 1)
+    when(kept && cut)(truncations := truncations + 1)
+  }
+  io.drops := drops
+  io.truncations := truncations
+
+  // output: the header's words, the data's behind (the first of them under the header's last bytes)
+  val entry = heads.io.pop.payload
+  val h = entry.head
+  val header = RecordHead.bytes(h.kind, h.flags, entry.length, h.time) ++
+    (extraBytes - 1 to 0 by -1).map(i => h.extra(8 * i + 7 downto 8 * i)) ++ Seq.fill((4 - offset) % 4)(B(0, 8 bits))
+  val headWords = Vec(header.grouped(4).map(_.reduce(_ ## _)).toSeq)
+  val index = Reg(UInt(15 bits)) init (0)
+  // set at index 0, before they can matter: the head memory is slow to read
+  val lastIndex = RegNextWhen((((entry.length +^ U(12 + 3)) >> 2) - 1).resize(15 bits), index === 0)
+  val payload = RegNextWhen(entry.length =/= extraBytes, index === 0)
+  val inHead = index < headWords.length
+  val data = index >= headBytes / 4 && (payload || index =/= headBytes / 4)
+  io.output.valid := heads.io.pop.valid && (!data || datas.io.pop.valid)
+  io.output.fragment := (inHead ? headWords(index.resize(log2Up(headWords.length) bits)) | B(0, 32 bits)) |
+    (data ? datas.io.pop.payload | B(0, 32 bits))
+  io.output.last := index =/= 0 && index === lastIndex
+  datas.io.pop.ready := heads.io.pop.valid && data && io.output.ready
+  heads.io.pop.ready := io.output.fire && io.output.last
+  when(io.output.fire)(index := io.output.last ? U(0, 15 bits) | index + 1)
 }

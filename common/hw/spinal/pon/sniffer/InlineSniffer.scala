@@ -10,8 +10,9 @@ import spinal.lib.bus.regif._
 /** The dump side of the in-line sniffer, in its 77.76 MHz domain: the records of one ONU to the USB link (a byte stream
   * each way), its registers written and read over the same link. Per clock: 32 downstream and 16 upstream line bits, first in the MSB.
   * Records as the passive sniffer's (RecordWriter format): PLOAM, BWmap entry, GEM fragment (WideSnifferDs), burst
-  * (SnifferUs behind UsReplay), each followed by zeros to a multiple of 4 bytes (RecordPad): the stream is a dump file
-  * of the host tool. Time in downstream bytes (4 per clock).
+  * (SnifferUs behind UsReplay), each followed by zeros to a multiple of 4 bytes: the stream is a dump file of the
+  * host tool. Time in downstream bytes (4 per clock). The records leave on the serial link, or as whole words on
+  * the wide one (LINK): 4 bytes a clock there, the downstream's own rate.
   * Host to device, 6 bytes: 0x5A, the register's number (its address / 4; bit 7: write), the value (32 bits LE, any
   * for a read). A read is answered by a record of kind 4: the number, the value (LE). A command stops being parsed
   * after 2^22 clocks without a byte. The I2C lines move 256 clocks apart at least (a write to I2C holds the next
@@ -25,6 +26,8 @@ case class InlineDump(benDelay: Int = 0) extends Component {
       val tx = master Stream (Bits(8 bits)) // to the host
       val rx = slave Stream (Bits(8 bits)) // from it
     }
+    val wide = master Stream (Bits(32 bits)) // the records' words, first byte in bits 31-24
+    val wideUp = in Bool () // async: the wide link has a host
     val sclLow, scl2Low, sdaLow = out Bool () // open drain: pulls the line low
     val scl, sda = in Bool ()
     // to and from the line side, another clock: steady or synchronized there
@@ -125,6 +128,10 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   val RX = busif.newReg("Receivers whose BOSA gives the data inverted (no datasheet says which lead of the TIA pair rises with light)")
   io.dsInvert := RX.field(Bool(), AccessType.RW, 0, "ds: the OLT port's, the downstream")(SymbolName("ds"))
   io.usInvert := RX.field(Bool(), AccessType.RW, 0, "us: the ONU port's, the upstream (its offset resistor then goes on the other input)")(SymbolName("us"))
+  val LINK = busif.newReg("Where the records go; the replies always leave on the serial link")
+  val wideAsked = LINK.field(Bool(), AccessType.RW, 0, "wide: on the SuperSpeed pipe while it is up; the host empties that pipe, then sets this")(SymbolName("wide"))
+  val wideUp = BufferCC(io.wideUp, False)
+  LINK.field(Bool(), AccessType.RO, 0, "up: the SuperSpeed link is trained")(SymbolName("up")) := wideUp
   busif.accept(DocCHeader("inline_regs", "INLINE")) // inline_regs.h next to the Verilog
 
   // commands: parsed, then one APB access; a read answered before the next command is taken
@@ -185,11 +192,24 @@ case class InlineDump(benDelay: Int = 0) extends Component {
     }
   }
 
-  // registered both ways (a byte every other clock): the writers' paths end here
-  val records = StreamArbiterFactory.roundRobin.fragmentLock.on(Seq(ds.io.output, us.io.output, command.reply).map(_.halfPipe()))
-  val padded = RecordPad()
-  padded.io.input << records
-  io.link.tx << padded.io.output
+  // registered both ways: the writers' paths end here
+  val records = StreamArbiterFactory.roundRobin.fragmentLock.on(
+    Seq(ds.io.output, RecordWords.of(us.io.output)).map(_.pipelined(m2s = true, s2m = true)))
+  // the link of a record is chosen before its first word; the rest of one whose wide link went away is dropped
+  val useWide = wideAsked && wideUp
+  val wide = Reg(Bool()) init (False)
+  val inside = Reg(Bool()) init (False)
+  when(records.fire)(inside := !records.last)
+  when((!inside && !records.valid) || (records.fire && records.last))(wide := useWide)
+  val routes = StreamDemux(records, wide.asUInt, 2)
+  val dropping = Reg(Bool()) init (False)
+  val drop = dropping || !useWide
+  when(routes(1).fire)(dropping := drop && !routes(1).last)
+  io.wide.valid := routes(1).valid && !drop
+  io.wide.payload := routes(1).fragment
+  routes(1).ready := io.wide.ready || drop
+  val serial = StreamArbiterFactory.lowerFirst.fragmentLock.on(Seq(RecordWords.of(command.reply).stage(), routes(0)))
+  StreamWidthAdapter(serial.map(_.fragment), io.link.tx, endianness = BIG)
 }
 
 /** In-line GPON sniffer: a repeater in one ONU's drop fibre that dumps its exchange with the OLT, vendor-neutral.
@@ -211,6 +231,7 @@ case class InlineSniffer(steadyBits: Int = 22, tail: Int = 4, benDelay: Int = 0,
   val outCd = ClockDomain.external("out")
   val usCd = ClockDomain.external("us")
   val usbCd = ClockDomain.external("usb") // the USB PHY's 60 MHz
+  val ssCd = ClockDomain.external("ss") // the SuperSpeed link's 125 MHz
   val io = new Bundle {
     val dsRx = in Bits (20 bits) // ds domain
     val usRx = in Bits (40 bits) // us domain, as usTx, usBen and usLaser
@@ -229,6 +250,10 @@ case class InlineSniffer(steadyBits: Int = 22, tail: Int = 4, benDelay: Int = 0,
       val txLast = out Bool ()
       val rx = slave Stream (Bits(8 bits))
     }
+    val ss = new Bundle { // ss domain: the records' words once the host asks for them there, first byte in bits 7-0
+      val tx = master Stream (Bits(32 bits))
+      val up = in Bool () // the link is trained
+    }
     val sclLow, scl2Low, sdaLow = out Bool ()
     val scl, sda = in Bool ()
     val synced = out Bool () // out domain, for a LED
@@ -245,6 +270,10 @@ case class InlineSniffer(steadyBits: Int = 22, tail: Int = 4, benDelay: Int = 0,
   toHost.io.push << dump.io.link.tx
   io.usb.tx << toHost.io.pop
   io.usb.txLast := toHost.io.popOccupancy === 1
+  val toSs = StreamFifoCC(Bits(32 bits), 4096, outCd, ssCd)
+  toSs.io.push << dump.io.wide
+  io.ss.tx << toSs.io.pop.map(EndiannessSwap(_))
+  dump.io.wideUp := io.ss.up
   val fromHost = StreamFifoCC(Bits(8 bits), 16, usbCd, outCd)
   fromHost.io.push << io.usb.rx
   dump.io.link.rx << fromHost.io.pop

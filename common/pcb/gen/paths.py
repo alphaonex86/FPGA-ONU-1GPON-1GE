@@ -8,6 +8,8 @@ LIB = os.path.join(REPO, 'common', 'pcb', 'lib')
 BOARD_HOME = {'olt': 'de25-nano', 'onu': 'de25-nano', 'hsmc': 'de25-standard', 'sniffer': 'sniffer',
               'inline': '../FPGA-USB-GPON-sniffer'}
 
+ROUTED = {}   # board name -> its routed board, when board_dir is redirected (unrouted.py)
+
 def board_dir(name):
     return os.path.normpath(os.path.join(REPO, BOARD_HOME[name], 'pcb', name))
 

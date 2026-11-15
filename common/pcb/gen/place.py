@@ -4,6 +4,7 @@ import math, os, sys
 import pcbnew
 sys.path.insert(0, os.path.dirname(__file__))
 from pcbgen import Layout, BGA_C, P, V, plane_vias, PLANE_NETS
+import paths
 from paths import board_dir
 from boards import onu, olt, hsmc, sniffer, inline, ball_xy
 import bosa
@@ -75,8 +76,24 @@ def buck_cell(lay, u):
     lay.track('+5V', [at(1.14, -0.95), at(2.9, -0.95)], 0.5, pcbnew.B_Cu)
     lay.track(fb, [at(1.14, 0.95), at(2.6, 0.95), at(2.6, 2.1)], 0.2, pcbnew.B_Cu)
 
+def keep_places(lay):
+    """The passives the cells did not place go back where the routed board has them, when footprint and nets are the
+    same and the place is still free: the automatic search below answers to every part around it, so one new chip
+    moved parts (and lost their routing) all over the board."""
+    name = lay.bd.name
+    path = paths.ROUTED.get(name, f'{board_dir(name)}/{name}.kicad_pcb')
+    if not os.path.exists(path):
+        return
+    pads = lambda fp: (fp.GetFPID().GetUniStringLibItemName(), {p.GetNumber(): p.GetNetname() for p in fp.Pads()})
+    done = set(lay.placed_refs())
+    for old in pcbnew.LoadBoard(path).GetFootprints():
+        ref = old.GetReference()
+        if ref in lay.fps and ref not in done and is_passive(ref) and pads(old) == pads(lay.fps[ref]):
+            lay.place_if_free(ref, pcbnew.VECTOR2I(old.GetPosition()), old.GetOrientationDegrees(), old.IsFlipped())
+
 def passives(lay, header_rn_y):
     parts = lay.parts
+    keep_places(lay)
     placed = set(lay.placed_refs())
     # source series packs between the header and the BGA, under their balls
     for r in sorted(r for r in parts if r.startswith('RN')):
@@ -109,12 +126,15 @@ def passives(lay, header_rn_y):
                     later.append(r)
                 continue
             if nets == [lay.core] and lay.cap_for_bga(r):  # on the wide core island east of the BGA
-                lay.place_near(r, lay.island[0] + 0.7, BGA_C[1], bottom=True, within=lay.island)
+                try:
+                    lay.place_near(r, lay.island[0] + 0.7, BGA_C[1], bottom=True, within=lay.island)
+                except RuntimeError:   # bottom full: on top at the island's far end, clear of the lanes leaving the balls
+                    lay.place_near(r, lay.island[2], BGA_C[1], within=lay.island)
                 continue
             if r.startswith('C') and len(nets) == 1 and nets[0] in rail_balls and lay.cap_for_bga(r):
                 balls = rail_balls[nets[0]]
                 k = used.get(nets[0], 0); used[nets[0]] = k + 1
-                lay.place_near(r, *lay.pad_xy(lay.bga, balls[k % len(balls)]), bottom=True)
+                lay.place_near(r, *lay.pad_xy(lay.bga, balls[k % len(balls)]), bottom=True, outside=lay.island)   # its own plane under it
                 continue
             pts, host = [], None
             if len(nets) == 1 and nets[0].startswith('+') and not (lay.bga and lay.cap_for_bga(r)):
@@ -211,19 +231,22 @@ def inline_layout():
     assert a1[0] > BGA_C[0] and a1[1] < BGA_C[1], f'ball A1 at {a1}: not north-east'
     lay.keepout['B'].append((BGA_C[0] - 11.5, BGA_C[1] - 11.5, BGA_C[0] + 11.5, BGA_C[1] + 11.5))   # dog-bone via field
     bucks = {lay.parts[r].block: r for r in refs(lay, 'TLV62569DBV')}
-    for rail, xy in (('+1V0', (49.5, 23.0)), ('+1V8', (49.5, 32.5)), ('+3V3', (38.0, 41.5))):   # cells clear of the via field
+    # cells clear of the via field; +1V0 east of the SuperSpeed receive pair's way to its balls
+    for rail, xy in (('+1V0', (51.0, 23.0)), ('+1V8', (49.5, 32.5)), ('+3V3', (38.0, 41.5))):
         lay.place(bucks[f'power:{rail}'], *xy, 180, True)
         buck_cell(lay, bucks[f'power:{rail}'])
     lay.place(one('TLV75510PDBV'), 56.0, 31.0, 0, True)    # GTP supplies from +1V8
     lay.place(one('TLV75512PDBV'), 56.0, 35.0, 0, True)
-    lay.place(one('USB_C_Receptacle_USB2.0_16P'), 16.0, 4.2, 180)   # mouth over the north edge
-    lay.place(one('USBLC6-2SC6'), 25.5, 5.0)
+    lay.place(one('USB_C_Receptacle'), 52.5, 4.73, 180)              # mouth 0.5 mm over the north edge, GTP side
+    lay.place(one('USBLC6-2SC6'), 45.0, 3.0, 0, True)                 # under the oscillator, where D+ / D- leave west
     lay.place(one('USB3320'), 13.0, 16.0, 180)                        # ULPI pins 1-8 face bank 34, USB pins the west edge
     pins_joined(lay, one('USB3320'), '+1V8_USB')
     lay.place(one('W25Q32JVSS'), 9.0, 34.5)                           # the flash socket, hand reach from the west edge
     lay.place(one('Conn_01x06'), 2.5, 21.5)                           # JTAG pads (not fitted), west of its balls
     lay.place(one('LED'), 14.0, 47.5)
-    lay.place(one('XO_LVDS_7050'), 44.0, 8.5)                        # north of the REFCLK balls F6/E6
+    xo = {lay.parts[r].conns['4']: r for r in refs(lay, 'XO_LVDS_7050')}   # by output net
+    lay.place(xo['XO_OUT_P'], 43.6, 8.5)                              # 155.52 MHz, north of the REFCLK balls F6/E6
+    lay.place(xo['XO125_OUT_P'], 34.5, 6.5)                           # 125 MHz (USB 3)
     for hole, xy in zip(refs(lay, 'MountingHole'), ((4, 4), (w - 4, 25.6), (4, h - 4), (w - 4, h - 4))):   # east: between the ports
         lay.place(hole, *xy)
     ports = bosa_ports(lay)   # DS_ = OLT port
@@ -259,9 +282,10 @@ def inline_layout():
     lay.place(one('74LVC1G32'), 52.0, 47.0)
     lay.place(one('TLV3501AIDBV'), rx_x - 10.5, 49.5)    # at the ONU port's APD monitor
     dacs = {lay.parts[r].conns['2']: r for r in refs(lay, 'MCP4728')}   # by clock: SCL feeds the OLT port's
-    lay.place(dacs['SCL'], 52.0, 5.5)     # beside the OLT port it sets
+    lay.place(dacs['SCL'], 52.9, 2.6, 0, True)   # under the USB receptacle's mouth, beside the OLT port it sets
     lay.place(dacs['SCL2'], 23.0, 46.5)
     lay.place(one('ADS7828'), 33.0, 44.5)
+    usb3_cell(lay)
     return lay
 
 def pins_joined(lay, chip, net):
@@ -545,16 +569,175 @@ def keep_free(lay, side, pts, margin=0.5):
             lay.keepout[side].append((min(p[0], q[0]) - margin, min(p[1], q[1]) - margin,
                                       max(p[0], q[0]) + margin, max(p[1], q[1]) + margin))
 
-def route_pair(lay, layer, center, ends):
-    """Locked pair along `center`, SERDES_W at PAIR_PITCH; ends: (net, head, tail) for the left line, then the right one,
+def route_pair(lay, layer, center, ends, width=SERDES_W, pitch=PAIR_PITCH):
+    """Locked pair along `center`, `width` at `pitch`; ends: (net, head, tail) for the left line, then the right one,
     head and tail being the thin (pad pitch) pieces to the pads or vias."""
     side = 'F' if layer == pcbnew.F_Cu else 'B'
-    for (net, head, tail), d in zip(ends, (PAIR_PITCH / 2, -PAIR_PITCH / 2)):
+    for (net, head, tail), d in zip(ends, (pitch / 2, -pitch / 2)):
         line = left_offset(center, d)
-        for pts, w in ((head + line[:1], 2 * NECK_W), (line, SERDES_W), (line[-1:] + tail, 2 * NECK_W)):
+        for pts, w in ((head + line[:1], 2 * NECK_W), (line, width), (line[-1:] + tail, 2 * NECK_W)):
             if len(pts) > 1:
                 lay.track(net, pts, w, layer, locked=True)
                 keep_free(lay, side, pts)
+
+SS_W, SS_PITCH = 0.3, 0.5   # USB 3 pairs: about 90 ohm differential on the outer layers (JLC 7628 prepreg, 0.21 mm)
+
+def left_first(seg, a, b):
+    """Two (net, xy) targets ordered for route_pair: the one left of a pair running along `seg` first."""
+    (x0, y0), (x1, y1) = seg
+    return sorted((a, b), key=lambda q: -((q[1][0] - x1) * (y1 - y0) - (q[1][1] - y1) * (x1 - x0)))
+
+def turn_to(lay, ref, ok):
+    """The rotation at which `ok(pad)` holds, pad(number) being that pad's place around the part's origin."""
+    fp = lay.fps[ref]
+    fp.SetPosition(V(0, 0))
+    for rot in (0, 90, 180, 270):
+        fp.SetOrientationDegrees(rot)
+        if ok(lambda n: lay.pad_xy(ref, n)):
+            return rot
+    raise RuntimeError(f'{ref}: no rotation fits')
+
+def usb3_cell(lay):
+    """SuperSpeed between the USB-C receptacle (north edge, pad rows A / B south of its body) and GTP lane 2, its pairs
+    laid here at SS_W / SS_PITCH. On top, going south: row A's pairs, the two ESD arrays (one per plug orientation),
+    the switch, the transmit pair with its capacitors to balls B6 / A6. Row B is under the body: its pairs go down by
+    vias north of it and come up beside the arrays. The receive pair dives at the switch and runs on the bottom to
+    balls B10 / A10, under the downstream receive pair that leaves the balls between the two on top. Every path has two
+    vias or none. D-, CC1 and CC2 leave on the bottom (the pairs wall row A in), D+ and VBUS north under the body."""
+    j, mux, comparator = (refs(lay, s)[0] for s in ('USB_C_Receptacle', 'HD3SS3212', 'LMV331'))
+    F, B = pcbnew.F_Cu, pcbnew.B_Cu
+    x0 = P(lay.fps[j].GetPosition())[0]
+    ya, yb = lay.pad_xy(j, 'A1')[1], lay.pad_xy(j, 'B1')[1]
+    y_esd, ym = ya + 3.35, ya + 6.55
+    at = lambda ref, net: pad_of_net(lay, ref, net)
+    mid = lambda ref, pair: (at(ref, pair[0])[0] + at(ref, pair[1])[0]) / 2
+    def wire(net, pts, width=0.2, layer=F):
+        lay.track(net, pts, width, layer, locked=True)
+        keep_free(lay, 'F' if layer == F else 'B', pts, 0.3)
+    def via(net, xy):
+        lay.via(net, *xy, locked=True)
+        for side in 'FB':
+            keep_free(lay, side, [xy, xy], 0.4)
+    def pair(layer, center, a, b):
+        """A pair toward the targets a and b: (net, xy, head, tail)."""
+        ends = left_first(center[-2:], a[:2], b[:2])
+        full = {q[0]: q for q in (a, b)}
+        route_pair(lay, layer, center, [(net, full[net][2], full[net][3]) for net, _ in ends], SS_W, SS_PITCH)
+
+    lay.place(mux, x0, ym, turn_to(lay, mux, lambda pad: pad('19')[0] < pad('12')[0] and pad('19')[1] < pad('3')[1]))
+    lay.keepout['B'].append(lay.rect(lay.fps[mux], -0.2))   # no part under it: a plane via would land in its pads
+    for k, sx in (('2', -1), ('1', 1)):   # lane, its side of the receptacle
+        esd = next(r for r in refs(lay, 'TPD4E05U06') if f'USB_TX{k}_P' in lay.parts[r].conns.values())
+        lay.place(esd, x0 + sx * 1.55, y_esd, turn_to(lay, esd, lambda pad: pad('1')[0] < pad('5')[0] - 1))
+        ground = (lay.pad_xy(esd, '3')[0], y_esd - 1.15)   # its ground: a via north of it, between the pairs
+        wire('GND', [ground, (ground[0], y_esd + 0.385)]); via('GND', ground)
+        lay.tied |= {(esd, '3'), (esd, '8')}
+        for d in 'TR':
+            nets = [f'USB_{d}X{k}_{t}' for t in 'PN']
+            ca, cm = mid(esd, nets), mid(mux, nets)
+            down = [(ca, y_esd - 0.6), (ca, y_esd + 0.75), (cm, y_esd + 0.75 + abs(cm - ca)), (cm, ym - 1.188)]
+            pins = [(n, at(mux, n)) for n in nets]
+            if abs(at(j, nets[0])[1] - ya) < 0.01:   # row A: on top all the way
+                cj = mid(j, nets)
+                pair(F, [(cj, ya), (cj, ya + 0.65), (ca, ya + 0.65 + abs(ca - cj))] + down, *((n, xy, [], []) for n, xy in pins))
+                continue
+            outer, inner = sorted(nets, key=lambda n: -sx * at(j, n)[0])
+            drop = {outer: (at(j, outer)[0] + sx * 0.4, yb - 1.15), inner: (at(j, inner)[0] + sx * 0.1, yb - 1.15)}
+            rise = {outer: (ca + sx * 0.5, ya + 1.75), inner: (ca - sx * 0.3, ya + 1.75)}   # clear of row A's pair
+            for n, jog in ((outer, 0.4), (inner, 0.1)):
+                x = at(j, n)[0]
+                wire(n, [(x, yb), (x, yb - 0.6), (x + sx * jog, yb - 0.6 - jog), drop[n]])
+                via(n, drop[n]); via(n, rise[n])
+            cv = (drop[outer][0] + drop[inner][0]) / 2
+            pair(B, [(cv, yb - 0.9), (cv, yb - 0.3), (ca, yb - 0.3 + abs(ca - cv)), (ca, ya + 1.35)],
+                 *((n, rise[n], [drop[n]], [rise[n]]) for n in nets))
+            pair(F, down, *((n, xy, [rise[n]], []) for n, xy in pins))
+
+    # the receptacle's other pads: rows joined where the same signal faces itself; D- crosses D+ on the bottom
+    pos = lambda n: lay.pad_xy(j, n)
+    net = lambda n: next(q.GetNetname() for q in lay.fps[j].Pads() if q.GetNumber() == n)
+    for b, a in (('B1', 'A12'), ('B4', 'A9'), ('B6', 'A6'), ('B9', 'A4'), ('B12', 'A1')):
+        assert net(a) == net(b), (a, b)
+        late = abs(pos(b)[0] - x0) < abs(pos(a)[0] - x0)   # the long piece on the pad nearer the middle: clear of the peg holes
+        wire(net(a), [pos(b), (pos(b)[0], yb + (1.1 if late else 0.7)), (pos(a)[0], yb + (1.35 if late else 0.95)), pos(a)])
+    y_bus = yb - 2.65
+    ferrite = next(r for r, q in lay.parts.items() if r.startswith('FB') and 'VBUS' in q.conns.values())
+    lay.place_pad(ferrite, next(n for n, v in lay.parts[ferrite].conns.items() if v == 'VBUS'), x0 - 6.3, y_bus - 2.6, (-1, 0), bottom=False)
+    for b in ('B4', 'B9'):
+        wire('VBUS', [pos(b), (pos(b)[0], y_bus)], 0.2)
+    wire('VBUS', [(pos('B9')[0], y_bus), (x0 - 3.7, y_bus), (x0 - 6.3, y_bus - 2.6)], 0.4)
+    dp, dm, cc1, cc2 = (x0, yb - 1.85), (pos('B7')[0], yb - 1.15), (pos('A5')[0] - 0.25, ya + 1.0), (pos('B5')[0], yb - 1.15)
+    hop = (pos('A7')[0], ya + 1.0)
+    wire(net('B6'), [pos('B6'), dp]); via(net('B6'), dp)
+    wire(net('B7'), [pos('B7'), dm]); via(net('B7'), dm)
+    wire(net('B7'), [dm, (dm[0], hop[1] - 1.55), (hop[0], hop[1] - 0.8), hop], 0.2, B); via(net('B7'), hop)
+    wire(net('A7'), [pos('A7'), hop])
+    wire(net('B5'), [pos('B5'), cc2]); via(net('B5'), cc2)
+    wire(net('A5'), [pos('A5'), (pos('A5')[0], ya + 0.55), (cc1[0], ya + 0.8), cc1]); via(net('A5'), cc1)
+    pull = {v: r for r, q in lay.parts.items() if r.startswith('R') and 'GND' in q.conns.values()
+            for v in q.conns.values() if v in ('USB_CC1', 'USB_CC2')}
+    for cc, pts in ((net('B5'), [cc2, (cc2[0], cc2[1] + 0.7), (cc2[0] - 0.3, cc2[1] + 1.0), (cc2[0] - 0.3, ya + 2.15)]),
+                    (net('A5'), [cc1, (cc1[0], ya + 2.15)])):   # each CC line's 5.1 k at the end of its way down
+        wire(cc, pts, 0.2, B)
+        lay.place_pad(pull[cc], next(n for n, v in lay.parts[pull[cc]].conns.items() if v == cc), *pts[-1], (0, 1))
+    lay.place(comparator, x0 + 5.7, ya + 1.4, 0, True)   # the CC comparator east of the pairs, north of the core island
+    for a, sx in (('A12', -1), ('A1', 1)):
+        xy = (pos(a)[0] + sx * 0.45, ya + 0.95)
+        wire('GND', [pos(a), (pos(a)[0], ya + 0.5), xy]); via('GND', xy)
+    lay.tied |= {(j, n) for n in ('A1', 'A12', 'B1', 'B12')}
+
+    # the switch's supply pins: ground into its pad and out at both ends, VCC to a via south of it
+    for n in ('11', '20'):
+        (x, y), out = lay.pad_xy(mux, n), math.copysign(1, lay.pad_xy(mux, n)[0] - x0)
+        wire('GND', [(x0 + out * 1.3, y), (x0 + out * 2.9, y)]); via('GND', (x0 + out * 2.9, y))
+    (x, y), (ox, oy) = lay.pad_xy(mux, '5'), lay.pad_xy(mux, '2')
+    wire('GND', [(x, y), (x, ym + 0.3)])
+    wire('GND', [(ox, oy), (ox, ym + 1.75), (x0 - 2.9, ym + 1.75), (x0 - 2.9, lay.pad_xy(mux, '20')[1])])
+    # VCC: the plane under the switch is the core island, so on the bottom to a via north of the island, its capacitor there
+    (x, y), feed = at(mux, '+3V3'), (x0 + 3.1, ym - 1.9)
+    cap = next(r for r, q in lay.parts.items() if r.startswith('C') and q.block == lay.parts[mux].block and '+3V3' in q.conns.values()
+               and lay.fps[r].GetBoard() is None)
+    lay.place_pad(cap, next(n for n, v in lay.parts[cap].conns.items() if v == '+3V3'), feed[0], feed[1] + 0.7, (1, 0))
+    wire('+3V3', [(x, y), (x, y + 1.0)]); via('+3V3', (x, y + 1.0)); via('+3V3', feed)
+    wire('+3V3', [(x, y + 1.0), (x, feed[1] + 0.7), (feed[0], feed[1] + 0.7), feed], 0.25, B)
+    lay.tied |= {(mux, n) for n in ('2', '5', '6', '11', '20', '21')} | {(cap, n) for n, v in lay.parts[cap].conns.items() if v == '+3V3'}
+
+    # transmit: switch, capacitors, balls; the second-row ball leaves through its dog-bone site, north of the edge one
+    ball = {t: lay.pad_xy(lay.bga, lay.ball_of(f'SS_TX_{t}')) for t in 'PN'}
+    north, south = sorted('PN', key=lambda t: -ball[t][0])[::-1]
+    yt, x_cap = ball[north][1] - 0.25, ball[south][0] + 3.0
+    caps = {}
+    for t, dy in ((north, -0.5), (south, 0.5)):
+        c = next(r for r, q in lay.parts.items() if set(q.conns.values()) == {f'SS_TX_{t}', f'SS_TXC_{t}'})
+        lay.place_pad(c, next(n for n, v in lay.parts[c].conns.items() if v == f'SS_TXC_{t}'), x_cap + 0.48, yt + dy, (-1, 0), bottom=False)
+        caps[t] = (at(c, f'SS_TXC_{t}'), at(c, f'SS_TX_{t}'))
+        x, y = caps[t][1]
+        wire(f'SS_TX_{t}', [(x, y), (x - 0.27, y), (x - 0.52, y - dy / 2), (ball[south][0] + 0.95, y - dy / 2)], SS_W)
+    wire(f'SS_TX_{north}', [(ball[south][0] + 0.95, yt - 0.25), (ball[north][0] + 0.5, yt - 0.25), ball[north]])
+    wire(f'SS_TX_{south}', [(ball[south][0] + 0.95, yt + 0.25), ball[south]])
+    cm = mid(mux, ['SS_TXC_P', 'SS_TXC_N'])
+    turn, x_in = ym + 2.5, x_cap + 1.05   # west north of the regulator's divider (its ground via comes up there), then down to the capacitors
+    pair(F, [(cm, ym + 1.188), (cm, turn - 0.4), (cm - 0.4, turn), (x_in + yt - turn, turn), (x_in, yt), (x_cap + 0.75, yt)],
+         *((f'SS_TXC_{t}', caps[t][0], [], [caps[t][0]]) for t in 'PN'))
+
+    # receive: vias south of the switch, bottom, west under the transmit pair, south beside the ball field, up at the balls
+    ball = {t: lay.pad_xy(lay.bga, lay.ball_of(f'SS_RX_{t}')) for t in 'PN'}
+    north, south = sorted('PN', key=lambda t: -ball[t][0])[::-1]
+    pins = {t: at(mux, f'SS_RX_{t}') for t in 'PN'}
+    west, east = sorted('PN', key=lambda t: pins[t][0])
+    cm, yv, edge = mid(mux, ['SS_RX_P', 'SS_RX_N']), ym + 2.5, ball[south][0]
+    dive = {west: (pins[west][0] + 0.05, yv), east: (pins[east][0] + 0.35, yv)}
+    wire(f'SS_RX_{west}', [pins[west], (pins[west][0], yv - 0.3), dive[west]])
+    wire(f'SS_RX_{east}', [pins[east], (pins[east][0], yv - 0.6), (dive[east][0], yv - 0.25), dive[east]])
+    up = {north: (edge + 1.2, ball[north][1] - 0.5), south: (edge + 1.2, ball[north][1] + 0.3)}
+    wire(f'SS_RX_{north}', [ball[north], (ball[north][0] + 0.5, up[north][1]), up[north]])
+    wire(f'SS_RX_{south}', [ball[south], (edge + 0.7, ball[south][1]), (edge + 1.0, up[south][1]), up[south]])
+    for t in 'PN':
+        via(f'SS_RX_{t}', dive[t]); via(f'SS_RX_{t}', up[t])
+    cv, run, lane = (dive[west][0] + dive[east][0]) / 2, yv + 0.55, edge + 2.25
+    pair(B, [(cv, yv), (cv, yv + 0.2), (cv - 0.35, run), (lane + 0.45, run), (lane, run + 0.45), (lane, up[north][1] - 0.25)],
+         (f'SS_RX_{north}', (lane - 0.5, up[north][1]), [dive[north]], [(lane - 0.5, up[north][1]), up[north]]),
+         (f'SS_RX_{south}', (lane + 0.25, up[south][1]), [dive[south]], [(lane + 0.25, up[south][1] - 0.25), (lane, up[south][1]), up[south]]))
 
 def hsmc_pairs(lay):
     """GTS lanes by hand: TX on F.Cu over the In1 GND plane, RX on B.Cu over the In2 3.3 V plane, so the TX and RX of a
@@ -804,7 +987,7 @@ def fpga_board(lay):
         done = next(r for r, q in lay.parts.items() if set(q.conns.values()) == {'DONE', '+3V3'})
         lay.place_near(done, lay.island[0], lay.island[3] + 1.5)   # south of the core island: +3V3 is under it there
         passives(lay, None)
-        lay.fanout({'A4', 'B4', 'A8', 'B8'}, PLANE_NETS)
+        lay.fanout({'A4', 'B4', 'A8', 'B8'} | {lay.ball_of(f'SS_{d}X_{t}') for d in 'TR' for t in 'PN'}, PLANE_NETS)
         planes(lay)
         return
     hand = sniffer_serdes(lay) if lay.bd.name == 'sniffer' else serdes(lay, lay.bd.name == 'olt')   # exact pairs first

@@ -55,6 +55,7 @@ def assign_balls(signals, clock):
 
 class Bridge(Board):
     serdes_w = 0.2   # router width of the SerDes netclass
+    edge_clear = 0.3  # copper to the board edge and to unplated holes
     serdes_nets = ()  # this board's own SerDes netclass patterns, besides pcbgen's
     power_nets = ()   # supply nets not named '+...': Power netclass too
 
@@ -164,10 +165,11 @@ class Bridge(Board):
                  {'1': '+3V3', '2': 'TCK', '3': 'TDI', '4': 'TDO', '5': 'TMS', '6': 'GND'})
         return balls
 
-    def artix7(self, misc):
+    def artix7(self, misc, lanes={}):
         """XC7A35T-2FGG484I, its supplies and configuration: master SPI from its flash (M = 001), JTAG pads (header not
         fitted); GTP quad 216
-        lanes 0 (DS_) and 1 (US_) on MGTREFCLK0, lanes 2-3 unused (UG482 Table 5-6: RX to GND, TX open); XADC, thermal
+        lanes 0 (DS_) and 1 (US_) on MGTREFCLK0, lanes 2-3 unused (UG482 Table 5-6: RX to GND, TX open) unless `lanes`
+        ({transceiver pin: net}) takes them; XADC, thermal
         diode and key battery unused (UG480, UG470). misc: {net: ball}, every ball LVCMOS33."""
         self.block = 'power'
         self.decouple('+5V', 0, 1, 1)
@@ -183,7 +185,7 @@ class Bridge(Board):
         gt = {'MGTPRXP0_216': 'DS_RX_P', 'MGTPRXN0_216': 'DS_RX_N', 'MGTPTXP0_216': 'DS_TX_P', 'MGTPTXN0_216': 'DS_TX_N',
               'MGTPRXP1_216': 'US_RX_P', 'MGTPRXN1_216': 'US_RX_N', 'MGTPTXP1_216': 'US_TX_P', 'MGTPTXN1_216': 'US_TX_N',
               'MGTREFCLK0P_216': 'REFCLK_P', 'MGTREFCLK0N_216': 'REFCLK_N', 'MGTRREF_216': 'GT_RREF',
-              **{f'MGTPRX{d}{k}_216': 'GND' for d in 'PN' for k in (2, 3)}}
+              **{f'MGTPRX{d}{k}_216': 'GND' for d in 'PN' for k in (2, 3)}, **lanes}
         unused = ('VCCBATT_0', 'VP_0', 'VN_0', 'VREFP_0', 'VREFN_0', 'DXP_0', 'DXN_0', 'GNDADC_0', 'M1_0', 'M2_0')
         conn = {'VCCINT': '+1V0', 'VCCBRAM': '+1V0', 'VCCAUX': '+1V8', 'VCCADC_0': '+1V8', 'MGTAVCC': '+1V0_GT',
                 'MGTAVTT': '+1V2_GT', 'GND': 'GND', **{n: 'GND' for n in unused},
@@ -544,19 +546,26 @@ def laser(b, p, data, dis, ben=None):
 
 def inline():
     """In-line GPON sniffer (../FPGA-USB-GPON-sniffer/README.md): in one ONU's drop fibre, both directions regenerated
-    through the Artix-7 and dumped over USB. OLT port: ONU-type BOSA (DS_ receiver, US_ burst laser); ONU port: OLT-type
+    through the Artix-7 and dumped over USB (2.0 by the USB3320, 3.0 by GTP lane 2). OLT port: ONU-type BOSA (DS_ receiver, US_ burst laser); ONU port: OLT-type
     BOSA (US_ burst receiver, DS_ laser), both on the X100DG BOSA land (the OLT type assumed alike). USB: USB3320 ULPI PHY to the FPGA (LUNA serial device); the bitstream's
     flash sits in a DIP-8 socket (written in a programmer), the JTAG header is not fitted.
     The upstream laser lights only while the ONU-port receiver sees light (US_QUIET low, no FPGA in that path) and
     the max-burst cutoff ends what stays on."""
     b = Bridge('inline', 'In-line GPON sniffer: USB, Artix-7, OLT and ONU optical ports')
-    b.serdes_nets = ('DS_TIA_*', 'DS_DIN_*', 'DS_LA_*', 'DS_RX_*', 'DS_TX_*', 'US_TX_*', 'REFCLK_*', 'XO_OUT_*', 'USB_D?', '*_LD_IN_*',
+    b.serdes_nets = ('DS_TIA_*', 'DS_DIN_*', 'DS_LA_*', 'DS_RX_*', 'DS_TX_*', 'US_TX_*', 'REFCLK_*', 'XO_OUT_*', 'USB_D?', 'USB_?X?_?', 'SS_*', 'USB_REFCLK_?',
+                     'XO125_OUT_?', '*_LD_IN_*',
                      '*_LD_OUT_*', '*_LD_BIAS_*', '*_LD_K', '*_LD_A')   # the lasers' currents too
     b.power_nets = ('VBUS',)   # the whole board's current
+    b.edge_clear = 0.2   # the receptacle's land is its maker's: a locating hole 0.22 mm from a shell pad (JLCPCB's limit: 0.2)
     b.block = 'usb'
-    b.add('J', 'Connector', 'USB_C_Receptacle_USB2.0_16P', 'USB-C', 'Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12',
-          {'VBUS': 'VBUS', 'GND': 'GND', 'SHIELD': 'GND', 'CC1': 'USB_CC1', 'CC2': 'USB_CC2', 'D+': 'USB_DP', 'D-': 'USB_DM'},
-          MPN='TYPE-C-31-M-12')
+    # the plug's lane (its CC line pulled up by the host), the switch port it is on, the connector's P / N on that
+    # port's p / n: lane 1 is lane 2 mirrored on the connector, so its pairs pass the switch inverted (a USB 3 link
+    # trains through either polarity)
+    ports = (('1', 'C', 'NP'), ('2', 'B', 'PN'))
+    b.add('J', 'Connector', 'USB_C_Receptacle', 'USB-C', 'Connector_USB:USB_C_Receptacle_Amphenol_12401610E4-2A',
+          {'VBUS': 'VBUS', 'GND': 'GND', 'SHIELD': 'GND', 'CC1': 'USB_CC1', 'CC2': 'USB_CC2', 'D+': 'USB_DP', 'D-': 'USB_DM',
+           **{f'{d}X{k}{s}': f'USB_{d}X{k}_{t}' for d in 'TR' for k, *_ in ports for s, t in (('+', 'P'), ('-', 'N'))}},
+          MPN='12401610E4#2A')
     b.fb('VBUS', '+5V')
     b.r('5.1k', 'USB_CC1', 'GND'); b.r('5.1k', 'USB_CC2', 'GND')
     b.add('U', 'Power_Protection', 'USBLC6-2SC6', 'USBLC6-2SC6', 'Package_TO_SOT_SMD:SOT-23-6',
@@ -580,7 +589,8 @@ def inline():
             'ULPI_DIR': 'AA3', 'ULPI_NXT': 'AA4', 'ULPI_STP': 'AA5', 'ULPI_RST_N': 'AA6', 'ULPI_CLK': 'Y4', 'ULPI_REFCLK': 'AA8',
             'US_BEN': 'B22', 'US_LASER_DIS': 'C22', 'DS_LASER_DIS': 'D22', 'DS_LOS': 'E22', 'US_ABOVE': 'G22',
             'BURST_CUT': 'B21', 'SCL': 'D21', 'SCL2': 'E21', 'SDA': 'F21', 'LED_SYNC': 'G21', 'APD_EN': 'A21'}
-    b.artix7(misc)
+    b.artix7(misc, {'MGTPTXP2_216': 'SS_TX_P', 'MGTPTXN2_216': 'SS_TX_N', 'MGTPRXP2_216': 'SS_RX_P', 'MGTPRXN2_216': 'SS_RX_N',
+                    'MGTREFCLK1P_216': 'USB_REFCLK_P', 'MGTREFCLK1N_216': 'USB_REFCLK_N'})
     # the bitstream's flash in a socket: written in a programmer, no JTAG needed (JLC places the socket only)
     b.add('U', 'Memory_Flash', 'W25Q32JVSS', 'W25Q32 DIP-8 in a socket', 'Package_DIP:DIP-8_W7.62mm_Socket',
           {'1': 'FLASH_CS', '2': 'MISO', '3': 'FLASH_WP', '4': 'GND', '5': 'MOSI', '6': 'CCLK', '7': 'FLASH_HOLD', '8': '+3V3'},
@@ -658,6 +668,32 @@ def inline():
     for _ in range(6):
         b.add('SH', LIB, 'SHIELD_CLIP', 'ICSRC6508SFR', 'bridge:SHIELD_CLIP_6.5x0.8', {'GND': 'GND'}, MPN='ICSRC6508SFR')
     b.holes(); b.holes()
+    # SuperSpeed (USB 3, 5 Gb/s) on GTP lane 2, added last (the references before it stay): the plug's two
+    # orientations through a 2:1 switch set by a comparator on the CC lines (the host pulls up the one its cable
+    # carries: CC1 above CC2 = lane 1, SEL high, port C); the lane's PLL on its own 125 MHz. Channel 0 transmits,
+    # channel 1 receives: the order the connector's rows and the GTP's balls ask for (place.py usb3_cell)
+    b.block = 'usb3'
+    mux = {'A0p': 'SS_TXC_P', 'A0n': 'SS_TXC_N', 'A1p': 'SS_RX_P', 'A1n': 'SS_RX_N', 'SEL': 'USB_FLIP', 'OEn': 'GND',
+           'VCC': '+3V3', 'GND': 'GND'}
+    for k, port, sign in ports:
+        pin = {d + s: f'USB_{d}X{k}_{t}' for d in 'TR' for s, t in zip('pn', sign)}
+        b.add('U', LIB, 'TPD4E05U06', 'TPD4E05U06DQAR', 'Package_SON:USON-10_2.5x1.0mm_P0.5mm',
+              {'D1+': pin['Tp'], 'D1-': pin['Tn'], 'D2+': pin['Rp'], 'D2-': pin['Rn'], 'GND': 'GND'}, MPN='TPD4E05U06DQAR')
+        mux.update({port + ch + s: pin[d + s] for ch, d in (('0', 'T'), ('1', 'R')) for s in 'pn'})
+    b.add('U', LIB, 'HD3SS3212', 'HD3SS3212IRKSR', 'Package_DFN_QFN:DHVQFN-20-1EP_2.5x4.5mm_P0.5mm_EP1x3mm', mux,
+          MPN='HD3SS3212IRKSR')
+    b.decouple('+3V3', 1)
+    for t in 'PN':   # USB 3: AC coupling at the transmitter; the receive pair comes DC from the host's capacitors
+        b.c('100n', f'SS_TX_{t}', f'SS_TXC_{t}')
+    b.add('U', 'Comparator', 'LMV331', 'LMV331IDBVR', 'Package_TO_SOT_SMD:SOT-23-5',
+          {'1': 'USB_CC1', '3': 'USB_CC2', '2': 'GND', '5': '+3V3', '4': 'USB_FLIP'}, MPN='LMV331IDBVR')
+    b.r('10k', 'USB_FLIP', '+3V3'); b.decouple('+3V3', 1)   # open collector
+    b.add('Y', LIB, 'XO_LVDS_7050', 'SX7DF125.000B20F30DNN', 'Oscillator:Oscillator_SMD_IDT_JU6-6_7.0x5.0mm_P2.54mm',
+          {'OE': '+3V3_XO', 'GND': 'GND', 'VDD': '+3V3_XO', 'OUT+': 'XO125_OUT_P', 'OUT-': 'XO125_OUT_N'},
+          MPN='SX7DF125.000B20F30DNN')
+    b.decouple('+3V3_XO', 1)
+    for t in 'PN':
+        b.c('100n', f'XO125_OUT_{t}', f'USB_REFCLK_{t}')
     return b
 
 # HSMC GTS lanes (DE25-Standard: 4, lanes 0-3) and the even-row single-ended pins (bank 2 north, bank 3 south)
