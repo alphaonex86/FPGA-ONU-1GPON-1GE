@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "rules.h"
+
 #define SNIFFER_CLOCK_MHZ 311.04 // record time unit
 #define SNIFFER_FRAME_CLOCKS 38880u
 #define SNIFFER_MAX_IDS 16
@@ -43,6 +45,7 @@ struct sniffer_options {
     FILE *text;             // decoded records, or NULL
     FILE *dump;             // raw records, or NULL
     FILE *profile;          // OMCI request/answer pairs, or NULL
+    const struct rules *rules; // in-line sniffer: its dump rules, NULL: every frame kept
 };
 
 struct sniffer_stream {

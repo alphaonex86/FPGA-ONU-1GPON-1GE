@@ -522,10 +522,12 @@ static void handle_gem(struct sniffer *s, const struct sniffer_record *r)
     for (int i = 4; i < 10; i++)
         counter = counter << 8 | p[i];
     say(s, " port=%u pli=%u pti=%u counter=%llx%s", port, pli, r->flags & 7, (unsigned long long)counter, r->flags & 8 ? " cut" : "");
+    if (r->flags & 0x10)
+        say(s, " head"); // a dump rule kept the frame's first bytes only
     const uint8_t *data = p + 10;
     unsigned bytes = r->length - 10;
     say_fragment(s, 0, port, data, bytes);
-    omci_fragment(s, 0, port, data, bytes, r->flags & 1, r->flags & 0x88);
+    omci_fragment(s, 0, port, data, bytes, r->flags & 1, r->flags & 0x98);
 }
 
 int sniffer_handle(struct sniffer *s, const struct sniffer_record *r)

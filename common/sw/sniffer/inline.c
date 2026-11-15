@@ -35,7 +35,7 @@ struct link {
     int failed;             // a command was not sent (logged)
     uint8_t bytes[1 << 17]; // received, parsed up to `at`
     size_t at, have, skipped;
-    uint32_t state, counters[4]; // as last reported
+    uint32_t state, counters[5]; // as last reported
 };
 
 static int open_port(const char *path)
@@ -209,8 +209,10 @@ static int start(struct link *l, const struct sniffer_options *opt)
         fprintf(stderr, "sniffer: identity %08x, an in-line sniffer's is %08x\n", id, MAGIC);
         return -1;
     }
+    // all of them, each run: a former run's rules do not stay
+    static const struct rules keep_all = RULES_DEFAULT;
     const struct sniffer_regs regs = {l, NULL, link_write};
-    if (sniffer_start(l->s, &regs, opt) < 0)
+    if (rules_write(opt->rules ? opt->rules : &keep_all, l, reg_write) < 0 || sniffer_start(l->s, &regs, opt) < 0)
         return -1;
     l->started = 1;
     return 0;
@@ -219,11 +221,12 @@ static int start(struct link *l, const struct sniffer_options *opt)
 // Prints the line's state and the error and lost counters when they change.
 static int report(struct link *l)
 {
-    static const struct { unsigned offset; const char *name; } counters[4] = {
+    static const struct { unsigned offset; const char *name; } counters[5] = {
         {INLINE_ERRORS, "downstream errors (hec | plend << 16 | sync losses << 24)"},
         {INLINE_DS_LOST, "DS lost (drops | truncations << 16)"},
         {INLINE_US_LOST, "US lost (drops | truncations << 16)"},
         {INLINE_US_OVERFLOWS, "US bursts left out or cut"},
+        {INLINE_FILTERED, "fragments dropped by the dump rules (downstream)"},
     };
     uint32_t value;
     if (link_read(l, INLINE_STATUS, &value) < 0)
@@ -238,7 +241,7 @@ static int report(struct link *l)
                 value & INLINE_STATUS_FEC_MASK ? " with FEC" : "", value & INLINE_STATUS_DSON_MASK ? "sent" : "not sent",
                 duty * 100 / 65536, railed ? " (at its limit)" : "");
     }
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         if (link_read(l, counters[i].offset, &value) < 0)
             return -1;
         if (value != l->counters[i]) {

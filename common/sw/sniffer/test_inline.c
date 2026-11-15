@@ -17,6 +17,7 @@ struct device {
     int fd;
     uint32_t regs[64];
     uint8_t alloc_keep[4096], port_keep[4096];
+    uint32_t rule_value[RULES_MAX][8], rule_mask[RULES_MAX][8], rule_config[RULES_MAX]; // RuleStore
     unsigned reads, strays; // strays: writes to a register the decoder must leave alone
     int enabled, failed;
 };
@@ -62,8 +63,19 @@ static void execute(struct device *d, unsigned number, uint32_t value)
         d->alloc_keep[value & 0xFFF] = value >> 12 & 1;
     else if (reg == INLINE_PORT_MAP / 4)
         d->port_keep[value & 0xFFF] = value >> 12 & 1;
-    else if (reg == INLINE_CTRL / 4 || reg == INLINE_DELIMITER / 4)
+    else if (reg == INLINE_CTRL / 4 || reg == INLINE_DELIMITER / 4 || reg == INLINE_RULE_SELECT / 4 ||
+             reg == INLINE_RULE_VALUE / 4 || reg == INLINE_FILTER / 4)
         d->regs[reg] = value;
+    else if (reg == INLINE_RULE_MASK / 4 || reg == INLINE_RULE / 4) {
+        uint32_t select = d->regs[INLINE_RULE_SELECT / 4];
+        unsigned rule = (select & INLINE_RULE_SELECT_RULE_MASK) >> INLINE_RULE_SELECT_RULE_SHIFT, word = select & INLINE_RULE_SELECT_WORD_MASK;
+        if (reg == INLINE_RULE / 4) {
+            d->rule_config[rule] = value;
+        } else {
+            d->rule_value[rule][word] = d->regs[INLINE_RULE_VALUE / 4];
+            d->rule_mask[rule][word] = value;
+        }
+    }
     else
         d->strays++;
     if (reg != INLINE_CTRL / 4)
@@ -116,6 +128,14 @@ int main(void)
     size_t text_size = 0, dump_size = 0;
     // Alloc-ID 10: a line feed in its command
     struct sniffer_options opt = {.onu_id = -1, .delimiter = 0xAB5983, .allocs = {6, 10}, .alloc_count = 2};
+    static struct rules rules = RULES_DEFAULT;
+    CHECK(rules_add(&rules, "drop,ds,multicast") == 0 && rules_add(&rules, "head,port=1025,vlan=100,17=0a/0f") == 0);
+    CHECK(rules_add(&rules, "keep,us,4=0102/ff0f,0=10") == 0 && rules_action("drop", &rules.other) == 0);
+    for (const char *const *bad = (const char *const[]){"keep,19=0102", "pass", "drop,vlan=4096", "drop,2=012", "drop,3=01/ffff", "drop,port", NULL}; *bad; bad++)
+        CHECK(rules_add(&rules, *bad) < 0);
+    CHECK(rules.count == 3);
+    rules.snap = 80;
+    opt.rules = &rules;
     opt.text = open_memstream(&text, &text_size);
     opt.dump = open_memstream(&dump, &dump_size);
     d.fd = posix_openpt(O_RDWR | O_NOCTTY);
@@ -127,17 +147,29 @@ int main(void)
     }
     d.alloc_keep[77] = d.port_keep[77] = 1; // a previous run's
     d.regs[INLINE_CTRL / 4] = INLINE_CTRL_ENABLE_MASK;
+    d.rule_config[9] = INLINE_RULE_DS_MASK; // a previous run's rule
 
     CHECK(inline_run(&s, port, NULL, &opt, &stopping) == 0);
     CHECK(pthread_join(thread, NULL) == 0);
     CHECK(fclose(opt.text) == 0 && fclose(opt.dump) == 0);
     CHECK(!d.failed && d.strays == 0);
-    CHECK(d.reads >= 1 + 2 * 5); // the identity, two reports
+    CHECK(d.reads >= 1 + 2 * 6); // the identity, two reports
     CHECK(!d.alloc_keep[77] && !d.port_keep[77] && d.alloc_keep[6] && d.alloc_keep[10]);
     CHECK(d.regs[INLINE_DELIMITER / 4] == 0x123456); // from the Upstream_Overhead
     CHECK(s.onu_id == 5 && d.alloc_keep[5]);         // from the burst
     CHECK(d.regs[INLINE_CTRL / 4] == 0);             // stopped
     CHECK(strstr(text, "Upstream_Overhead") && strstr(text, "US BURST onu=5"));
+    // the rules as RuleStore takes them: first frame byte in bits 31-24, need = the last compared byte + 1
+    CHECK(d.rule_config[0] == (INLINE_RULE_DS_MASK | RULES_DROP << INLINE_RULE_ACTION_SHIFT | 1u << INLINE_RULE_NEED_SHIFT));
+    CHECK(d.rule_value[0][0] == 0x01000000 && d.rule_mask[0][0] == 0x01000000 && d.rule_mask[0][1] == 0);
+    CHECK(d.rule_config[1] == (INLINE_RULE_DS_MASK | INLINE_RULE_US_MASK | INLINE_RULE_ONPORT_MASK | 1025u << INLINE_RULE_PORT_SHIFT |
+                               RULES_HEAD << INLINE_RULE_ACTION_SHIFT | 18u << INLINE_RULE_NEED_SHIFT));
+    CHECK(d.rule_value[1][3] == 0x81000064 && d.rule_mask[1][3] == 0xFFFF0FFF && d.rule_value[1][4] == 0x000A0000 && d.rule_mask[1][4] == 0x000F0000);
+    CHECK(d.rule_config[2] == (INLINE_RULE_US_MASK | RULES_KEEP << INLINE_RULE_ACTION_SHIFT | 6u << INLINE_RULE_NEED_SHIFT));
+    CHECK(d.rule_value[2][0] == 0x10000000 && d.rule_mask[2][0] == 0xFF000000 && d.rule_value[2][1] == 0x01020000 && d.rule_mask[2][1] == 0xFF0F0000);
+    for (unsigned i = 3; i < RULES_MAX; i++)
+        CHECK(d.rule_config[i] == 0);
+    CHECK(d.regs[INLINE_FILTER / 4] == (RULES_DROP << INLINE_FILTER_ACTION_SHIFT | 80u << INLINE_FILTER_SNAP_SHIFT));
     CHECK(dump_size == 24 + 32);
     free(text);
     free(dump);

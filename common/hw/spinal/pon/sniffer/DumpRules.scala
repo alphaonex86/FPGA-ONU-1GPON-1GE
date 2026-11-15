@@ -8,10 +8,10 @@ import spinal.lib.bus.regif._
 /** What a dump rule does with the frame it matches; `head`: its first bytes only (the snap length). */
 object RuleAction { val keep = 0; val drop = 1; val head = 2 }
 
-/** A dump rule besides its bytes. `need`: how many bytes of the frame it reads (its last masked byte + 1); a first
-  * fragment shorter than that does not match. */
+/** A dump rule besides its bytes: the directions it judges (none: off). `need`: how many bytes of the frame it reads
+  * (its last masked byte + 1); a first fragment shorter than that does not match. */
 case class RuleConfig() extends Bundle {
-  val enable, us, onPort = Bool()
+  val ds, us, onPort = Bool()
   val action = Bits(2 bits)
   val need = UInt(5 bits)
   val port = UInt(12 bits)
@@ -44,7 +44,7 @@ case class RuleRead(rules: Int) extends Bundle with IMasterSlave {
 }
 
 /** The dump rules: per rule a small memory of value / mask words (4 frame bytes each, first byte in bits 31-24) and
-  * its configuration in registers. No reset of the memories: a rule counts once enabled. */
+  * its configuration in registers. No reset of the memories: a rule counts once given a direction. */
 case class RuleStore(rules: Int = 16, readers: Int = 2) extends Component {
   val io = new Bundle {
     val write = slave Flow (RuleWrite(rules))
@@ -52,7 +52,10 @@ case class RuleStore(rules: Int = 16, readers: Int = 2) extends Component {
     val read = Vec(slave(RuleRead(rules)), readers)
   }
   val configs = Vec(Reg(RuleConfig()), rules)
-  configs.foreach(_.enable init (False))
+  configs.foreach { c =>
+    c.ds init (False)
+    c.us init (False)
+  }
   when(io.set.valid)(configs(io.set.rule) := io.set.config)
   val words = Seq.tabulate(rules) { i =>
     val mem = Mem(RuleBytes(), 8)
@@ -83,8 +86,8 @@ object RuleStore {
     store.io.write.bytes.value := value
     store.io.write.bytes.mask := busif.writeData
     val RULE = busif.newReg("Dump rules: the selected rule, write only")(SymbolName("RULE"))
-    RULE.field(Bool(), AccessType.WO, 0, "enable")(SymbolName("enable"))
-    RULE.field(Bool(), AccessType.WO, 0, "us: upstream frames, else downstream")(SymbolName("us"))
+    RULE.field(Bool(), AccessType.WO, 0, "ds: judges downstream frames")(SymbolName("ds"))
+    RULE.field(Bool(), AccessType.WO, 0, "us: judges upstream frames")(SymbolName("us"))
     RULE.field(Bool(), AccessType.WO, 0, "onPort: only frames of the Port-ID `port`")(SymbolName("onPort"))
     RULE.reserved(1 bits)
     RULE.field(Bits(2 bits), AccessType.WO, 0, "action: 0 keep, 1 drop, 2 keep the first FILTER.snap bytes")(SymbolName("action"))
@@ -95,7 +98,7 @@ object RuleStore {
     val data = busif.writeData
     store.io.set.valid := RULE.hitDoWrite
     store.io.set.rule := rule
-    store.io.set.config.enable := data(0)
+    store.io.set.config.ds := data(0)
     store.io.set.config.us := data(1)
     store.io.set.config.onPort := data(2)
     store.io.set.config.action := data(5 downto 4)
@@ -133,7 +136,7 @@ case class RuleMatch(us: Boolean, rules: Int = 16, words: Int = 5) extends Compo
   val configs = io.table.configs
   val candidates = Reg(Bits(rules bits))
   when(io.start.valid) {
-    candidates := configs.map(c => c.enable && c.us === Bool(us) && (!c.onPort || c.port === io.start.port) && c.need <= io.start.length).asBits()
+    candidates := configs.map(c => (if (us) c.us else c.ds) && (!c.onPort || c.port === io.start.port) && c.need <= io.start.length).asBits()
   }
   val alive = Reg(Bits(rules bits)) init (0)
   val index = Reg(UInt(3 bits))

@@ -147,7 +147,7 @@ object DumpRule {
       }
       write.valid #= false
       set.valid #= true; set.rule #= i
-      set.config.enable #= r.enable; set.config.us #= r.us; set.config.onPort #= r.port.nonEmpty
+      set.config.ds #= r.enable && !r.us; set.config.us #= r.enable && r.us; set.config.onPort #= r.port.nonEmpty
       set.config.port #= r.port.getOrElse[Int](0); set.config.action #= r.action; set.config.need #= r.need
       cd.waitSampling()
       set.valid #= false

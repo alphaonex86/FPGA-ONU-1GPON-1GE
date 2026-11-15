@@ -224,6 +224,10 @@ static void usage(void)
             "  -P FILE  OMCI profile: the OLT's requests with the ONU's answers\n"
             "  -r FILE  decode a raw dump instead of the board\n"
             "  -i PORT  the in-line sniffer's USB serial port, e.g. /dev/ttyACM0\n"
+            "  -f RULE  in-line sniffer: a dump rule (repeatable, the first that matches a frame decides):\n"
+            "           " RULES_SYNTAX
+            "  -F ACT   in-line sniffer: frames no rule matches: keep (default), drop or head\n"
+            "  -S N     in-line sniffer: bytes of a frame 'head' keeps (default 64, 24 at least)\n"
             "  -L FILE  in-line sniffer: the unit's level file; both lasers restart from dark, then follow the received\n"
             "           levels (else levels and lasers stay as the last run left them: dark after power-on)\n"
             "  -u DEV   the sniffer's UIO device (de25-standard/ghrd/uio_overlay.sh), e.g. /dev/uio0: waits on its\n"
@@ -244,17 +248,21 @@ int main(int argc, char **argv)
 {
     static struct sniffer s;
     static uint8_t serial[8];
+    static struct rules rules = RULES_DEFAULT;
     struct sniffer_options opt = {.onu_id = -1, .delimiter = 0xAB5983, .lead = 128, .width = 16, .text = stdout};
     const char *dump = NULL, *profile = NULL, *text = NULL, *in = NULL, *uio = NULL, *port = NULL, *level_file = NULL;
     unsigned long value, bridge = LW_BRIDGE;
     int c;
-    while ((c = getopt(argc, argv, "w:P:t:r:i:L:u:b:o:s:a:p:Ad:l:W:h")) != -1) {
+    while ((c = getopt(argc, argv, "w:P:t:r:i:f:F:S:L:u:b:o:s:a:p:Ad:l:W:h")) != -1) {
         switch (c) {
         case 'w': dump = optarg; break;
         case 'P': profile = optarg; break;
         case 't': text = optarg; break;
         case 'r': in = optarg; break;
         case 'i': port = optarg; break;
+        case 'f': if (rules_add(&rules, optarg) < 0) return 2; opt.rules = &rules; break;
+        case 'F': if (rules_action(optarg, &rules.other) < 0) return 2; opt.rules = &rules; break;
+        case 'S': if (parse_number(optarg, 4095, &value) < 0) return 2; rules.snap = (unsigned)value; opt.rules = &rules; break;
         case 'L': level_file = optarg; break;
         case 'u': uio = optarg; break;
         case 'b': if (parse_number(optarg, 0xFFFFFFFFul, &bridge) < 0) return 2; break;
@@ -288,7 +296,7 @@ int main(int argc, char **argv)
         default: usage(); return 2;
         }
     }
-    if (optind != argc || (level_file && !port)) {
+    if (optind != argc || ((level_file || opt.rules) && !port)) {
         usage();
         return 2;
     }
