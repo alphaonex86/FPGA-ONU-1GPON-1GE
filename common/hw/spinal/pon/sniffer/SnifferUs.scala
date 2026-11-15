@@ -9,8 +9,9 @@ import pon.gpon.GponCodes._
   * amp squelches the line to zero between them. Hunts the delimiter on any bit alignment (up to `delimiterErrors`
   * wrong bits), descrambles from the BIP (preset 0x7F) and records the burst (kind 3: BIP, ONU-ID, Ind, allocations)
   * until `quietBytes` zero line bytes, or `maxBytes` (flag 0). Zero line bytes at the burst's end look like the
-  * squelch and are left out with it (one burst in 256 loses its last byte; the BWmap gives the true length). */
-case class SnifferUs(quietBytes: Int = 8, maxBytes: Int = 20000, depth: Int = 32768) extends Component {
+  * squelch and are left out with it (one burst in 256 loses its last byte; the BWmap gives the true length).
+  * `ruleCount` > 0: the burst passes the dump rules first (UsGemFilter: its record format). */
+case class SnifferUs(quietBytes: Int = 8, maxBytes: Int = 20000, depth: Int = 32768, ruleCount: Int = 0) extends Component {
   val io = new Bundle {
     val line = in Bits (8 bits) // raw line bytes, any bit alignment, MSB first
     val time = in UInt (64 bits)
@@ -19,6 +20,11 @@ case class SnifferUs(quietBytes: Int = 8, maxBytes: Int = 20000, depth: Int = 32
     val output = master Stream (Fragment(Bits(8 bits)))
     val drops = out UInt (32 bits)
     val truncations = out UInt (32 bits)
+    val rules = (ruleCount > 0) generate master(RuleRead(ruleCount))
+    val fec = (ruleCount > 0) generate in(Bool())
+    val defaultAction = (ruleCount > 0) generate in(Bits(2 bits))
+    val snap = (ruleCount > 0) generate in(UInt(12 bits))
+    val filtered = (ruleCount > 0) generate out(UInt(32 bits))
   }
   // delimiter search as GtcUsDeframer: the burst is read from `history`, its first byte two clocks after the hit
   val history = Reg(Bits(32 bits)) init (0)
@@ -54,8 +60,21 @@ case class SnifferUs(quietBytes: Int = 8, maxBytes: Int = 20000, depth: Int = 32
   close.flags := B(0, 7 bits) ## long
   close.time := start
   close.extra.clearAll()
-  records.io.data << data.stage() // both a clock later (timing)
-  records.io.close << close.stage()
+  if (ruleCount > 0) { // both a clock later (timing)
+    val gems = UsGemFilter(ruleCount)
+    gems.io.data << data.stage()
+    gems.io.close << close.stage()
+    gems.io.rules <> io.rules
+    gems.io.fec := io.fec
+    gems.io.defaultAction := io.defaultAction
+    gems.io.snap := io.snap
+    io.filtered := gems.io.filtered
+    records.io.data << gems.io.dataOut
+    records.io.close << gems.io.closeOut
+  } else {
+    records.io.data << data.stage()
+    records.io.close << close.stage()
+  }
   io.output << records.io.output
   io.drops := records.io.drops
   io.truncations := records.io.truncations

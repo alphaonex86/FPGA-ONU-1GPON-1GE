@@ -63,7 +63,7 @@ case class RuleStore(rules: Int = 16, readers: Int = 2) extends Component {
     mem
   }
   for (r <- io.read) {
-    r.bytes := Vec(words.map(_.readAsync(r.index)))
+    r.bytes := Vec(words.map(_.readAsync(r.index, writeFirst)))
     r.configs := configs
   }
 }

@@ -143,7 +143,7 @@ object InlineSnifferTest extends App {
   check(got.length == bursts.length, s"upstream: one record per burst (${got.length})")
   for (((at, clear), r) <- bursts.zip(got)) {
     val keep = scrambled(clear).lastIndexWhere(_ != 0) + 1
-    check(r.payload == clear.take(keep) && r.flags == 0 && (r.time - at / 4).abs < 500, s"upstream: burst at bit $at, ${r.payload.length} clear bytes, time ${r.time} (line ${at / 4})")
+    check(r.payload == clear.take(keep) ++ Seq(keep & 0xFF, keep >> 8) && r.flags == 2 && (r.time - at / 4).abs < 500, s"upstream: burst at bit $at, ${r.payload.length} clear bytes, time ${r.time} (line ${at / 4})")
   }
   val times = records.filterNot(_.kind == RecordKind.reply).map(_.time)
   check(times.forall(_ > 0), "record times set")

@@ -10,7 +10,7 @@ import spinal.lib.bus.regif._
 /** The dump side of the in-line sniffer, in its 77.76 MHz domain: the records of one ONU to the USB link (a byte stream
   * each way), its registers written and read over the same link. Per clock: 32 downstream and 16 upstream line bits, first in the MSB.
   * Records as the passive sniffer's (RecordWriter format): PLOAM, BWmap entry, GEM fragment (WideSnifferDs), burst
-  * (SnifferUs behind UsReplay), each followed by zeros to a multiple of 4 bytes (RecordPad): the stream is a dump file
+  * (SnifferUs behind UsReplay, through UsGemFilter), each followed by zeros to a multiple of 4 bytes (RecordPad): the stream is a dump file
   * of the host tool. Time in downstream bytes (4 per clock). The dump rules (RuleStore) choose which frames of the
   * kept Port-IDs become records.
   * Host to device, 6 bytes: 0x5A, the register's number (its address / 4; bit 7: write), the value (32 bits LE, any
@@ -79,7 +79,7 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   ds.io.allPloams := allPloams
   ds.io.allocMap << allocMap
   ds.io.portMap << portMap
-  val store = RuleStore(readers = 1)
+  val store = RuleStore()
   ds.io.rules <> store.io.read(0)
 
   val crossDrops = Reg(UInt(16 bits)) init (0)
@@ -87,7 +87,9 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   val replay = UsReplay()
   replay.io.word := enable ? io.usWord | B(0, 16 bits)
   replay.io.time := time
-  val us = SnifferUs(depth = 8192)
+  val us = SnifferUs(depth = 8192, ruleCount = store.rules)
+  us.io.rules <> store.io.read(1)
+  us.io.fec := usFec
   us.io.line := replay.io.line
   us.io.time := replay.io.lineTime
   us.io.delimiter := delimiter
@@ -131,8 +133,11 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   val rules = RuleStore.Registers(busif, store)
   ds.io.defaultAction := rules.defaultAction
   ds.io.snap := rules.snap
+  us.io.defaultAction := rules.defaultAction
+  us.io.snap := rules.snap
   val FILTERED = busif.newReg("Fragments of the kept Port-IDs a dump rule dropped, counts")
   FILTERED.field(UInt(16 bits), AccessType.RO, 0, "ds")(SymbolName("ds")) := ds.io.filtered.resized
+  FILTERED.field(UInt(16 bits), AccessType.RO, 0, "us")(SymbolName("us")) := us.io.filtered.resized
   busif.accept(DocCHeader("inline_regs", "INLINE")) // inline_regs.h next to the Verilog
 
   // commands: parsed, then one APB access; a read answered before the next command is taken

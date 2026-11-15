@@ -34,6 +34,7 @@ case class FilterRegs(busif: BusIf, enableDoc: String) extends Area {
   CTRL.reserved(6 bits)
   val onuId = CTRL.field(Bits(8 bits), AccessType.RW, 0, "onuId: the tapped ONU's")(SymbolName("onuId"))
   val delimiterErrors = CTRL.field(UInt(2 bits), AccessType.RW, 1, "delimiterErrors: wrong bits allowed")(SymbolName("delimiterErrors"))
+  val usFec = CTRL.field(Bool(), AccessType.RW, 0, "usFec: the ONU's bursts carry FEC parity (in-line sniffer: left out of their records)")(SymbolName("usFec"))
   // reset to the usual one: zero would match the quiet line
   val DELIMITER = busif.newReg("Upstream delimiter, from the Upstream_Overhead PLOAM")(SymbolName("DELIMITER"))
   val delimiter = DELIMITER.field(Bits(24 bits), AccessType.RW, pon.gpon.GponCodes.usDelimiter, "delimiter")(SymbolName("delimiter"))
