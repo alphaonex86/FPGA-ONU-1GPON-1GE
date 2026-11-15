@@ -146,3 +146,10 @@ int rules_write(const struct rules *r, void *ctx, int (*write)(void *ctx, unsign
     }
     return write(ctx, INLINE_FILTER, rules_filter(r, 0));
 }
+
+int rules_keep_port(unsigned port, void *ctx, int (*write)(void *ctx, unsigned offset, uint32_t value))
+{
+    const uint32_t config = INLINE_RULE_DS_MASK | INLINE_RULE_US_MASK | INLINE_RULE_ONPORT_MASK | port << INLINE_RULE_PORT_SHIFT |
+                            RULES_KEEP << INLINE_RULE_ACTION_SHIFT;
+    return write(ctx, INLINE_RULE_SELECT, 0) < 0 ? -1 : write(ctx, INLINE_RULE, config);
+}

@@ -239,6 +239,12 @@ static void add_omci_port(struct sniffer *s, unsigned port)
         return;
     }
     s->omci_ports[s->omci_port_count++] = (uint16_t)port;
+    if (!s->regs.omci)
+        return;
+    if (s->omci_port_count == 1)
+        s->regs.omci(s->regs.ctx, port);
+    else
+        fprintf(stderr, "sniffer: OMCI Port-ID %u follows the dump rules (%u has the keep slot): -f keep,port=%u\n", port, s->omci_ports[0], port);
 }
 
 int sniffer_start(struct sniffer *s, const struct sniffer_regs *regs, const struct sniffer_options *opt)

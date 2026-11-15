@@ -107,6 +107,15 @@ static void link_key(void *ctx, const uint8_t *key, uint32_t superframe)
     command(ctx, WRITE | INLINE_KEY_SWITCH / 4, superframe & INLINE_KEY_SWITCH_SUPERFRAME_MASK);
 }
 
+static int reg_write(void *ctx, unsigned offset, uint32_t value) { return command(ctx, WRITE | offset / 4, value); }
+static int reg_ask(void *ctx, unsigned offset) { return command(ctx, offset / 4, 0); }
+
+// A failed write is logged by command(), the run ends at the next pump.
+static void link_omci(void *ctx, unsigned port)
+{
+    rules_keep_port(port, ctx, reg_write);
+}
+
 static int now_ms(int64_t *ms)
 {
     struct timespec now;
@@ -184,9 +193,6 @@ static int pump(struct link *l, int wanted, uint32_t *value, int ms)
     }
 }
 
-static int reg_write(void *ctx, unsigned offset, uint32_t value) { return command(ctx, WRITE | offset / 4, value); }
-static int reg_ask(void *ctx, unsigned offset) { return command(ctx, offset / 4, 0); }
-
 static int reg_answer(void *ctx, unsigned offset, uint32_t *value)
 {
     int got = pump(ctx, (int)(offset / 4), value, REPLY_MS);
@@ -236,7 +242,7 @@ static int start(struct link *l, const struct sniffer_options *opt)
     }
     // all of them, each run: a former run's rules do not stay
     static const struct rules keep_all = RULES_DEFAULT;
-    const struct sniffer_regs regs = {l, NULL, link_write, link_cipher, link_key};
+    const struct sniffer_regs regs = {l, NULL, link_write, link_cipher, link_key, link_omci};
     l->rules = opt->rules ? opt->rules : &keep_all;
     if (rules_write(l->rules, l, reg_write) < 0 || sniffer_start(l->s, &regs, opt) < 0)
         return -1;

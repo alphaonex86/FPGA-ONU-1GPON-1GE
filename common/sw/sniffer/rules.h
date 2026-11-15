@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#define RULES_MAX 16
+#define RULES_MAX 16 // the device's slots; the first is the OMCI Port-ID's (rules_keep_port), 15 for rules_add
 #define RULES_BYTES 20 // of the frame, from its destination address
 
 enum rules_action { RULES_KEEP, RULES_DROP, RULES_HEAD };
@@ -25,7 +25,7 @@ struct rules {
     unsigned snap;  // bytes RULES_HEAD keeps
 };
 
-#define RULES_DEFAULT {.other = RULES_KEEP, .snap = 64}
+#define RULES_DEFAULT {.count = 1, .other = RULES_KEEP, .snap = 64} // list[0]: off until rules_keep_port
 #define RULES_SYNTAX                                                                                \
     "ACTION[,FIELD]...  ACTION: keep, drop or head (the first -S bytes); every FIELD must match:\n" \
     "             ds | us          one direction (default both)\n"                                   \
@@ -42,5 +42,7 @@ int rules_add(struct rules *r, const char *text);
 uint32_t rules_filter(const struct rules *r, int us_fec);
 // Every rule slot of the device (the unused ones off), then FILTER without FEC; -1 when a write failed.
 int rules_write(const struct rules *r, void *ctx, int (*write)(void *ctx, unsigned offset, uint32_t value));
+// The first slot keeps every frame of `port` whole, both directions: the OMCI channel, whatever the rules after it.
+int rules_keep_port(unsigned port, void *ctx, int (*write)(void *ctx, unsigned offset, uint32_t value));
 
 #endif

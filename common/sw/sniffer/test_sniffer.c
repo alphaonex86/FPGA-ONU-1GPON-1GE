@@ -190,7 +190,7 @@ int main(void)
     opt.profile = open_memstream(&profile, &profile_size);
     CHECK(opt.text && opt.dump && opt.profile);
     m.alloc_keep[77] = m.port_keep[77] = 1; // a previous run's
-    struct sniffer_regs regs = {&m, model_read, model_write, model_cipher, model_key};
+    struct sniffer_regs regs = {&m, model_read, model_write, model_cipher, model_key, NULL};
     CHECK(sniffer_start(&s, &regs, &opt) == 0);
     uint32_t ctrl = m.regs[SNIFFER_CTRL / 4];
     CHECK(ctrl & SNIFFER_CTRL_ENABLE_MASK);

@@ -224,7 +224,8 @@ static void usage(void)
             "  -P FILE  OMCI profile: the OLT's requests with the ONU's answers\n"
             "  -r FILE  decode a raw dump instead of the board\n"
             "  -i PORT  the in-line sniffer's USB serial port, e.g. /dev/ttyACM0\n"
-            "  -f RULE  in-line sniffer: a dump rule (repeatable, the first that matches a frame decides):\n"
+            "  -f RULE  in-line sniffer: a dump rule (up to 15, the first that matches a frame decides; the OMCI\n"
+            "           Port-ID's frames are kept before them):\n"
             "           " RULES_SYNTAX
             "  -F ACT   in-line sniffer: frames no rule matches: keep (default), drop or head\n"
             "  -S N     in-line sniffer: bytes of a frame 'head' keeps (default 64, 24 at least)\n"

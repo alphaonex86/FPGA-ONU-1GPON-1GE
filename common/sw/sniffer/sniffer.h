@@ -35,6 +35,7 @@ struct sniffer_regs {
     // in-line sniffer, else NULL: its dump rules read the ciphered frames with the ONU's key
     void (*cipher)(void *ctx, unsigned port, int ciphered);
     void (*key)(void *ctx, const uint8_t *key, uint32_t superframe); // 16 bytes, in use from that superframe; NULL: none
+    void (*omci)(void *ctx, unsigned port); // the OMCI Port-ID: its frames are kept whatever the dump rules
 };
 
 struct sniffer_options {

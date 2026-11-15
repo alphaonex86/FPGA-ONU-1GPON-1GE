@@ -84,18 +84,21 @@ static void execute(struct device *d, unsigned number, uint32_t value)
     }
     else
         d->strays++;
+    if (d->port_keep[0x123])
+        stopping = 1; // the decoder has taken the three records
     if (reg != INLINE_CTRL / 4)
         return;
     if ((value & INLINE_CTRL_ENABLE_MASK) && !d->enabled) {
         // an Upstream_Overhead with its delimiter, then a burst of ONU 5 (18 bytes: padded)
         const uint8_t ploam[12] = {0xFF, 0x01, 4, 0, 0, 0, 0x12, 0x34, 0x56};
         const uint8_t burst[18] = {0x5A, 5};
+        uint8_t port[12] = {5, 0x0E, 1, 0x12, 0x30}; // Configure_Port-ID: ONU 5's OMCI channel is Port-ID 0x123
+        port[11] = sniffer_crc8(port, 11);
         record(d, SNIFFER_PLOAM, 10, ploam, sizeof(ploam));
         record(d, SNIFFER_BURST, 30, burst, sizeof(burst));
+        record(d, SNIFFER_PLOAM, 40, port, sizeof(port));
     }
     d->enabled = value & INLINE_CTRL_ENABLE_MASK;
-    if ((value & INLINE_CTRL_ONUID_MASK) >> INLINE_CTRL_ONUID_SHIFT == 5)
-        stopping = 1; // the decoder has taken both records
 }
 
 static void *device(void *ctx)
@@ -139,7 +142,7 @@ int main(void)
     CHECK(rules_add(&rules, "keep,us,4=0102/ff0f,0=10") == 0 && rules_action("drop", &rules.other) == 0);
     for (const char *const *bad = (const char *const[]){"keep,19=0102", "pass", "drop,vlan=4096", "drop,2=012", "drop,3=01/ffff", "drop,port", NULL}; *bad; bad++)
         CHECK(rules_add(&rules, *bad) < 0);
-    CHECK(rules.count == 3);
+    CHECK(rules.count == 4);
     rules.snap = 80;
     opt.rules = &rules;
     opt.text = open_memstream(&text, &text_size);
@@ -168,17 +171,22 @@ int main(void)
     CHECK(d.regs[INLINE_CTRL / 4] == 0);             // stopped
     CHECK(strstr(text, "Upstream_Overhead") && strstr(text, "US BURST onu=5"));
     // the rules as RuleStore takes them: first frame byte in bits 31-24, need = the last compared byte + 1
-    CHECK(d.rule_config[0] == (INLINE_RULE_DS_MASK | RULES_DROP << INLINE_RULE_ACTION_SHIFT | 1u << INLINE_RULE_NEED_SHIFT));
-    CHECK(d.rule_value[0][0] == 0x01000000 && d.rule_mask[0][0] == 0x01000000 && d.rule_mask[0][1] == 0);
-    CHECK(d.rule_config[1] == (INLINE_RULE_DS_MASK | INLINE_RULE_US_MASK | INLINE_RULE_ONPORT_MASK | 1025u << INLINE_RULE_PORT_SHIFT |
+    CHECK(d.rule_config[1] == (INLINE_RULE_DS_MASK | RULES_DROP << INLINE_RULE_ACTION_SHIFT | 1u << INLINE_RULE_NEED_SHIFT));
+    CHECK(d.rule_value[1][0] == 0x01000000 && d.rule_mask[1][0] == 0x01000000 && d.rule_mask[1][1] == 0);
+    CHECK(d.rule_config[2] == (INLINE_RULE_DS_MASK | INLINE_RULE_US_MASK | INLINE_RULE_ONPORT_MASK | 1025u << INLINE_RULE_PORT_SHIFT |
                                RULES_HEAD << INLINE_RULE_ACTION_SHIFT | 18u << INLINE_RULE_NEED_SHIFT));
-    CHECK(d.rule_value[1][3] == 0x81000064 && d.rule_mask[1][3] == 0xFFFF0FFF && d.rule_value[1][4] == 0x000A0000 && d.rule_mask[1][4] == 0x000F0000);
-    CHECK(d.rule_config[2] == (INLINE_RULE_US_MASK | RULES_KEEP << INLINE_RULE_ACTION_SHIFT | 6u << INLINE_RULE_NEED_SHIFT));
-    CHECK(d.rule_value[2][0] == 0x10000000 && d.rule_mask[2][0] == 0xFF000000 && d.rule_value[2][1] == 0x01020000 && d.rule_mask[2][1] == 0xFF0F0000);
-    for (unsigned i = 3; i < RULES_MAX; i++)
+    CHECK(d.rule_value[2][3] == 0x81000064 && d.rule_mask[2][3] == 0xFFFF0FFF && d.rule_value[2][4] == 0x000A0000 && d.rule_mask[2][4] == 0x000F0000);
+    CHECK(d.rule_config[3] == (INLINE_RULE_US_MASK | RULES_KEEP << INLINE_RULE_ACTION_SHIFT | 6u << INLINE_RULE_NEED_SHIFT));
+    CHECK(d.rule_value[3][0] == 0x10000000 && d.rule_mask[3][0] == 0xFF000000 && d.rule_value[3][1] == 0x01020000 && d.rule_mask[3][1] == 0xFF0F0000);
+    // the first slot: the OMCI Port-ID learned from the PLOAM, kept whole before the others, no byte compared
+    CHECK(d.rule_config[0] == (INLINE_RULE_DS_MASK | INLINE_RULE_US_MASK | INLINE_RULE_ONPORT_MASK | 0x123u << INLINE_RULE_PORT_SHIFT));
+    for (unsigned w = 0; w < 5; w++)
+        CHECK(d.rule_mask[0][w] == 0);
+    CHECK(d.port_keep[0x123] && strstr(text, "port-id=291 on"));
+    for (unsigned i = 4; i < RULES_MAX; i++)
         CHECK(d.rule_config[i] == 0);
     CHECK(d.regs[INLINE_FILTER / 4] == (RULES_DROP << INLINE_FILTER_ACTION_SHIFT | 80u << INLINE_FILTER_SNAP_SHIFT));
-    CHECK(dump_size == 24 + 32);
+    CHECK(dump_size == 24 + 32 + 24);
     free(text);
     free(dump);
     if (failures)
