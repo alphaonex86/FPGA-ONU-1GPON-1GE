@@ -6,9 +6,10 @@ view, origin on the RX can's axis, the TX can on +x, the fibre leaving on -x.
 
 LEADS maps each pad to its function. RX can: every published APD-TIA TO-46 (PD-LD, Appointech, Lasermate, Eoptolink,
 GLsun; lead-side drawings) has GND = case in the middle of the three close leads, the outputs each side of it and,
-seen from the leads, counter-clockwise GND, OUT-, VAPD, VCC, OUT+. The X100DG copper (2 layers, both sides read) agrees:
-B on the ground plane, A and C leaving as the pair; the body stands on the component side (its leads are soldered
-on the other one), so this top view is the mirror of those drawings. TX can (Eoptolink, GLsun, AOI): case,
+seen from the leads, counter-clockwise GND, OUT-, VAPD, VCC, OUT+. The X100DG copper (4 layers, outer two read) agrees:
+B on the ground plane, A and C leaving as the pair; a powered X100DG measured 2026-11-15 confirms the table (D 3.3 V,
+A / C 2.3 V, E ~1 V also receiving: its receiver is PIN-TIA, never on an APD bias; T1 3.3 V, T3 2.5 V, T2 1.6 V,
+T4 0 V); the body stands on the component side (its leads are soldered on the other one), so this top view is the mirror of those drawings. TX can (Eoptolink, GLsun, AOI): case,
 LD anode + monitor cathode, monitor anode, LD cathode, in that order clockwise seen from above; on the X100DG T4 goes
 to ground through one 0402, so T4 is the case. The OLT-type XL-BCB2111-LS-02 (Starsealand, its approval sheet's
 drawing) has both cans turned as in this table: RX seen from the leads with the fibre on the left, GND at the bottom,
