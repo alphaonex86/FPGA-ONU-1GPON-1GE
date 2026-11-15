@@ -234,7 +234,7 @@ object WideDsTest extends App {
 
   /** The GEM records the rules leave of `expect`: (flags, payload, bytes a head-only record must have at least), the
     * fragments dropped, the frames kept unread. The rules read the `ciphered` Port-IDs through `key`'s keystream;
-    * without a key those frames are kept. */
+    * without a key only the rules without bytes judge those frames. */
   def ruled(expect: Seq[Record], rules: Seq[DumpRule], default: Int, snap: Int, ciphered: Seq[Int] = Nil, key: Option[BigInt] = None): (Seq[(Int, Seq[Int], Int)], Int, Int) = {
     var open: Option[(Int, Boolean)] = None
     var dropped = 0
@@ -242,7 +242,7 @@ object WideDsTest extends App {
     def judge(port: Int, fragment: Seq[Int], counter: BigInt): Int =
       if (!ciphered.contains(port)) DumpRule.verdict(rules, default, upstream = false, port, fragment)
       else key.map(k => DumpRule.verdict(rules, default, upstream = false, port, fragment.zip(keystream(k, counter, fragment.length min 32) ++ Seq.fill(fragment.length)(0)).map { case (a, b) => a ^ b }))
-        .getOrElse { blind += 1; RuleAction.keep }
+        .getOrElse { blind += 1; DumpRule.verdict(rules.filter(_.need == 0), default, upstream = false, port, fragment) }
     val left = expect.filter(_.kind == RecordKind.gem).flatMap { r =>
       val port = ((r.payload(0) << 8) | r.payload(1)) & 0xFFF
       val fragment = r.payload.drop(10)
@@ -296,7 +296,8 @@ object WideDsTest extends App {
       ("keep rule, the rest dropped", Seq(DumpRule(RuleAction.keep, Seq((1, 0x80, 0x80))), tagged), RuleAction.drop, 100, Nil, None),
       ("Port-ID 0x101 ciphered", mixed, RuleAction.keep, 40, Seq(0x101), Some(key)),
       ("both Port-IDs ciphered, the rest dropped", Seq(DumpRule(RuleAction.keep, Seq((17, 0x40, 0x40))), DumpRule(RuleAction.head, Seq((5, 0x00, 0x80)))), RuleAction.drop, 100, Seq(0x100, 0x101), Some(key)),
-      ("Port-ID 0x101 ciphered, no key", mixed, RuleAction.drop, 40, Seq(0x101), None))
+      ("Port-ID 0x101 ciphered, no key", mixed, RuleAction.drop, 40, Seq(0x101), None),
+      ("Port-ID 0x101 ciphered, no key, shortened by its Port-ID", DumpRule(RuleAction.head, Nil, port = Some(0x101)) +: mixed, RuleAction.drop, 40, Seq(0x101), None))
     for ((what, rules, default, snap, ciphered, key) <- sets; shift <- Seq(0, 9, 18, 27)) {
       val name = s"${if (fec) "FEC" else "no FEC"}, $shift bits late, $what"
       val (got, counters) = wide(compiled, line, shift, rules = rules, default = default, snap = snap, ciphered = ciphered, key = key)
@@ -309,7 +310,7 @@ object WideDsTest extends App {
         else payload.startsWith(g.payload) && g.payload.length >= least && g.payload.length <= (least + 3 min payload.length))
       }, s"$name: the GEM records the rules leave (${gems.length} of ${want.length})")
       check(filtered == dropped && counters == (0, 0, 0, 0, 0), s"$name: $filtered fragments counted as filtered, none lost $counters")
-      check(unread == blind && (blind > 2) == (ciphered.nonEmpty && key.isEmpty), s"$name: $unread ciphered frames kept unread ($blind)")
+      check(unread == blind && (blind > 2) == (ciphered.nonEmpty && key.isEmpty), s"$name: $unread ciphered frames judged unread ($blind)")
       check(of(got, RecordKind.alloc) == of(expect, RecordKind.alloc), s"$name: BWmap records untouched")
     }
   }

@@ -44,12 +44,14 @@ struct sniffer_options {
     uint32_t delimiter;     // until an Upstream_Overhead
     unsigned lead, width;   // burst reset, clocks
     int all_ploams;
-    uint16_t allocs[SNIFFER_MAX_IDS], ports[SNIFFER_MAX_IDS];
-    unsigned alloc_count, port_count;
+    uint16_t allocs[SNIFFER_MAX_IDS], ports[SNIFFER_MAX_IDS], data_ports[SNIFFER_MAX_IDS]; // ports: OMCI
+    unsigned alloc_count, port_count, data_port_count;
     FILE *text;             // decoded records, or NULL
     FILE *dump;             // raw records, or NULL
     FILE *profile;          // OMCI request/answer pairs, or NULL
-    const struct rules *rules; // in-line sniffer: its dump rules, NULL: every frame kept
+    // in-line sniffer: its dump rules, NULL: every frame kept. With rules the ONU's data Port-IDs are kept too as the
+    // OLT creates them (downstream; the bursts have every Port-ID): the rules say which of their frames stay.
+    const struct rules *rules;
 };
 
 struct sniffer_stream {

@@ -85,12 +85,15 @@ case class UsGemFilter(ruleCount: Int = 16, depth: Int = 32) extends Component {
   matcher.io.start.valid := find.begins
   matcher.io.start.port := find.port
   matcher.io.start.length := find.pli
+  matcher.io.start.blind := False // the upstream is never ciphered
   val held = Reg(Bits(24 bits))
   val quad = find.payIndex(1 downto 0)
-  matcher.io.word.valid := find.payload && (quad === 3 || find.last)
-  matcher.io.word.bytes := (held ## io.data.payload) |<< ((U(3, 2 bits) - quad) << 3)
-  matcher.io.word.first := find.payIndex < 4
-  matcher.io.word.last := find.last
+  val word = Flow(FrameWord())
+  word.valid := find.payload && (quad === 3 || find.last)
+  word.bytes := (held ## io.data.payload) |<< ((U(3, 2 bits) - quad) << 3)
+  word.first := find.payIndex < 4
+  word.last := find.last
+  matcher.io.word << word.stage() // a byte per clock at the line rate: the compare gets a clock of its own
   when(find.payload)(held := held(15 downto 0) ## io.data.payload)
 
   case class Verdict() extends Bundle {
@@ -108,7 +111,7 @@ case class UsGemFilter(ruleCount: Int = 16, depth: Int = 32) extends Component {
     val continued = (RegNext(find.begins) init (False)) && state(0)
     val judged = matcher.io.verdict.valid
     // the burst ended on it: kept, and its frame with it
-    val decided = waiting && (continued || judged || closed)
+    val decided = waiting && (continued || judged || RegNext(closed, False))
     val action = continued ? (state(1) ? B(RuleAction.keep, 2 bits) | B(RuleAction.drop, 2 bits)) |
       (judged ? matcher.io.verdict.payload | B(RuleAction.keep, 2 bits))
     when(find.begins)(waiting := True)

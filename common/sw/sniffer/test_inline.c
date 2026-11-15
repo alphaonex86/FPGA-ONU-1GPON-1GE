@@ -35,15 +35,20 @@ static int failures;
         }                                                                 \
     } while (0)
 
-static void record(struct device *d, unsigned kind, uint64_t time, const uint8_t *payload, unsigned length)
+static void flagged(struct device *d, unsigned kind, unsigned flags, uint64_t time, const uint8_t *payload, unsigned length)
 {
-    uint8_t bytes[12 + 64 + 3] = {(uint8_t)(0xA0 | kind), 0, (uint8_t)length, 0};
+    uint8_t bytes[12 + 64 + 3] = {(uint8_t)(0xA0 | kind), (uint8_t)flags, (uint8_t)length, 0};
     for (int i = 0; i < 8; i++)
         bytes[4 + i] = (uint8_t)(time >> (8 * i));
     memcpy(bytes + 12, payload, length);
     size_t total = (12 + length + 3) & ~3u;
     if (write(d->fd, bytes, total) != (ssize_t)total)
         d->failed = 1;
+}
+
+static void record(struct device *d, unsigned kind, uint64_t time, const uint8_t *payload, unsigned length)
+{
+    flagged(d, kind, 0, time, payload, length);
 }
 
 static void execute(struct device *d, unsigned number, uint32_t value)
@@ -84,8 +89,8 @@ static void execute(struct device *d, unsigned number, uint32_t value)
     }
     else
         d->strays++;
-    if (d->port_keep[0x123])
-        stopping = 1; // the decoder has taken the three records
+    if (d->port_keep[0x456])
+        stopping = 1; // the decoder has taken the four records
     if (reg != INLINE_CTRL / 4)
         return;
     if ((value & INLINE_CTRL_ENABLE_MASK) && !d->enabled) {
@@ -97,6 +102,9 @@ static void execute(struct device *d, unsigned number, uint32_t value)
         record(d, SNIFFER_PLOAM, 10, ploam, sizeof(ploam));
         record(d, SNIFFER_BURST, 30, burst, sizeof(burst));
         record(d, SNIFFER_PLOAM, 40, port, sizeof(port));
+        // on it the OLT creates GEM port network CTP 1 (baseline message, whole in one fragment): Port-ID 0x456
+        uint8_t create[10 + 48] = {0x01, 0x23, 0, 48, 0, 0, 0, 0, 0, 1, 0x80, 0x01, 0x44, 0x0A, 268 >> 8, 268 & 0xFF, 0, 1, 0x04, 0x56};
+        flagged(d, SNIFFER_GEM, 1, 50, create, sizeof(create));
     }
     d->enabled = value & INLINE_CTRL_ENABLE_MASK;
 }
@@ -136,7 +144,8 @@ int main(void)
     char *text = NULL, *dump = NULL;
     size_t text_size = 0, dump_size = 0;
     // Alloc-ID 10: a line feed in its command
-    struct sniffer_options opt = {.onu_id = -1, .delimiter = 0xAB5983, .allocs = {6, 10}, .alloc_count = 2};
+    struct sniffer_options opt = {.onu_id = -1, .delimiter = 0xAB5983, .allocs = {6, 10}, .alloc_count = 2,
+                                  .data_ports = {0x321}, .data_port_count = 1};
     static struct rules rules = RULES_DEFAULT;
     CHECK(rules_add(&rules, "drop,ds,multicast") == 0 && rules_add(&rules, "head,port=1025,vlan=100,17=0a/0f") == 0);
     CHECK(rules_add(&rules, "keep,us,4=0102/ff0f,0=10") == 0 && rules_action("drop", &rules.other) == 0);
@@ -183,10 +192,12 @@ int main(void)
     for (unsigned w = 0; w < 5; w++)
         CHECK(d.rule_mask[0][w] == 0);
     CHECK(d.port_keep[0x123] && strstr(text, "port-id=291 on"));
+    // data Port-IDs: the one asked for, the one the OLT created
+    CHECK(d.port_keep[0x321] && d.port_keep[0x456] && strstr(text, "Create ar me=268/1"));
     for (unsigned i = 4; i < RULES_MAX; i++)
         CHECK(d.rule_config[i] == 0);
     CHECK(d.regs[INLINE_FILTER / 4] == (RULES_DROP << INLINE_FILTER_ACTION_SHIFT | 80u << INLINE_FILTER_SNAP_SHIFT));
-    CHECK(dump_size == 24 + 32 + 24);
+    CHECK(dump_size == 24 + 32 + 24 + 72);
     free(text);
     free(dump);
     if (failures)

@@ -95,6 +95,8 @@ Record: `0xA0|kind`, flags, payload length (16 LE), time (64 LE), payload.
 
 A filtered burst (in-line box, dump rules: `DumpRules.scala`, `UsGemFilter`) ends with its line length (16 LE); a
 GEM fragment a rule dropped or shortened keeps its header, the HEC field XORed with `0x1000 | payload bytes left`.
+Of a run of idle GEM headers the last one stays, its HEC field XORed with `0x1000 | idle headers left out before it`
+(none left out: unchanged).
 
 ECP5 (`ecp5/`, `sh sniffer/ecp5/build.sh` -> `out/ecp5/sniffer.bit`, yosys + nextpnr + trellis):
 `sniffer_ecp5.v` (DCU, resets, PLL, DDR pins) around `SnifferBridge` (test `pon.sniffer.SnifferBridgeTest`);

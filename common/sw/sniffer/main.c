@@ -238,6 +238,8 @@ static void usage(void)
             "  -s SN    tapped ONU's serial number, e.g. HWTC1234abcd (its ONU-ID from Assign_ONU-ID)\n"
             "  -a ID    also keep this Alloc-ID's grants (repeatable)\n"
             "  -p ID    keep and decode this OMCI Port-ID (repeatable; else from Configure_Port-ID)\n"
+            "  -g ID    keep this data Port-ID's downstream frames (repeatable). With -f, -F or -S the in-line sniffer\n"
+            "           keeps the ONU's data Port-IDs by itself as the OLT creates them: the rules say which frames stay\n"
             "  -A       every PLOAM, not only the ONU's and broadcast\n"
             "  -d HEX   upstream delimiter until an Upstream_Overhead (default ab5983)\n"
             "  -l N     burst reset lead before the StartTime, clocks (default 128; passive tap only, as -W)\n"
@@ -254,7 +256,7 @@ int main(int argc, char **argv)
     const char *dump = NULL, *profile = NULL, *text = NULL, *in = NULL, *uio = NULL, *port = NULL, *level_file = NULL;
     unsigned long value, bridge = LW_BRIDGE;
     int c;
-    while ((c = getopt(argc, argv, "w:P:t:r:i:f:F:S:L:u:b:o:s:a:p:Ad:l:W:h")) != -1) {
+    while ((c = getopt(argc, argv, "w:P:t:r:i:f:F:S:L:u:b:o:s:a:p:g:Ad:l:W:h")) != -1) {
         switch (c) {
         case 'w': dump = optarg; break;
         case 'P': profile = optarg; break;
@@ -270,15 +272,16 @@ int main(int argc, char **argv)
         case 'o': if (parse_number(optarg, 254, &value) < 0) return 2; opt.onu_id = (int)value; break;
         case 's': if (parse_serial(optarg, serial) < 0) return 2; opt.serial = serial; break;
         case 'a':
-        case 'p': {
+        case 'p':
+        case 'g': {
             if (parse_number(optarg, 4095, &value) < 0)
                 return 2;
-            unsigned *count = c == 'a' ? &opt.alloc_count : &opt.port_count;
+            unsigned *count = c == 'a' ? &opt.alloc_count : c == 'p' ? &opt.port_count : &opt.data_port_count;
             if (*count == SNIFFER_MAX_IDS) {
                 fprintf(stderr, "sniffer: at most %u -%c\n", SNIFFER_MAX_IDS, c);
                 return 2;
             }
-            (c == 'a' ? opt.allocs : opt.ports)[(*count)++] = (uint16_t)value;
+            (c == 'a' ? opt.allocs : c == 'p' ? opt.ports : opt.data_ports)[(*count)++] = (uint16_t)value;
             break;
         }
         case 'A': opt.all_ploams = 1; break;

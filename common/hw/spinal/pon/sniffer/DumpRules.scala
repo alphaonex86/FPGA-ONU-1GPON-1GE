@@ -116,6 +116,7 @@ object RuleStore {
 case class RuleStart() extends Bundle {
   val port = UInt(12 bits)
   val length = UInt(12 bits)
+  val blind = Bool() // its bytes cannot be read (ciphered, no key): only the rules that compare none judge it
 }
 
 case class FrameWord() extends Bundle {
@@ -138,7 +139,8 @@ case class RuleMatch(us: Boolean, rules: Int = 16, words: Int = 5) extends Compo
   val configs = io.table.configs
   val candidates = Reg(Bits(rules bits))
   when(io.start.valid) {
-    candidates := configs.map(c => (if (us) c.us else c.ds) && (!c.onPort || c.port === io.start.port) && c.need <= io.start.length).asBits()
+    candidates := configs.map(c => (if (us) c.us else c.ds) && (!c.onPort || c.port === io.start.port) && c.need <= io.start.length &&
+      (!io.start.blind || c.need === 0)).asBits()
   }
   val alive = Reg(Bits(rules bits)) init (0)
   val index = Reg(UInt(3 bits))

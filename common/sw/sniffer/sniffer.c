@@ -152,6 +152,28 @@ static void profile_pair(struct sniffer *s, const struct sniffer_omci *request, 
     }
 }
 
+static void keep(struct sniffer *s, unsigned map, unsigned id, int kept)
+{
+    reg_write(s, map, (id & SNIFFER_ALLOC_MAP_ID_MASK) | (kept ? SNIFFER_ALLOC_MAP_KEEP_MASK : 0));
+}
+
+static void keep_data_port(struct sniffer *s, unsigned port)
+{
+    keep(s, SNIFFER_PORT_MAP, port, 1);
+    say(s, "# Port-ID %u: its downstream frames kept\n", port);
+}
+
+// The OLT creates a GEM port network CTP (G.988 9.2.3, its first attribute the Port-ID): a data port of the ONU.
+static void learn_data_port(struct sniffer *s, const uint8_t *m)
+{
+    int extended = m[3] == 0x0B;
+    if (!s->opt.rules || (m[2] & 0x1F) != 4 || be16(m + 4) != 268 || (extended && be16(m + 8) < 2))
+        return;
+    unsigned port = be16(m + (extended ? 10 : 8));
+    if (port < 4096 && omci_index(s, port) < 0)
+        keep_data_port(s, port);
+}
+
 // A whole OMCI message: the OLT's requests wait for the answer with their TCI and type.
 static void omci_message(struct sniffer *s, int upstream, const struct sniffer_omci *m)
 {
@@ -160,6 +182,7 @@ static void omci_message(struct sniffer *s, int upstream, const struct sniffer_o
         return;
     }
     if (!upstream) {
+        learn_data_port(s, m->bytes);
         s->pending[s->pending_next] = *m;
         s->pending_next = (s->pending_next + 1) % SNIFFER_PENDING;
         return;
@@ -207,11 +230,6 @@ static void say_fragment(struct sniffer *s, int upstream, unsigned port, const u
     say(s, " ");
     say_hex(s, data, size);
     say(s, "\n");
-}
-
-static void keep(struct sniffer *s, unsigned map, unsigned id, int kept)
-{
-    reg_write(s, map, (id & SNIFFER_ALLOC_MAP_ID_MASK) | (kept ? SNIFFER_ALLOC_MAP_KEEP_MASK : 0));
 }
 
 static void write_ctrl(struct sniffer *s)
@@ -270,6 +288,8 @@ int sniffer_start(struct sniffer *s, const struct sniffer_regs *regs, const stru
         keep(s, SNIFFER_PORT_MAP, opt->ports[i], 1);
         add_omci_port(s, opt->ports[i]);
     }
+    for (unsigned i = 0; i < opt->data_port_count; i++)
+        keep_data_port(s, opt->data_ports[i]);
     reg_write(s, SNIFFER_DELIMITER, opt->delimiter & SNIFFER_DELIMITER_DELIMITER_MASK);
     reg_write(s, SNIFFER_RESET_TIMING, 0); // no pulse until the offset is learned
     s->ctrl = SNIFFER_CTRL_ENABLE_MASK | (opt->all_ploams ? SNIFFER_CTRL_ALLPLOAMS_MASK : 0) |
