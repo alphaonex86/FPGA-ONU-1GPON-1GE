@@ -181,3 +181,59 @@ case class CommitFifo[T <: Data](dataType: HardType[T], depth: Int) extends Comp
   io.pop.valid := RegNext(readNext =/= committed) init (False) // a clock after the commit: the memory has it by then
   io.pop.payload := ram.readSync(readNext.resized)
 }
+
+/** The keystream of the first 32 bytes of ciphered GEM fragments, for the rules to read them (G.984.3 12.2: AES-128
+  * counter mode, the block is the crypto-counter three times, +1 per block). A fragment's counter is taken while
+  * `start.ready` (a key is in use or due, room in the queue), its two blocks leave on `output` in order within
+  * `GemKeystream.latency` clocks. `switch`: the superframe from which `nextKey` is the key (Key_Switching_Time). */
+case class GemKeystream(depth: Int = 2) extends Component {
+  val io = new Bundle {
+    val start = slave Stream (UInt(46 bits))
+    val nextKey = in Bits (128 bits)
+    val switch = slave Flow (UInt(30 bits))
+    val output = master Stream (Bits(256 bits))
+  }
+  val key = Reg(Bits(128 bits))
+  val keyed = Reg(Bool()) init (False)
+  val armed = Reg(Bool()) init (False)
+  val switchFrame = Reg(UInt(30 bits))
+  def due(counter: UInt): Bool = armed && !(counter(45 downto 16) - switchFrame).msb
+  when(io.switch.valid) {
+    switchFrame := io.switch.payload
+    armed := True
+  }
+  val jobs = StreamFifo(UInt(46 bits), depth)
+  jobs.io.push.valid := io.start.valid && (keyed || due(io.start.payload))
+  jobs.io.push.payload := io.start.payload
+  io.start.ready := jobs.io.push.ready && (keyed || due(io.start.payload))
+
+  val aes = pon.Aes128()
+  val job = jobs.io.pop
+  val second = Reg(Bool()) init (False)
+  val counter = job.payload + second.asUInt
+  val fresh = due(job.payload) && !io.switch.valid
+  aes.io.input.valid := job.valid
+  aes.io.input.block := (counter @@ counter @@ counter).resize(128).asBits
+  aes.io.input.key := fresh ? io.nextKey | key
+  job.ready := aes.io.input.ready && second
+  when(aes.io.input.fire) {
+    second := !second
+    when(second && fresh) {
+      key := io.nextKey
+      keyed := True
+      armed := False
+    }
+  }
+  val half = Reg(Bool()) init (False)
+  val first = RegNextWhen(aes.io.output.payload, aes.io.output.valid)
+  when(aes.io.output.valid)(half := !half)
+  val results = StreamFifo(Bits(256 bits), 8)
+  results.io.push.valid := aes.io.output.valid && half
+  results.io.push.payload := first ## aes.io.output.payload
+  assert(!(results.io.push.valid && !results.io.push.ready), "GemKeystream: no room for a keystream", FAILURE)
+  io.output << results.io.pop
+}
+
+object GemKeystream {
+  val latency = 80 // two jobs ahead (22 clocks each), its own, the queues
+}

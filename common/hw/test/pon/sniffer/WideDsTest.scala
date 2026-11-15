@@ -57,8 +57,15 @@ case class WideDsBench() extends Component {
     val snap = in UInt (12 bits)
     val output = master Stream (Fragment(Bits(8 bits)))
     val synced = out Bool ()
-    val drops, truncations, hecErrors, plendErrors, syncLosses, filtered = out UInt (32 bits)
+    val drops, truncations, hecErrors, plendErrors, syncLosses, filtered, unread = out UInt (32 bits)
+    val cipherMap = slave Flow (KeepWrite())
+    val nextKey = in Bits (128 bits)
+    val keySwitch = slave Flow (UInt(30 bits))
   }
+  sniffer.io.cipherMap << io.cipherMap
+  sniffer.io.nextKey := io.nextKey
+  sniffer.io.keySwitch << io.keySwitch
+  io.unread := sniffer.io.unread
   val store = RuleStore(readers = 1)
   store.io.write << io.ruleWrite
   store.io.set << io.ruleSet
@@ -167,13 +174,14 @@ object WideDsTest extends App {
   /** The line, `shift` bits late, through the wide chain; `corrupt`: (byte, mask) flipped on the line. The counters
     * are read where the line ends: the zeros that follow (time to drain) are no frame. */
   def wide(compiled: SimCompiled[WideDsBench], line: Seq[Int], shift: Int, corrupt: Option[(Int, Int)] = None,
-           rules: Seq[DumpRule] = Nil, default: Int = RuleAction.keep, snap: Int = 64) = {
+           rules: Seq[DumpRule] = Nil, default: Int = RuleAction.keep, snap: Int = 64, ciphered: Seq[Int] = Nil, key: Option[BigInt] = None) = {
     val bytes = line.toArray
     corrupt.foreach { case (at, mask) => bytes(at) ^= mask }
     def bit(i: Int): Int = if (i < shift || (i - shift) / 8 >= bytes.length) 0 else (bytes((i - shift) / 8) >> (7 - (i - shift) % 8)) & 1
     var records = Seq[Record]()
     var counters = (0L, 0L, 0L, 0L, 0L)
     filtered = 0
+    unread = 0
     compiled.doSim(shift) { dut =>
       val cd = dut.clockDomain
       val sink = new RecordSink(dut.io.output, cd, 2)
@@ -184,9 +192,18 @@ object WideDsTest extends App {
       dut.io.ruleSet.valid #= false
       dut.io.defaultAction #= default
       dut.io.snap #= snap
+      dut.io.cipherMap.valid #= false
+      dut.io.keySwitch.valid #= false
+      dut.io.nextKey #= key.getOrElse(BigInt(0))
       cd.forkStimulus(10)
       writeMap(dut.io.allocMap, allocIds, cd)
       writeMap(dut.io.portMap, portIds, cd)
+      writeMap(dut.io.cipherMap, ciphered, cd)
+      if (key.nonEmpty) { // from superframe 0: at once
+        dut.io.keySwitch.valid #= true; dut.io.keySwitch.payload #= 0
+        cd.waitSampling()
+        dut.io.keySwitch.valid #= false
+      }
       DumpRule.write(dut.io.ruleWrite, dut.io.ruleSet, rules, cd)
       for (w <- 0 until bytes.length / 4 + 12000) {
         dut.io.word #= (0 until 32).foldLeft(BigInt(0))((a, k) => (a << 1) | bit(32 * w + k))
@@ -196,20 +213,41 @@ object WideDsTest extends App {
       }
       records = sink.records.toSeq
       filtered = dut.io.filtered.toLong
+      unread = dut.io.unread.toLong
     }
     (records, counters)
   }
   var filtered = 0L
+  var unread = 0L
 
-  /** The GEM records the rules leave of `expect`: (flags, payload, bytes a head-only record must have at least). */
-  def ruled(expect: Seq[Record], rules: Seq[DumpRule], default: Int, snap: Int): (Seq[(Int, Seq[Int], Int)], Int) = {
+  def bytes16(x: BigInt): Array[Byte] = (15 to 0 by -1).map(i => ((x >> (8 * i)) & 0xFF).toByte).toArray
+  /** G.984.3 12.2: AES-128 counter mode, the block is the crypto-counter three times, +1 per block. */
+  def keystream(key: BigInt, counter: BigInt, n: Int): Seq[Int] = {
+    val aes = javax.crypto.Cipher.getInstance("AES/ECB/NoPadding")
+    aes.init(javax.crypto.Cipher.ENCRYPT_MODE, new javax.crypto.spec.SecretKeySpec(bytes16(key), "AES"))
+    (0 until (n + 15) / 16).flatMap { b =>
+      val c = counter + b
+      aes.doFinal(bytes16(((c << 92) | (c << 46) | c) & ((BigInt(1) << 128) - 1))).map(_ & 0xFF)
+    }.take(n)
+  }
+
+  /** The GEM records the rules leave of `expect`: (flags, payload, bytes a head-only record must have at least), the
+    * fragments dropped, the frames kept unread. The rules read the `ciphered` Port-IDs through `key`'s keystream;
+    * without a key those frames are kept. */
+  def ruled(expect: Seq[Record], rules: Seq[DumpRule], default: Int, snap: Int, ciphered: Seq[Int] = Nil, key: Option[BigInt] = None): (Seq[(Int, Seq[Int], Int)], Int, Int) = {
     var open: Option[(Int, Boolean)] = None
     var dropped = 0
+    var blind = 0
+    def judge(port: Int, fragment: Seq[Int], counter: BigInt): Int =
+      if (!ciphered.contains(port)) DumpRule.verdict(rules, default, upstream = false, port, fragment)
+      else key.map(k => DumpRule.verdict(rules, default, upstream = false, port, fragment.zip(keystream(k, counter, fragment.length min 32) ++ Seq.fill(fragment.length)(0)).map { case (a, b) => a ^ b }))
+        .getOrElse { blind += 1; RuleAction.keep }
     val left = expect.filter(_.kind == RecordKind.gem).flatMap { r =>
       val port = ((r.payload(0) << 8) | r.payload(1)) & 0xFFF
       val fragment = r.payload.drop(10)
+      val counter = r.payload.slice(4, 10).foldLeft(BigInt(0))((a, b) => (a << 8) | b)
       val action = open.filter(_._1 == port).map(o => if (o._2) RuleAction.keep else RuleAction.drop)
-        .getOrElse(DumpRule.verdict(rules, default, upstream = false, port, fragment))
+        .getOrElse(judge(port, fragment, counter))
       open = if ((r.flags & 9) == 0) Some((port, action == RuleAction.keep)) else None
       if (action == RuleAction.drop) dropped += 1
       action match {
@@ -218,7 +256,7 @@ object WideDsTest extends App {
         case _ => None
       }
     }
-    (left, dropped)
+    (left, dropped, blind)
   }
 
   def body(r: Record) = (r.flags, r.payload)
@@ -250,21 +288,27 @@ object WideDsTest extends App {
     val multicast = DumpRule(RuleAction.drop, Seq((0, 0x01, 0x01)), port = Some(0x100))
     val tagged = DumpRule(RuleAction.head, Seq((12, 0x80, 0xC0), (13, 0x00, 0x00)))
     val deep = DumpRule(RuleAction.drop, Seq((16, 0x00, 0x80), (19, 0x02, 0x03)), port = Some(0x101))
+    val key = BigInt("000102030405060708090a0b0c0d0e0f", 16)
+    val mixed = Seq(DumpRule(RuleAction.drop, Nil, us = true), DumpRule(RuleAction.drop, Nil, enable = false), multicast, tagged, deep)
     val sets = Seq(
-      ("drop and head rules", Seq(DumpRule(RuleAction.drop, Nil, us = true), DumpRule(RuleAction.drop, Nil, enable = false), multicast, tagged, deep), RuleAction.keep, 40),
-      ("keep rule, the rest dropped", Seq(DumpRule(RuleAction.keep, Seq((1, 0x80, 0x80))), tagged), RuleAction.drop, 100))
-    for ((what, rules, default, snap) <- sets; shift <- Seq(0, 9, 18, 27)) {
+      ("drop and head rules", mixed, RuleAction.keep, 40, Nil, None),
+      ("keep rule, the rest dropped", Seq(DumpRule(RuleAction.keep, Seq((1, 0x80, 0x80))), tagged), RuleAction.drop, 100, Nil, None),
+      ("Port-ID 0x101 ciphered", mixed, RuleAction.keep, 40, Seq(0x101), Some(key)),
+      ("both Port-IDs ciphered, the rest dropped", Seq(DumpRule(RuleAction.keep, Seq((17, 0x40, 0x40))), DumpRule(RuleAction.head, Seq((5, 0x00, 0x80)))), RuleAction.drop, 100, Seq(0x100, 0x101), Some(key)),
+      ("Port-ID 0x101 ciphered, no key", mixed, RuleAction.drop, 40, Seq(0x101), None))
+    for ((what, rules, default, snap, ciphered, key) <- sets; shift <- Seq(0, 9, 18, 27)) {
       val name = s"${if (fec) "FEC" else "no FEC"}, $shift bits late, $what"
-      val (got, counters) = wide(compiled, line, shift, rules = rules, default = default, snap = snap)
-      val (want, dropped) = ruled(expect, rules, default, snap)
+      val (got, counters) = wide(compiled, line, shift, rules = rules, default = default, snap = snap, ciphered = ciphered, key = key)
+      val (want, dropped, blind) = ruled(expect, rules, default, snap, ciphered, key)
       val gems = got.filter(_.kind == RecordKind.gem)
       val heads = want.count(_._3 > 0)
-      check(dropped > 2 && heads > 0 && want.length - heads > 2, s"$name: the model drops $dropped, shortens $heads, keeps ${want.length - heads} whole")
+      check(blind > 0 || dropped > 2 && heads > 0 && want.length - heads >= 2, s"$name: the model drops $dropped, shortens $heads, keeps ${want.length - heads} whole")
       check(gems.length == want.length && gems.zip(want).forall { case (g, (flags, payload, least)) =>
         g.flags == flags && (if (least == 0) g.payload == payload
         else payload.startsWith(g.payload) && g.payload.length >= least && g.payload.length <= (least + 3 min payload.length))
       }, s"$name: the GEM records the rules leave (${gems.length} of ${want.length})")
       check(filtered == dropped && counters == (0, 0, 0, 0, 0), s"$name: $filtered fragments counted as filtered, none lost $counters")
+      check(unread == blind && (blind > 2) == (ciphered.nonEmpty && key.isEmpty), s"$name: $unread ciphered frames kept unread ($blind)")
       check(of(got, RecordKind.alloc) == of(expect, RecordKind.alloc), s"$name: BWmap records untouched")
     }
   }

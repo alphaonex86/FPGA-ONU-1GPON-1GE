@@ -333,7 +333,9 @@ case class WideDsDeframer() extends Component {
   * port map, less what the dump rules drop: a frame's first fragment is judged on its first bytes (RuleMatch), its
   * later ones follow it. A fragment is taken whole or not at all (room for it in the chunk queue, else dropped and
   * counted): it is queued while judged and taken back on a drop, then its bytes go one per clock to the record
-  * writer. Nothing here slows the line: what is dropped never leaves the queue's push side. */
+  * writer. Nothing here slows the line: what is dropped never leaves the queue's push side. Fragments of the
+  * Port-IDs in the cipher map are read through their keystream (GemKeystream; the record keeps the line's bytes);
+  * without it (no key yet, keystream queue full) a frame is kept and counted in `unread`. */
 case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount: Int = 16) extends Component {
   val io = new Bundle {
     val ploam = slave Flow (Checked(Bits(96 bits)))
@@ -344,6 +346,9 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount
     val allPloams = in Bool ()
     val allocMap = slave Flow (KeepWrite())
     val portMap = slave Flow (KeepWrite())
+    val cipherMap = slave Flow (KeepWrite())
+    val nextKey = in Bits (128 bits)
+    val keySwitch = slave Flow (UInt(30 bits))
     val rules = master(RuleRead(ruleCount))
     val defaultAction = in Bits (2 bits)
     val snap = in UInt (12 bits)
@@ -351,6 +356,7 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount
     val drops = out UInt (32 bits)
     val truncations = out UInt (32 bits)
     val filtered = out UInt (32 bits) // fragments of the port map's Port-IDs a rule dropped
+    val unread = out UInt (32 bits)   // ciphered frames kept without the rules
   }
   val pcbd = SnifferPcbd()
   pcbd.io.ploam := io.ploam
@@ -360,13 +366,40 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount
   pcbd.io.allPloams := io.allPloams
   pcbd.io.allocMap << io.allocMap
 
-  // the map answers a clock after the header; the item waits two, where the rules read it
+  // the maps answer a clock after the header; the item waits two, where a ciphered fragment's keystream is asked
   val portMap = Mem(Bool(), 4096) init (Seq.fill(4096)(False))
   portMap.write(io.portMap.id, io.portMap.keep, io.portMap.valid)
-  val read = new Area {
+  val cipherMap = Mem(Bool(), 4096) init (Seq.fill(4096)(False))
+  cipherMap.write(io.cipherMap.id, io.cipherMap.keep, io.cipherMap.valid)
+  val early = new Area {
     val header = io.gem.header.stage().stage()
     val chunk = io.gem.chunk.stage().stage()
     val hit = RegNext(portMap.readSync(io.gem.header.portId))
+    val ciphered = RegNext(cipherMap.readSync(io.gem.header.portId))
+    val keys = GemKeystream()
+    keys.io.nextKey := io.nextKey
+    keys.io.switch << io.keySwitch
+    keys.io.start.valid := header.valid && hit && ciphered
+    keys.io.start.payload := header.counter
+  }
+  // the rules read it once the keystream is there
+  val read = new Area {
+    val lag = GemKeystream.latency
+    val header = Flow(WideGemHeader())
+    header.valid := Delay(early.header.valid, lag, init = False)
+    header.payload := Delay(early.header.payload, lag)
+    val chunk = Flow(GemChunk())
+    chunk.valid := Delay(early.chunk.valid, lag, init = False)
+    chunk.payload := Delay(early.chunk.payload, lag)
+    val hit = Delay(early.hit, lag)
+    val keyed = Delay(early.keys.io.start.fire, lag, init = False)
+    val blind = Delay(early.keys.io.start.valid && !early.keys.io.start.ready, lag, init = False)
+    val keystream = early.keys.io.output
+    keystream.ready := header.valid && keyed
+    assert(!(keystream.ready && !keystream.valid), "WideSnifferDs: a fragment before its keystream", FAILURE)
+    val clearing = RegNextWhen(keyed, header.valid) init (False)
+    val stream = RegNextWhen(keystream.payload, header.valid)
+    val wordIndex = Reg(UInt(3 bits))
     val matcher = RuleMatch(us = false, ruleCount)
     matcher.io.table <> io.rules
     matcher.io.defaultAction := io.defaultAction
@@ -385,10 +418,13 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount
       first := !inside
       when(!inside)(shift := chunk.first)
     }
+    val indexNow = first ? U(0, 3 bits) | wordIndex
+    val line = ((held ## chunk.bytes) |<< (shift << 3))(63 downto 32)
     matcher.io.word.valid := (chunk.valid && inside) || flush
-    matcher.io.word.bytes := ((held ## chunk.bytes) |<< (shift << 3))(63 downto 32)
+    matcher.io.word.bytes := line ^ (clearing ? stream.subdivideIn(32 bits).reverse(indexNow) | B(0, 32 bits))
     matcher.io.word.first := first
     matcher.io.word.last := flush
+    when(matcher.io.word.valid)(wordIndex := indexNow + 1)
   }
 
   // pushed two clocks later: a fragment's verdict is there with its last chunk at the latest
@@ -396,6 +432,7 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount
   val header = read.header.stage().stage()
   val chunk = read.chunk.stage().stage()
   val hit = Delay(read.hit, 2)
+  val blind = Delay(read.blind, 2, init = False)
   val chunks = CommitFifo(GemChunk(), chunkDepth)
   val heads = StreamFifo(RecordHead(10), 16)
   val room = chunks.io.availability > ((header.pli +^ 3) >> 2) + 2 && heads.io.availability > 1
@@ -404,7 +441,7 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount
     val port = Reg(UInt(12 bits))
     val keep = Reg(Bool())
   }
-  val wanted, lost, decided, over = Reg(Bool()) init (False)
+  val wanted, lost, decided, over, unreadable = Reg(Bool()) init (False)
   val action = Reg(Bits(2 bits))
   val sent = Reg(UInt(12 bits))
   val meta = Reg(WideGemHeader())
@@ -415,8 +452,9 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount
   val lostNow = isNew ? (hit && !room) | lost
   val knownBefore = isNew ? continued | decided
   val actionBefore = isNew ? (frame.keep ? B(RuleAction.keep, 2 bits) | B(RuleAction.drop, 2 bits)) | action
+  val unreadableNow = isNew ? blind | unreadable
   val decidedNow = knownBefore || verdict.valid
-  val actionNow = knownBefore ? actionBefore | verdict.payload
+  val actionNow = knownBefore ? actionBefore | (unreadableNow ? B(RuleAction.keep, 2 bits) | verdict.payload)
   val overNow = !isNew && over
   val sentNow = isNew ? U(0, 12 bits) | sent
   val metaNow = isNew ? header.payload | meta
@@ -427,8 +465,12 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount
   val closing = chunk.last || (headOnly && sentNow + chunk.count >= io.snap)
   val gemDrops = Reg(UInt(32 bits)) init (0)
   val filtered = Reg(UInt(32 bits)) init (0)
+  val unread = Reg(UInt(32 bits)) init (0)
   io.filtered := filtered
+  io.unread := unread
   when(isNew) {
+    unreadable := blind
+    when(blind && !continued)(unread := unread + 1)
     wanted := wantedNow
     lost := lostNow
     meta := header.payload

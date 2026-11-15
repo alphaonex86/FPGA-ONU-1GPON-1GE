@@ -135,6 +135,18 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   us.io.defaultAction := rules.defaultAction
   us.io.snap := rules.snap
   us.io.fec := rules.usFec
+  ds.io.cipherMap << KeepWrite.register(busif, "CIPHER_MAP", "Write: the GEM fragments of a Port-ID are ciphered (Encrypted_Port-ID), or not")
+  val KEY = (0 until 4).map { i =>
+    busif.newReg(s"The ONU's next key (its Encryption_Key PLOAMs), bytes ${4 * i} to ${4 * i + 3}, the first in bits 31-24")(SymbolName(s"KEY$i"))
+      .field(Bits(32 bits), AccessType.WO, 0, "key")(SymbolName("key"))
+  }
+  ds.io.nextKey := KEY.reduce(_ ## _)
+  val KEY_SWITCH = busif.newReg("Write: the superframe from which the next key deciphers (Key_Switching_Time)")
+  KEY_SWITCH.field(UInt(30 bits), AccessType.WO, 0, "superframe")(SymbolName("superframe"))
+  ds.io.keySwitch.valid := KEY_SWITCH.hitDoWrite
+  ds.io.keySwitch.payload := busif.writeData(29 downto 0).asUInt
+  val UNREAD = busif.newReg("Ciphered frames kept without the rules (no key yet, or too many at once), count")
+  UNREAD.field(UInt(16 bits), AccessType.RO, 0, "frames")(SymbolName("frames")) := ds.io.unread.resized
   val FILTERED = busif.newReg("Fragments of the kept Port-IDs a dump rule dropped, counts")
   FILTERED.field(UInt(16 bits), AccessType.RO, 0, "ds")(SymbolName("ds")) := ds.io.filtered.resized
   FILTERED.field(UInt(16 bits), AccessType.RO, 0, "us")(SymbolName("us")) := us.io.filtered.resized
