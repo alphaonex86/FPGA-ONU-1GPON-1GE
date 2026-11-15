@@ -414,8 +414,8 @@ static unsigned decode_ploamu(struct sniffer *s, const uint8_t *data, unsigned a
     return at + 13;
 }
 
-// Returns the payload bytes the in-line sniffer's rules took out of these frames: such a frame's HEC field is XORed
-// with 0x1000 | payload bytes left (UsGemFilter).
+// Returns the bytes the in-line sniffer took out of these frames (UsGemFilter): a frame's HEC field is XORed with
+// 0x1000 | payload bytes left, the last idle header's of a run with 0x1000 | idle headers left out before it.
 static unsigned decode_gem(struct sniffer *s, const uint8_t *data, unsigned at, unsigned end)
 {
     static const uint8_t mask[5] = {0xB6, 0xAB, 0x31, 0xE0, 0x55};
@@ -427,6 +427,13 @@ static unsigned decode_gem(struct sniffer *s, const uint8_t *data, unsigned at, 
         at += 5;
         if (header == 0) // idle
             continue;
+        if (header >> 12 == 1) { // the last idle of a run
+            unsigned out = 5 * (unsigned)(header & 0xFFF);
+            gone += out;
+            end -= out < end - at ? out : end - at;
+            say(s, "  gem idle x%u\n", out / 5 + 1);
+            continue;
+        }
         unsigned pli = (unsigned)(header >> 28), port = (header >> 16) & 0xFFF, pti = (header >> 13) & 7;
         uint64_t mark = sniffer_gem_header(pli, port, pti) ^ header;
         unsigned left = pli;
@@ -457,7 +464,7 @@ static void decode_burst(struct sniffer *s, const struct sniffer_record *r, cons
     static const unsigned dbru_bytes[4] = {0, 2, 3, 5};
     static uint8_t clear[65536];
     const uint8_t *data = r->payload;
-    unsigned gone = 0; // payload bytes the in-line sniffer's rules took out so far: the grants count them
+    unsigned gone = 0; // bytes the in-line sniffer took out so far: the grants count them
     if (uses_fec(e) && !(r->flags & 4)) {
         unsigned kept = 0;
         for (unsigned at = 0; at < n; at += 255) {

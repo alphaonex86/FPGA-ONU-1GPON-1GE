@@ -10,7 +10,9 @@ import pon.gpon.GponCodes._
   * followed by their PLI (the PLOAMu / DBRu before them are not known here: 13 HEC bits, a false header about once in
   * 8000 such bytes); idle headers pass. A frame's first fragment is judged on its first bytes (RuleMatch), its later
   * ones follow it, per Port-ID (T-CONTs interleave). Of a fragment a rule drops or shortens the header stays, its HEC
-  * field XORed with 0x1000 | payload bytes left, then those bytes. With `fec` the parity bytes (16 after each 239
+  * field XORed with 0x1000 | payload bytes left, then those bytes. Of a run of idle headers the last one stays, its
+  * HEC field XORed with 0x1000 | idle headers left out before it (up to 4095; none: as it is): a granted but unused
+  * allocation costs 5 bytes. With `fec` the parity bytes (16 after each 239
   * from the BIP, the burst's last 16 when its last codeword is short) are left out, flag 2. The record gets flag 1 and ends with the burst's line length (16 bits, low
   * byte first). The bytes wait `depth` deep: a verdict is there before its header leaves. `close` comes after the
   * burst's last byte or with it, the next burst 9 clocks later at least (SnifferUs's quiet bytes). */
@@ -46,6 +48,7 @@ case class UsGemFilter(ruleCount: Int = 16, depth: Int = 32) extends Component {
     val due = !hunting && left === 1
     val found = byteIn && seen === 7 && (hunting || due) && gemHeaderValid(header)
     val begins = found && pli =/= 0
+    val idle = found && header === 0
     val payload = byteIn && !hunting && left > 5
     val last = left === 6
     when(byteIn) {
@@ -134,6 +137,7 @@ case class UsGemFilter(ruleCount: Int = 16, depth: Int = 32) extends Component {
   // the delay: it moves with each byte inside a burst, each clock outside (a burst's end then leaves by itself)
   case class Stage() extends Bundle {
     val valid, end = Bool()
+    val idle = Bool() // a byte of an idle header
     val parity = Bool() // of the burst's short last codeword: known at its end only
     val tag = UInt(2 bits) // 0 as it is, 1 / 2 a judged fragment's two HEC bytes, 3 its payload
     val byte = Bits(8 bits)
@@ -151,6 +155,8 @@ case class UsGemFilter(ruleCount: Int = 16, depth: Int = 32) extends Component {
     stages(0).parity := False
     stages(0).byte := io.data.payload
     stages(0).tag := find.begins ? U(2, 2 bits) | (find.payload ? U(3, 2 bits) | U(0, 2 bits))
+    stages(0).idle := find.idle
+    when(find.idle)(for (i <- 1 to 4) stages(i).idle := True) // its four bytes before
     when(find.begins)(stages(1).tag := 1) // the byte before: the HEC's first bits
   }
   val codeNow = codeAt +^ io.data.valid.asUInt // bytes of the open codeword at the burst's end
@@ -179,11 +185,26 @@ case class UsGemFilter(ruleCount: Int = 16, depth: Int = 32) extends Component {
       gone := 0
     }
     when(leaves && stage.tag === 3)(gone := gone + 1)
-    val byte = stage.tag.mux(
+    // an idle header leaves: left out when the header behind it is one too
+    val idleAt = Reg(UInt(3 bits)) init (0)
+    val idles = Reg(UInt(12 bits)) init (0) // left out since the last that stayed
+    val skip = Reg(Bool())
+    val behind = stages(depth - 6)
+    val skipNow = behind.valid && behind.idle && !idles.andR
+    val skipped = (idleAt === 0) ? skipNow | skip
+    when(leaves && stage.idle) {
+      idleAt := (idleAt === 4) ? U(0, 3 bits) | idleAt + 1
+      when(idleAt === 0)(skip := skipNow)
+      when(idleAt === 4)(idles := skip ? (idles + 1) | U(0, 12 bits))
+    }
+    val idleMark = stage.idle && idles =/= 0
+    val fragmentByte = stage.tag.mux(
       1 -> (stage.byte ^ (touchedNow ? (B"0001" ## keptNow(11 downto 8)) | B(0, 8 bits))),
       2 -> (stage.byte ^ (touched ? kept(7 downto 0).asBits | B(0, 8 bits))),
       default -> stage.byte)
-    val stays = !stage.parity && (stage.tag =/= 3 || gone < kept)
+    val byte = fragmentByte ^ ((idleMark && idleAt === 3) ? (B"0001" ## idles(11 downto 8)) | B(0, 8 bits)) ^
+      ((idleMark && idleAt === 4) ? idles(7 downto 0).asBits | B(0, 8 bits))
+    val stays = !stage.parity && (stage.tag =/= 3 || gone < kept) && !(stage.idle && skipped)
 
     // a burst's end: its line length, then the close
     val tail = tails.io.pop

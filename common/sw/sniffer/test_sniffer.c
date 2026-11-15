@@ -114,10 +114,20 @@ static unsigned gem(uint8_t *at, unsigned pli, unsigned port, unsigned pti)
     return 5;
 }
 
-static void idle(uint8_t *burst, unsigned at, unsigned end)
+// Idle headers from `at` to `end`. `filtered`: as the in-line sniffer leaves a run of them, the last one alone, its
+// HEC field ^ (0x1000 | those before it). Returns the bytes left out.
+static unsigned idle(uint8_t *burst, unsigned at, unsigned end, int filtered)
 {
+    unsigned count = (end - at) / 5;
+    if (filtered && count > 1) {
+        memcpy(burst + at, gem_mask, 5);
+        burst[at + 3] ^= (uint8_t)(0x10 | (count - 1) >> 8);
+        burst[at + 4] ^= (uint8_t)(count - 1);
+        return 5 * (count - 1);
+    }
     for (; at + 5 <= end; at += 5)
         memcpy(burst + at, gem_mask, 5);
+    return 0;
 }
 
 // grant 0 (PLOAMu, DBRu mode 0): an Acknowledge, a report, an OMCI answer, a frame of 8 bytes; grant 1: a frame of 20
@@ -154,7 +164,7 @@ static unsigned answer(uint8_t *b, unsigned start, unsigned middle, unsigned sto
         b[at - 5] ^= 0x10;
         b[at - 4] ^= 3;
     }
-    idle(b, at, 3 + middle - start + 1 - out);
+    out += idle(b, at, 3 + middle - start + 1 - out, filtered);
     at = 3 + middle + 1 - start - out;
     at += gem(b + at, 20, 0x201, 1);
     if (filtered) {
@@ -164,7 +174,7 @@ static unsigned answer(uint8_t *b, unsigned start, unsigned middle, unsigned sto
         memset(b + at, 0x5A, 20);
         at += 20;
     }
-    idle(b, at, line - out);
+    out += idle(b, at, line - out, filtered);
     if (!filtered)
         return line;
     b[line - out] = (uint8_t)line;
@@ -288,6 +298,7 @@ int main(void)
     for (const char *at = text; (at = strstr(at, "  gem port=513 pli=20 pti=1 5a5a")); at++)
         idles++;
     CHECK(whole == (sent + 1) / 2 && shortened == sent / 2 && dropped == sent / 2 && idles == (sent + 1) / 2);
+    CHECK(strstr(text, "  gem idle x2\n") && strstr(text, "  gem idle x9\n")); // runs the in-line sniffer shortened
     for (const char *at = text; (at = strstr(at, "omci tci=8001 MIB_upload ak me=2/0")); at++)
         answers++;
     for (const char *at = text; (at = strstr(at, "ploamu onu=5 msg=0x09 Acknowledge")); at++)

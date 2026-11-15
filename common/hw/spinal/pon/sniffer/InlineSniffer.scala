@@ -10,14 +10,15 @@ import spinal.lib.bus.regif._
 /** The dump side of the in-line sniffer, in its 77.76 MHz domain: the records of one ONU to the USB link (a byte stream
   * each way), its registers written and read over the same link. Per clock: 32 downstream and 16 upstream line bits, first in the MSB.
   * Records as the passive sniffer's (RecordWriter format): PLOAM, BWmap entry, GEM fragment (WideSnifferDs), burst
-  * (SnifferUs behind UsReplay, through UsGemFilter), each followed by zeros to a multiple of 4 bytes (RecordPad): the stream is a dump file
+  * (SnifferUs through UsGemFilter, in `fast`: this clock x2, edge on edge, so the upstream is read at its line rate,
+  * a byte per clock), each followed by zeros to a multiple of 4 bytes (RecordPad): the stream is a dump file
   * of the host tool. Time in downstream bytes (4 per clock). The dump rules (RuleStore) choose which frames of the
   * kept Port-IDs become records.
   * Host to device, 6 bytes: 0x5A, the register's number (its address / 4; bit 7: write), the value (32 bits LE, any
   * for a read). A read is answered by a record of kind 4: the number, the value (LE). A command stops being parsed
   * after 2^22 clocks without a byte. The I2C lines move 256 clocks apart at least (a write to I2C holds the next
   * command that long), so a batch of writes is a 150 kHz bus. */
-case class InlineDump(benDelay: Int = 0) extends Component {
+case class InlineDump(fast: ClockDomain, benDelay: Int = 0) extends Component {
   val io = new Bundle {
     val dsWord = in Bits (32 bits)
     val usWord = in Bits (16 bits)
@@ -84,15 +85,28 @@ case class InlineDump(benDelay: Int = 0) extends Component {
 
   val crossDrops = Reg(UInt(16 bits)) init (0)
   when(io.usDropped)(crossDrops := crossDrops + 1)
-  val replay = UsReplay()
-  replay.io.word := enable ? io.usWord | B(0, 16 bits)
-  replay.io.time := time
-  val us = SnifferUs(depth = 8192, ruleCount = store.rules)
-  us.io.rules <> store.io.read(1)
-  us.io.line := replay.io.line
-  us.io.time := replay.io.lineTime
-  us.io.delimiter := delimiter
-  us.io.delimiterErrors := delimiterErrors
+  // a register of `fast` holds this domain's value of the clock before for two of its clocks: `second` on the later
+  val usWord = RegNext(enable ? io.usWord | B(0, 16 bits)) init (0)
+  val usPhase = Reg(Bool()) init (False)
+  usPhase := !usPhase
+  val slow = ClockDomain.current
+  val upstream = new ClockingArea(fast) {
+    val word = RegNext(usWord) init (0)
+    val phase = RegNext(usPhase)
+    val second = phase === RegNext(phase)
+    val us = SnifferUs(depth = 16384, ruleCount = store.rules)
+    us.io.rules <> store.io.read(1)
+    us.io.line := second ? word(7 downto 0) | word(15 downto 8)
+    us.io.time := (RegNext(time)(63 downto 2) ## second ## False).asUInt
+    us.io.delimiter := delimiter
+    us.io.delimiterErrors := delimiterErrors
+    val output = StreamFifoCC(Fragment(Bits(8 bits)), 16, fast, slow)
+  }
+  import upstream.us
+  upstream.output.io.push << us.io.output
+  val usDrops = RegNext(us.io.drops)
+  val usTruncations = RegNext(us.io.truncations)
+  val usFiltered = RegNext(us.io.filtered)
 
   val STATUS = busif.newReg("State of the line")
   STATUS.field(Bool(), AccessType.RO, 0, "synced: downstream frames found")(SymbolName("synced")) := deframer.io.synced
@@ -106,13 +120,13 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   ERRORS.field(UInt(16 bits), AccessType.RO, 0, "hec: frames whose GEM stopped at a bad header")(SymbolName("hec")) := deframer.io.hecErrors.resized
   ERRORS.field(UInt(8 bits), AccessType.RO, 0, "plend: frames without a usable PLend")(SymbolName("plend")) := deframer.io.plendErrors.resized
   ERRORS.field(UInt(8 bits), AccessType.RO, 0, "syncLosses")(SymbolName("syncLosses")) := deframer.io.syncLosses.resized
-  for ((name, drops, truncations) <- Seq(("DS", ds.io.drops, ds.io.truncations), ("US", us.io.drops, us.io.truncations))) {
+  for ((name, drops, truncations) <- Seq(("DS", ds.io.drops, ds.io.truncations), ("US", usDrops, usTruncations))) {
     val reg = busif.newReg(s"$name records lost whole (no room) and cut short (data FIFO full), counts")(SymbolName(s"${name}_LOST"))
     reg.field(UInt(16 bits), AccessType.RO, 0, "drops")(SymbolName("drops")) := drops.resized
     reg.field(UInt(16 bits), AccessType.RO, 0, "truncations")(SymbolName("truncations")) := truncations.resized
   }
-  val US_OVERFLOWS = busif.newReg("Bursts left out or cut short before the upstream sniffer (replay queue full), count")
-  US_OVERFLOWS.field(UInt(16 bits), AccessType.RO, 0, "overflows")(SymbolName("overflows")) := (replay.io.overflows + crossDrops).resized
+  val US_OVERFLOWS = busif.newReg("Words of bursts lost before the upstream sniffer (the queue between the two clocks full), count")
+  US_OVERFLOWS.field(UInt(16 bits), AccessType.RO, 0, "overflows")(SymbolName("overflows")) := crossDrops
   val US_LEVEL = busif.newReg("Upstream bursts since the last write here, counts held at 255: the host moves the comparator's DAC between two")
   val bursts = Reg(UInt(8 bits)) init (0)
   val above = Reg(UInt(8 bits)) init (0)
@@ -152,7 +166,7 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   UNREAD.field(UInt(16 bits), AccessType.RO, 0, "frames")(SymbolName("frames")) := ds.io.unread.resized
   val FILTERED = busif.newReg("Fragments of the kept Port-IDs a dump rule dropped, counts")
   FILTERED.field(UInt(16 bits), AccessType.RO, 0, "ds")(SymbolName("ds")) := ds.io.filtered.resized
-  FILTERED.field(UInt(16 bits), AccessType.RO, 0, "us")(SymbolName("us")) := us.io.filtered.resized
+  FILTERED.field(UInt(16 bits), AccessType.RO, 0, "us")(SymbolName("us")) := usFiltered.resized
   busif.accept(DocCHeader("inline_regs", "INLINE")) // inline_regs.h next to the Verilog
 
   // commands: parsed, then one APB access; a read answered before the next command is taken
@@ -214,7 +228,7 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   }
 
   // registered both ways (a byte every other clock): the writers' paths end here
-  val records = StreamArbiterFactory.roundRobin.fragmentLock.on(Seq(ds.io.output, us.io.output, command.reply).map(_.halfPipe()))
+  val records = StreamArbiterFactory.roundRobin.fragmentLock.on(Seq(ds.io.output, upstream.output.io.pop, command.reply).map(_.halfPipe()))
   val padded = RecordPad()
   padded.io.input << records
   io.link.tx << padded.io.output
@@ -224,7 +238,7 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   * No VCXO: the reference is a fixed oscillator. Default domain: the downstream transmitter's clock (124.416 MHz),
   * which `txFaster` pulls onto the received downstream (the direction of the transmitter's phase interpolator steps,
   * each value held 8 clocks: SnifferBridge, in-line). `ds`: the downstream receiver's recovered clock. `out`: 77.76
-  * MHz (the default x5/8), the dump (InlineDump). `us`: the oscillator's own 124.416 MHz, the whole upstream path:
+  * MHz (the default x5/8), the dump (InlineDump); `fast_clk`: `out` x2 from the same PLL, edge on edge. `us`: the oscillator's own 124.416 MHz, the whole upstream path:
   * the lane runs at 4 samples per bit, 40 per clock, the ONU's bits drift against it (UsClean follows them).
   * Lane words: first bit in bit 0. The downstream is sent again as received, once it has crossed without a slip for
   * 2^steadyBits clocks; the laser is off and the word zero otherwise. The upstream's cleaned samples go through
@@ -239,6 +253,9 @@ case class InlineSniffer(steadyBits: Int = 22, tail: Int = 4, benDelay: Int = 0,
   val outCd = ClockDomain.external("out")
   val usCd = ClockDomain.external("us")
   val usbCd = ClockDomain.external("usb") // the USB PHY's 60 MHz
+  val fastClock = in Bool () setName "fast_clk"
+  val fastCd = outCd.copy(clock = fastClock)
+  fastCd.setSynchronousWith(outCd)
   val io = new Bundle {
     val dsRx = in Bits (20 bits) // ds domain
     val usRx = in Bits (40 bits) // us domain, as usTx, usBen and usLaser
@@ -265,7 +282,7 @@ case class InlineSniffer(steadyBits: Int = 22, tail: Int = 4, benDelay: Int = 0,
   bridge.io.dsSignal := io.dsSignal
   io.txFaster := bridge.io.vcxo
 
-  val dump = outCd(InlineDump(benDelay))
+  val dump = outCd(InlineDump(fastCd, benDelay))
   val dsInvert = dsCd(BufferCC(dump.io.dsInvert, False))
   bridge.io.dsWord := dsInvert ? ~io.dsRx | io.dsRx
   dump.io.dsWord := bridge.io.dsPins

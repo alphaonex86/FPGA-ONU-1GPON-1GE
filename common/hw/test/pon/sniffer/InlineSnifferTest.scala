@@ -13,6 +13,25 @@ import pon.sniffer.SnifferTest.Record
   * bit, the lasers on only when they must, the registers over the link, the records of both directions as the
   * byte-wide chain's. Throws on failure. */
 object InlineSnifferTest extends App {
+  // the dump's clock and its double, edge on edge
+  def forkOut(dut: InlineSniffer): Unit = {
+    dut.outCd.fallingEdge()
+    dut.fastClock #= false
+    dut.outCd.deassertReset() // then its edge: the reset is asynchronous
+    fork {
+      sleep(4)
+      dut.outCd.assertReset()
+      var step = 0
+      while (true) {
+        sleep(8)
+        dut.fastClock #= step % 2 == 0
+        if (step % 4 == 0) dut.outCd.risingEdge()
+        if (step % 4 == 2) dut.outCd.fallingEdge()
+        if (step == 42) dut.outCd.deassertReset()
+        step += 1
+      }
+    }
+  }
   // the reference's line to its last whole frame, then its first frame (idle) again while the link empties
   val (reference, expect) = DsLine.reference(fec = false)
   val idleFrames = 14
@@ -98,7 +117,7 @@ object InlineSnifferTest extends App {
     }
     dut.clockDomain.forkStimulus(20)
     fork { sleep(7); dut.dsCd.forkStimulus(20) }
-    dut.outCd.forkStimulus(32)
+    forkOut(dut)
     fork { sleep(3); dut.usCd.forkStimulus(20) }
     fork { sleep(5); dut.usbCd.forkStimulus(42) }
     dut.outCd.waitSampling(20)
@@ -204,7 +223,7 @@ object InlineSnifferTest extends App {
     }
     dut.clockDomain.forkStimulus(20)
     fork { sleep(7); dut.dsCd.forkStimulus(20) }
-    dut.outCd.forkStimulus(32)
+    forkOut(dut)
     fork { sleep(3); dut.usCd.forkStimulus(20) }
     fork { sleep(5); dut.usbCd.forkStimulus(42) }
     dut.usCd.waitSampling(2000 + burstClear.length + 400)

@@ -37,7 +37,7 @@ case class UsGemFilterBench() extends Component {
   io.filtered := filter.io.filtered
 }
 
-/** Bursts of overhead, idle headers and GEM fragments (frames split over bursts, two Port-IDs interleaved) through
+/** Bursts of overhead, idle headers (alone and in runs) and GEM fragments (frames split over bursts, two Port-IDs interleaved) through
   * the filter, against what each rule set must leave; with and without FEC parity. Throws on failure. */
 object UsGemFilterTest extends App {
   val mask = (0 until 5).map(i => ((GponCodes.gemMask >> (8 * (4 - i))) & 0xFF).toInt)
@@ -80,7 +80,9 @@ object UsGemFilterTest extends App {
     Seq(Raw(Seq(0x33, 5, 0)), Fragment(0x40, big.slice(250, 600), false, first = false), Fragment(0x40, big.drop(600), true, first = false),
       Fragment(0x40, bytes(46), true), Fragment(0x40, bytes(4), true), idle),
     Seq(Raw(Seq(0x44, 5, 0)), Raw(overhead(2)), Fragment(0x41, bytes(30), true, first = false), Fragment(0x40, bytes(128), true)),
-    Seq(Raw(Seq(0x55, 0xFF, 0)), Raw(overhead(13))))
+    Seq(Raw(Seq(0x55, 0xFF, 0)), Raw(overhead(13))),
+    // an allocation the ONU does not fill: a run of idle headers longer than a mark counts, one at the burst's end
+    Seq(Raw(Seq(0x66, 5, 0)), Fragment(0x41, bytes(40), true)) ++ Seq.fill(4100)(idle) ++ Seq(Fragment(0x40, bytes(30), true), idle, idle, idle))
   val frames = bursts.flatten.collect { case f: Fragment if f.first => f }
   check(frames.length > 12, s"${frames.length} frames to judge")
   for (b <- bursts) {
@@ -102,9 +104,21 @@ object UsGemFilterTest extends App {
   /** A burst's record payload and the fragments dropped: per Port-ID an open frame follows its first fragment. */
   def expected(burst: Seq[Piece], open: mutable.Map[Int, Int], rules: Seq[DumpRule], default: Int, snap: Int, lineBytes: Int): (Seq[Int], Int) = {
     var dropped = 0
-    val body = burst.flatMap {
-      case Raw(b) => b
+    val body = mutable.ArrayBuffer[Int]()
+    var idles = 0
+    // of a run of idle headers the last stays, marked with the count of those before it (4095 at most)
+    def run(): Unit = while (idles > 0) {
+      val taken = idles min 4096
+      body ++= header(0, 0, 0, if (taken > 1) 0x1000 | (taken - 1) else 0)
+      idles -= taken
+    }
+    burst.foreach {
+      case Raw(b) if b == mask => idles += 1
+      case Raw(b) =>
+        run()
+        body ++= b
       case Fragment(port, payload, end, _) =>
+        run()
         val action = open.remove(port).getOrElse(DumpRule.verdict(rules, default, upstream = true, port, payload))
         if (!end) open(port) = if (action == RuleAction.keep) action else RuleAction.drop
         if (action == RuleAction.drop) dropped += 1
@@ -113,9 +127,10 @@ object UsGemFilterTest extends App {
           case RuleAction.drop => 0
           case _ => payload.length min snap
         }
-        header(payload.length, port, if (end) 1 else 0, if (kept < payload.length) 0x1000 | kept else 0) ++ payload.take(kept)
+        body ++= header(payload.length, port, if (end) 1 else 0, if (kept < payload.length) 0x1000 | kept else 0) ++ payload.take(kept)
     }
-    (body ++ Seq(lineBytes & 0xFF, lineBytes >> 8), dropped)
+    run()
+    ((body ++ Seq(lineBytes & 0xFF, lineBytes >> 8)).toSeq, dropped)
   }
 
   val group = DumpRule(RuleAction.drop, Seq((0, 0x01, 0x01)), port = Some(0x41), us = true)
