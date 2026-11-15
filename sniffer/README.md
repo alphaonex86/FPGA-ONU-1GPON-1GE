@@ -90,8 +90,11 @@ Record: `0xA0|kind`, flags, payload length (16 LE), time (64 LE), payload.
 |------|---------|-------|
 | 0 PLOAM | 12 bytes | 0: bad CRC |
 | 1 allocation | 7 bytes as on the line | 0: bad CRC |
-| 2 GEM fragment | Port-ID 16, PLI 16, counter 48, data | 2..0: PTI, 3: cut |
-| 3 upstream burst | BIP, ONU-ID, Ind, allocations | 0: maxBytes reached |
+| 2 GEM fragment | Port-ID 16, PLI 16, counter 48, data | 2..0: PTI, 3: cut, 4: first bytes only (dump rule) |
+| 3 upstream burst | BIP, ONU-ID, Ind, allocations | 0: maxBytes reached, 1: filtered, 2: FEC parity left out |
+
+A filtered burst (in-line box, dump rules: `DumpRules.scala`, `UsGemFilter`) ends with its line length (16 LE); a
+GEM fragment a rule dropped or shortened keeps its header, the HEC field XORed with `0x1000 | payload bytes left`.
 
 ECP5 (`ecp5/`, `sh sniffer/ecp5/build.sh` -> `out/ecp5/sniffer.bit`, yosys + nextpnr + trellis):
 `sniffer_ecp5.v` (DCU, resets, PLL, DDR pins) around `SnifferBridge` (test `pon.sniffer.SnifferBridgeTest`);
