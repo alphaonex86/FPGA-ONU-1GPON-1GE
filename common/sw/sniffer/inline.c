@@ -32,6 +32,8 @@ struct link {
     int fd;
     struct sniffer *s;
     int started;            // the decoder takes the records
+    int us_fec;             // as written to FILTER
+    const struct rules *rules;
     int failed;             // a command was not sent (logged)
     uint8_t bytes[1 << 17]; // received, parsed up to `at`
     size_t at, have, skipped;
@@ -125,6 +127,11 @@ static int pump(struct link *l, int wanted, uint32_t *value, int ms)
             if (r.kind != SNIFFER_REPLY) {
                 if (l->started && sniffer_handle(l->s, &r) < 0)
                     return -1;
+                if (l->started && l->s->us_fec != l->us_fec) { // the grants say: the device finds the parity by it
+                    l->us_fec = l->s->us_fec;
+                    if (command(l, WRITE | INLINE_FILTER / 4, rules_filter(l->rules, l->us_fec)) < 0)
+                        return -1;
+                }
             } else if (r.length == 5 && r.payload[0] == wanted) {
                 *value = r.payload[1] | (uint32_t)r.payload[2] << 8 | (uint32_t)r.payload[3] << 16 | (uint32_t)r.payload[4] << 24;
                 return 1;
@@ -212,7 +219,8 @@ static int start(struct link *l, const struct sniffer_options *opt)
     // all of them, each run: a former run's rules do not stay
     static const struct rules keep_all = RULES_DEFAULT;
     const struct sniffer_regs regs = {l, NULL, link_write};
-    if (rules_write(opt->rules ? opt->rules : &keep_all, l, reg_write) < 0 || sniffer_start(l->s, &regs, opt) < 0)
+    l->rules = opt->rules ? opt->rules : &keep_all;
+    if (rules_write(l->rules, l, reg_write) < 0 || sniffer_start(l->s, &regs, opt) < 0)
         return -1;
     l->started = 1;
     return 0;
@@ -226,7 +234,7 @@ static int report(struct link *l)
         {INLINE_DS_LOST, "DS lost (drops | truncations << 16)"},
         {INLINE_US_LOST, "US lost (drops | truncations << 16)"},
         {INLINE_US_OVERFLOWS, "US bursts left out or cut"},
-        {INLINE_FILTERED, "fragments dropped by the dump rules (downstream)"},
+        {INLINE_FILTERED, "fragments dropped by the dump rules (downstream | upstream << 16)"},
     };
     uint32_t value;
     if (link_read(l, INLINE_STATUS, &value) < 0)

@@ -352,7 +352,7 @@ static void learn_entry(struct sniffer *s, uint64_t time, const uint8_t *p)
 
 // Learning: the burst's entry is the one whose grant has the burst's length, else (equal grants) the latest, both
 // possible. Returns the entry at the learned offset, else the one of the burst's length, else NULL.
-static const struct sniffer_entry *burst_entry(struct sniffer *s, const struct sniffer_record *r)
+static const struct sniffer_entry *burst_entry(struct sniffer *s, const struct sniffer_record *r, unsigned line_bytes)
 {
     int learn = !(r->flags & 0x81);
     int64_t best = -1;
@@ -367,7 +367,7 @@ static const struct sniffer_entry *burst_entry(struct sniffer *s, const struct s
             continue;
         if (s->offset >= 0 && llabs(offset - s->offset) <= VOTE_SLACK)
             found = e;
-        int matched = learn && abs((int)burst_bytes(e) - (int)r->length) <= LENGTH_SLACK;
+        int matched = learn && abs((int)burst_bytes(e) - (int)line_bytes) <= LENGTH_SLACK;
         if (matched > best_matched || (matched == best_matched && (best < 0 || offset < best))) {
             best = offset;
             best_matched = matched;
@@ -395,9 +395,12 @@ static unsigned decode_ploamu(struct sniffer *s, const uint8_t *data, unsigned a
     return at + 13;
 }
 
-static void decode_gem(struct sniffer *s, const uint8_t *data, unsigned at, unsigned end)
+// Returns the payload bytes the in-line sniffer's rules took out of these frames: such a frame's HEC field is XORed
+// with 0x1000 | payload bytes left (UsGemFilter).
+static unsigned decode_gem(struct sniffer *s, const uint8_t *data, unsigned at, unsigned end)
 {
     static const uint8_t mask[5] = {0xB6, 0xAB, 0x31, 0xE0, 0x55};
+    unsigned gone = 0;
     while (at + 5 <= end) {
         uint64_t header = 0;
         for (int i = 0; i < 5; i++)
@@ -406,26 +409,37 @@ static void decode_gem(struct sniffer *s, const uint8_t *data, unsigned at, unsi
         if (header == 0) // idle
             continue;
         unsigned pli = (unsigned)(header >> 28), port = (header >> 16) & 0xFFF, pti = (header >> 13) & 7;
-        if (sniffer_gem_header(pli, port, pti) != header) {
+        uint64_t mark = sniffer_gem_header(pli, port, pti) ^ header;
+        unsigned left = pli;
+        if (mark >> 12 == 1 && (mark & 0xFFF) < pli) {
+            left = mark & 0xFFF;
+        } else if (mark) {
             say(s, "  gem bad-hec %010llx\n", (unsigned long long)header);
-            return;
+            return gone;
         }
-        unsigned bytes = pli < end - at ? pli : end - at;
-        say(s, "  gem port=%u pli=%u pti=%u%s", port, pli, pti, bytes < pli ? " cut" : "");
+        unsigned out = pli - left;
+        gone += out;
+        end -= out < end - at ? out : end - at;
+        unsigned bytes = left < end - at ? left : end - at;
+        say(s, "  gem port=%u pli=%u pti=%u%s", port, pli, pti, bytes < left ? " cut" : "");
+        if (out)
+            say(s, " kept=%u", left);
         say_fragment(s, 1, port, data + at, bytes);
         omci_fragment(s, 1, port, data + at, bytes, pti & 1, bytes < pli);
-        at += pli;
+        at += left;
     }
+    return gone;
 }
 
-// Each grant: PLOAMu, PLSu, DBRu as its flags say, then GEM frames (G.984.3 8.2); FEC parity left out first.
-static void decode_burst(struct sniffer *s, const struct sniffer_record *r, const struct sniffer_entry *e)
+// Each grant: PLOAMu, PLSu, DBRu as its flags say, then GEM frames (G.984.3 8.2); FEC parity left out first (flag
+// 4: the in-line sniffer did). `n`: the burst's bytes in the record.
+static void decode_burst(struct sniffer *s, const struct sniffer_record *r, const struct sniffer_entry *e, unsigned n)
 {
     static const unsigned dbru_bytes[4] = {0, 2, 3, 5};
     static uint8_t clear[65536];
     const uint8_t *data = r->payload;
-    unsigned n = r->length;
-    if (uses_fec(e)) {
+    unsigned gone = 0; // payload bytes the in-line sniffer's rules took out so far: the grants count them
+    if (uses_fec(e) && !(r->flags & 4)) {
         unsigned kept = 0;
         for (unsigned at = 0; at < n; at += 255) {
             unsigned chunk = n - at < 255 ? n - at : 255;
@@ -440,6 +454,10 @@ static void decode_burst(struct sniffer *s, const struct sniffer_record *r, cons
     for (unsigned i = 0; i < e->count; i++) {
         const struct sniffer_grant *g = &e->grants[i];
         unsigned at = 3 + ((g->start - e->grants[0].start) & 0xFFFF), end = 3 + ((g->stop - e->grants[0].start + 1) & 0xFFFF);
+        if (at < gone)
+            break;
+        at -= gone;
+        end -= gone;
         if (end > n)
             end = n;
         say(s, "  grant alloc-id=%u flags=%03x\n", g->alloc_id, g->flags);
@@ -453,7 +471,7 @@ static void decode_burst(struct sniffer *s, const struct sniffer_record *r, cons
             say_hex(s, data + at, dbru - 1);
             say(s, "%s\n", sniffer_crc8(data + at, dbru - 1) == data[at + dbru - 1] ? "" : " bad-crc");
         }
-        decode_gem(s, data, at + dbru, end);
+        gone += decode_gem(s, data, at + dbru, end);
     }
 }
 
@@ -554,25 +572,38 @@ int sniffer_handle(struct sniffer *s, const struct sniffer_record *r)
     case SNIFFER_ALLOC: {
         unsigned id = p[0] << 4 | p[1] >> 4, flags = (p[1] & 0xF) << 8 | p[2];
         say(s, " alloc-id=%u flags=%03x start=%u stop=%u%s\n", id, flags, be16(p + 3), be16(p + 5), r->flags & 1 ? " bad-crc" : "");
-        if (!(r->flags & 1))
+        if (!(r->flags & 1)) {
+            s->us_fec = flags >> 9 & 1;
             learn_entry(s, r->time, p);
+        }
         break;
     }
     case SNIFFER_GEM:
         handle_gem(s, r);
         break;
-    case SNIFFER_BURST:
-        say(s, " onu=%u ind=%02x bytes=%u%s\n", p[1], p[2], r->length, r->flags & 1 ? " long" : "");
+    case SNIFFER_BURST: {
+        // flag 2, the in-line sniffer's rules passed: the record ends with the burst's line length
+        unsigned bytes = r->length, line = r->length;
+        if (r->flags & 2) {
+            if (bytes < 5) {
+                say(s, " short (%u bytes)\n", bytes);
+                break;
+            }
+            bytes -= 2;
+            line = p[bytes] | (unsigned)p[bytes + 1] << 8;
+        }
+        say(s, " onu=%u ind=%02x bytes=%u%s\n", p[1], p[2], line, r->flags & 1 ? " long" : "");
         if (p[1] == 0xFF) { // serial number answer: a PLOAMu alone
-            decode_ploamu(s, p, 3, r->length);
+            decode_ploamu(s, p, 3, bytes);
             break;
         }
         if ((int)p[1] != s->onu_id)
             set_onu(s, p[1]);
-        const struct sniffer_entry *e = burst_entry(s, r);
+        const struct sniffer_entry *e = burst_entry(s, r, line);
         if (e)
-            decode_burst(s, r, e);
+            decode_burst(s, r, e, bytes);
         break;
+    }
     }
     return s->failed ? -1 : 0;
 }

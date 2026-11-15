@@ -65,6 +65,7 @@ struct sniffer {
     int onu_id;
     uint32_t ctrl;
     int synced;
+    int us_fec; // the ONU's last grant asks for FEC
     uint32_t lost[3]; // DS_LOST, US_LOST, RESET_LOST as last read
     uint16_t omci_ports[SNIFFER_MAX_IDS];
     unsigned omci_port_count;

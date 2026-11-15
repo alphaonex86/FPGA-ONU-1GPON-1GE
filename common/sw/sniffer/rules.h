@@ -38,7 +38,9 @@ struct rules {
 int rules_action(const char *text, unsigned *action);
 // Appends the rule written as RULES_SYNTAX; -1 on an error (logged).
 int rules_add(struct rules *r, const char *text);
-// Every rule slot of the device (the unused ones off), the default action and the snap length; -1 when a write failed.
+// The FILTER register: the default action, the snap length, and whether the ONU's bursts carry FEC parity.
+uint32_t rules_filter(const struct rules *r, int us_fec);
+// Every rule slot of the device (the unused ones off), then FILTER without FEC; -1 when a write failed.
 int rules_write(const struct rules *r, void *ctx, int (*write)(void *ctx, unsigned offset, uint32_t value));
 
 #endif

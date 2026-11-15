@@ -89,7 +89,6 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   replay.io.time := time
   val us = SnifferUs(depth = 8192, ruleCount = store.rules)
   us.io.rules <> store.io.read(1)
-  us.io.fec := usFec
   us.io.line := replay.io.line
   us.io.time := replay.io.lineTime
   us.io.delimiter := delimiter
@@ -135,6 +134,7 @@ case class InlineDump(benDelay: Int = 0) extends Component {
   ds.io.snap := rules.snap
   us.io.defaultAction := rules.defaultAction
   us.io.snap := rules.snap
+  us.io.fec := rules.usFec
   val FILTERED = busif.newReg("Fragments of the kept Port-IDs a dump rule dropped, counts")
   FILTERED.field(UInt(16 bits), AccessType.RO, 0, "ds")(SymbolName("ds")) := ds.io.filtered.resized
   FILTERED.field(UInt(16 bits), AccessType.RO, 0, "us")(SymbolName("us")) := us.io.filtered.resized

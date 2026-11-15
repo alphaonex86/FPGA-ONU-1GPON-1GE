@@ -116,6 +116,11 @@ static unsigned need(const struct rule *rule)
     return bytes;
 }
 
+uint32_t rules_filter(const struct rules *r, int us_fec)
+{
+    return r->other << INLINE_FILTER_ACTION_SHIFT | r->snap << INLINE_FILTER_SNAP_SHIFT | (us_fec ? INLINE_FILTER_USFEC_MASK : 0);
+}
+
 int rules_write(const struct rules *r, void *ctx, int (*write)(void *ctx, unsigned offset, uint32_t value))
 {
     for (unsigned i = 0; i < RULES_MAX; i++) {
@@ -139,5 +144,5 @@ int rules_write(const struct rules *r, void *ctx, int (*write)(void *ctx, unsign
         if (write(ctx, INLINE_RULE_SELECT, select) < 0 || write(ctx, INLINE_RULE, config) < 0)
             return -1;
     }
-    return write(ctx, INLINE_FILTER, r->other << INLINE_FILTER_ACTION_SHIFT | r->snap << INLINE_FILTER_SNAP_SHIFT);
+    return write(ctx, INLINE_FILTER, rules_filter(r, 0));
 }

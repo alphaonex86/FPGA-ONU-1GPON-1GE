@@ -106,7 +106,9 @@ object RuleStore {
     store.io.set.config.port := data(27 downto 16).asUInt
     val FILTER = busif.newReg("Dump rules: frames no rule matches, and the length action 2 keeps")(SymbolName("FILTER"))
     val defaultAction = FILTER.field(Bits(2 bits), AccessType.RW, RuleAction.keep, "action: as RULE.action")(SymbolName("action"))
-    FILTER.reserved(14 bits)
+    FILTER.reserved(6 bits)
+    val usFec = FILTER.field(Bool(), AccessType.RW, 0, "usFec: the ONU's bursts carry FEC parity (its grants say), left out of their records")(SymbolName("usFec"))
+    FILTER.reserved(7 bits)
     val snap = FILTER.field(UInt(12 bits), AccessType.RW, 64, "snap: bytes kept by action 2, to the end of their line word (up to 3 more), 24 at least")(SymbolName("snap"))
   }
 }

@@ -100,8 +100,10 @@ static void idle(uint8_t *burst, unsigned at, unsigned end)
         memcpy(burst + at, gem_mask, 5);
 }
 
-// grant 0 (PLOAMu, DBRu mode 0): an Acknowledge, a report, an OMCI answer; grant 1: idle
-static unsigned answer(uint8_t *b, unsigned start, unsigned middle, unsigned stop)
+// grant 0 (PLOAMu, DBRu mode 0): an Acknowledge, a report, an OMCI answer, a frame of 8 bytes; grant 1: a frame of 20
+// bytes; idle after both. `filtered`: as the in-line sniffer's rules leave it (3 bytes of the first frame, none of the
+// second, the line length at its end). Returns the record's bytes.
+static unsigned answer(uint8_t *b, unsigned start, unsigned middle, unsigned stop, int filtered)
 {
     static const uint8_t omci[48] = {0x80, 0x01, 0x2D, 0x0A, 0x00, 0x02, 0x00, 0x00, 0x00, 0x05}; // 5 uploads
     unsigned at = 3;
@@ -118,9 +120,30 @@ static unsigned answer(uint8_t *b, unsigned start, unsigned middle, unsigned sto
     at += gem(b + at, 48, 0x123, 1);
     memcpy(b + at, omci, 48);
     at += 48;
-    idle(b, at, 3 + middle - start + 1);
-    idle(b, 3 + middle + 1 - start, 3 + stop - start + 1);
-    return 3 + stop - start + 1;
+    unsigned line = 3 + stop - start + 1, out = filtered ? 5 : 0;
+    at += gem(b + at, 8, 0x200, 1);
+    memset(b + at, 0xA5, 8 - out);
+    at += 8 - out;
+    if (filtered) { // HEC field ^ (0x1000 | bytes left)
+        b[at - 5] ^= 0x10;
+        b[at - 4] ^= 3;
+    }
+    idle(b, at, 3 + middle - start + 1 - out);
+    at = 3 + middle + 1 - start - out;
+    at += gem(b + at, 20, 0x201, 1);
+    if (filtered) {
+        b[at - 2] ^= 0x10;
+        out += 20;
+    } else {
+        memset(b + at, 0x5A, 20);
+        at += 20;
+    }
+    idle(b, at, line - out);
+    if (!filtered)
+        return line;
+    b[line - out] = (uint8_t)line;
+    b[line - out + 1] = (uint8_t)(line >> 8);
+    return line - out + 2;
 }
 
 static void drain(struct sniffer *s, struct model *m)
@@ -171,7 +194,7 @@ int main(void)
     // offset learning: grants of varied sizes every frame, two contiguous entries, answered two frames later
     const int64_t offset = 50000;
     static uint8_t bursts[64][512];
-    struct { uint64_t time; unsigned bytes; } planned[64];
+    struct { uint64_t time; unsigned bytes; } planned[64]; // every other one as the in-line sniffer's rules leave it
     unsigned planned_count = 0, sent = 0;
     for (unsigned k = 0; k < 40; k++) {
         uint64_t frame = 1000000 + (uint64_t)k * SNIFFER_FRAME_CLOCKS;
@@ -179,10 +202,10 @@ int main(void)
         alloc(&m, frame + 200, 5, 0x400 | 0x080, start, middle);
         alloc(&m, frame + 208, 6, 0, middle + 1, stop);
         planned[planned_count].time = (uint64_t)((int64_t)(frame + 200) + offset + 2 * start - 6);
-        planned[planned_count].bytes = answer(bursts[planned_count], start, middle, stop);
+        planned[planned_count].bytes = answer(bursts[planned_count], start, middle, stop, planned_count & 1);
         planned_count++;
         while (sent < planned_count && planned[sent].time < frame + SNIFFER_FRAME_CLOCKS) {
-            push(&m.us, SNIFFER_BURST, 0, planned[sent].time, bursts[sent], planned[sent].bytes);
+            push(&m.us, SNIFFER_BURST, sent & 1 ? 2 : 0, planned[sent].time, bursts[sent], planned[sent].bytes);
             sent++;
         }
         drain(&s, &m);
@@ -202,7 +225,16 @@ int main(void)
     CHECK(pair && strcmp(pair + 1, expected) == 0); // the first answer only: the others have no request
     CHECK(strstr(text, "MIB_upload") && strstr(text, "RESET_OFFSET 50000"));
     CHECK(!strstr(text, "bad-") && !strstr(text, "cut"));
-    unsigned answers = 0, acks = 0, reports = 0;
+    unsigned answers = 0, acks = 0, reports = 0, whole = 0, shortened = 0, dropped = 0, idles = 0;
+    for (const char *at = text; (at = strstr(at, "  gem port=512 pli=8 pti=1 a5a5a5a5a5a5a5a5\n")); at++)
+        whole++;
+    for (const char *at = text; (at = strstr(at, "  gem port=512 pli=8 pti=1 kept=3 a5a5a5\n")); at++)
+        shortened++;
+    for (const char *at = text; (at = strstr(at, "  gem port=513 pli=20 pti=1 kept=0 \n")); at++)
+        dropped++;
+    for (const char *at = text; (at = strstr(at, "  gem port=513 pli=20 pti=1 5a5a")); at++)
+        idles++;
+    CHECK(whole == (sent + 1) / 2 && shortened == sent / 2 && dropped == sent / 2 && idles == (sent + 1) / 2);
     for (const char *at = text; (at = strstr(at, "omci tci=8001 MIB_upload ak me=2/0")); at++)
         answers++;
     for (const char *at = text; (at = strstr(at, "ploamu onu=5 msg=0x09 Acknowledge")); at++)
