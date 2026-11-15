@@ -81,6 +81,7 @@ struct sniffer {
     uint32_t lost[3]; // DS_LOST, US_LOST, RESET_LOST as last read
     uint16_t omci_ports[SNIFFER_MAX_IDS];
     unsigned omci_port_count;
+    uint32_t data_port_me[4096]; // per Port-ID learned from the OMCI: its GEM port network CTP's instance + 1, 0 none
     struct sniffer_stream ds, us;
     unsigned desyncs;
     struct sniffer_omci omci[2][SNIFFER_MAX_IDS]; // reassembly, downstream and upstream, per OMCI Port-ID

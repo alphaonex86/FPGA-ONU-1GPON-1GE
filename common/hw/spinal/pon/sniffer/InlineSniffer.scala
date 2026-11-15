@@ -227,8 +227,8 @@ case class InlineDump(fast: ClockDomain, benDelay: Int = 0) extends Component {
     }
   }
 
-  // registered both ways (a byte every other clock): the writers' paths end here
-  val records = StreamArbiterFactory.roundRobin.fragmentLock.on(Seq(ds.io.output, upstream.output.io.pop, command.reply).map(_.halfPipe()))
+  // registered both ways, a byte per clock (twice the USB's): the writers' paths end here
+  val records = StreamArbiterFactory.roundRobin.fragmentLock.on(Seq(ds.io.output, upstream.output.io.pop, command.reply).map(_.pipelined(m2s = true, s2m = true)))
   val padded = RecordPad()
   padded.io.input << records
   io.link.tx << padded.io.output
@@ -247,8 +247,11 @@ case class InlineDump(fast: ClockDomain, benDelay: Int = 0) extends Component {
   * filled only around bursts (a `tail` of zero words after each: the two clocks differ).
   * Upstream level: `usAbove` is a comparator on the APD current against a DAC; the bursts and those that passed
   * the level are counted (US_LEVEL), the host searches the level. `benDelay`: its reset value; `zeros`: half-words
-  * of zeros after a burst's enable, then 1010. */
-case class InlineSniffer(steadyBits: Int = 22, tail: Int = 4, benDelay: Int = 0, zeros: Int = 4) extends Component {
+  * of zeros after a burst's enable, then 1010. `hostDepth` + `hostExtra`: bytes of records waiting for the USB (the
+  * XC7A100T's free block RAM: the crossing queue, a power of 2, and one before it), so a peak over the USB rate is sent
+  * late instead of lost. */
+case class InlineSniffer(steadyBits: Int = 22, tail: Int = 4, benDelay: Int = 0, zeros: Int = 4,
+                         hostDepth: Int = 262144, hostExtra: Int = 131072) extends Component {
   val dsCd = ClockDomain.external("ds")
   val outCd = ClockDomain.external("out")
   val usCd = ClockDomain.external("us")
@@ -286,8 +289,8 @@ case class InlineSniffer(steadyBits: Int = 22, tail: Int = 4, benDelay: Int = 0,
   val dsInvert = dsCd(BufferCC(dump.io.dsInvert, False))
   bridge.io.dsWord := dsInvert ? ~io.dsRx | io.dsRx
   dump.io.dsWord := bridge.io.dsPins
-  val toHost = StreamFifoCC(Bits(8 bits), 64, outCd, usbCd)
-  toHost.io.push << dump.io.link.tx
+  val toHost = StreamFifoCC(Bits(8 bits), hostDepth, outCd, usbCd)
+  toHost.io.push << outCd(dump.io.link.tx.queue(hostExtra))
   io.usb.tx << toHost.io.pop
   io.usb.txLast := toHost.io.popOccupancy === 1
   val fromHost = StreamFifoCC(Bits(8 bits), 16, usbCd, outCd)

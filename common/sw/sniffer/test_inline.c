@@ -16,7 +16,7 @@ typedef uint32_t u32;
 struct device {
     int fd;
     uint32_t regs[64];
-    uint8_t alloc_keep[4096], port_keep[4096];
+    uint8_t alloc_keep[4096], port_keep[4096], port_ever[4096]; // ever: kept at some time
     uint32_t rule_value[RULES_MAX][8], rule_mask[RULES_MAX][8], rule_config[RULES_MAX]; // RuleStore
     uint8_t cipher[4096];
     unsigned key_forgets;
@@ -51,6 +51,14 @@ static void record(struct device *d, unsigned kind, uint64_t time, const uint8_t
     flagged(d, kind, 0, time, payload, length);
 }
 
+// A baseline OMCI request of the OLT on the OMCI Port-ID 0x123, whole in one fragment; `port`: a Create's Port-ID.
+static void omci(struct device *d, uint64_t time, unsigned action, unsigned me, unsigned instance, unsigned port)
+{
+    uint8_t m[10 + 48] = {0x01, 0x23, 0, 48, 0, 0, 0, 0, 0, (uint8_t)time, 0x80, (uint8_t)time, (uint8_t)(0x40 | action), 0x0A,
+                          (uint8_t)(me >> 8), (uint8_t)me, (uint8_t)(instance >> 8), (uint8_t)instance, (uint8_t)(port >> 8), (uint8_t)port};
+    flagged(d, SNIFFER_GEM, 1, time, m, sizeof(m));
+}
+
 static void execute(struct device *d, unsigned number, uint32_t value)
 {
     unsigned reg = number & 0x7F;
@@ -69,7 +77,7 @@ static void execute(struct device *d, unsigned number, uint32_t value)
     if (reg == INLINE_ALLOC_MAP / 4)
         d->alloc_keep[value & 0xFFF] = value >> 12 & 1;
     else if (reg == INLINE_PORT_MAP / 4)
-        d->port_keep[value & 0xFFF] = value >> 12 & 1;
+        d->port_ever[value & 0xFFF] |= d->port_keep[value & 0xFFF] = value >> 12 & 1;
     else if (reg == INLINE_CTRL / 4 || reg == INLINE_DELIMITER / 4 || reg == INLINE_RULE_SELECT / 4 ||
              reg == INLINE_RULE_VALUE / 4 || reg == INLINE_FILTER / 4)
         d->regs[reg] = value;
@@ -89,8 +97,8 @@ static void execute(struct device *d, unsigned number, uint32_t value)
     }
     else
         d->strays++;
-    if (d->port_keep[0x456])
-        stopping = 1; // the decoder has taken the four records
+    if (d->port_ever[0x457] && !d->port_keep[0x457])
+        stopping = 1; // the decoder has taken the MIB reset, the last record
     if (reg != INLINE_CTRL / 4)
         return;
     if ((value & INLINE_CTRL_ENABLE_MASK) && !d->enabled) {
@@ -102,9 +110,13 @@ static void execute(struct device *d, unsigned number, uint32_t value)
         record(d, SNIFFER_PLOAM, 10, ploam, sizeof(ploam));
         record(d, SNIFFER_BURST, 30, burst, sizeof(burst));
         record(d, SNIFFER_PLOAM, 40, port, sizeof(port));
-        // on it the OLT creates GEM port network CTP 1 (baseline message, whole in one fragment): Port-ID 0x456
-        uint8_t create[10 + 48] = {0x01, 0x23, 0, 48, 0, 0, 0, 0, 0, 1, 0x80, 0x01, 0x44, 0x0A, 268 >> 8, 268 & 0xFF, 0, 1, 0x04, 0x56};
-        flagged(d, SNIFFER_GEM, 1, 50, create, sizeof(create));
+        // on it the OLT creates GEM port network CTPs 1-3 (Port-IDs 0x456, 0x457 and 0x321, the one of -g), deletes
+        // the first, resets the MIB
+        omci(d, 50, 4, 268, 1, 0x456);
+        omci(d, 51, 4, 268, 2, 0x457);
+        omci(d, 52, 4, 268, 3, 0x321);
+        omci(d, 53, 6, 268, 1, 0);
+        omci(d, 54, 15, 2, 0, 0);
     }
     d->enabled = value & INLINE_CTRL_ENABLE_MASK;
 }
@@ -192,12 +204,15 @@ int main(void)
     for (unsigned w = 0; w < 5; w++)
         CHECK(d.rule_mask[0][w] == 0);
     CHECK(d.port_keep[0x123] && strstr(text, "port-id=291 on"));
-    // data Port-IDs: the one asked for, the one the OLT created
-    CHECK(d.port_keep[0x321] && d.port_keep[0x456] && strstr(text, "Create ar me=268/1"));
+    // data Port-IDs: those the OLT created kept until it deletes them or resets the MIB, the one asked for always
+    CHECK(d.port_ever[0x456] && !d.port_keep[0x456] && d.port_ever[0x457] && !d.port_keep[0x457] && d.port_keep[0x321]);
+    CHECK(strstr(text, "Create ar me=268/1") && strstr(text, "Delete ar me=268/1") && strstr(text, "MIB_reset ar me=2/0"));
+    CHECK(strstr(text, "# Port-ID 1110: its downstream frames no longer kept") && strstr(text, "# Port-ID 1111: its downstream frames no longer kept"));
+    CHECK(!strstr(text, "# Port-ID 801: its downstream frames no longer kept"));
     for (unsigned i = 4; i < RULES_MAX; i++)
         CHECK(d.rule_config[i] == 0);
     CHECK(d.regs[INLINE_FILTER / 4] == (RULES_DROP << INLINE_FILTER_ACTION_SHIFT | 80u << INLINE_FILTER_SNAP_SHIFT));
-    CHECK(dump_size == 24 + 32 + 24 + 72);
+    CHECK(dump_size == 24 + 32 + 24 + 5 * 72);
     free(text);
     free(dump);
     if (failures)

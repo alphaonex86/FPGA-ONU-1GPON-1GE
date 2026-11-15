@@ -65,8 +65,10 @@ object InlineSnifferTest extends App {
   var laserBeforeData, benWithoutLaser = false
   var sdaLowSeen = false
   var i2cWrites = mutable.ArrayBuffer[Long]() // out clock of each change of the lines
+  var awayBytes = 0 // taken before the USB host came back
+  var waited = 0 // in the device's USB queue then
 
-  val compiled = SimConfig.compile(InlineSniffer(steadyBits = 8))
+  val compiled = SimConfig.addSimulatorFlag("-Wno-UNOPTPUBLIC").compile { val d = InlineSniffer(steadyBits = 8); d.toHost.io.pushOccupancy.simPublic(); d }
   compiled.doSim(3) { dut =>
     zeros = dut.zeros
     dut.io.dsRx #= 0
@@ -99,11 +101,16 @@ object InlineSnifferTest extends App {
       ben += ((dut.io.usBen.toInt >> 1) & 1) == 1
       ben += (dut.io.usBen.toInt & 1) == 1
     }
-    // the USB host: takes a byte when it can (stalls at random), sends its bytes in order
+    // the USB host: away for the line's first half (the records wait in the device), then takes a byte when it can
+    // (stalls at random), sends its bytes in order
+    var usbAway = true
+    var usbQuiet = 0 // its clocks without a byte from the device
     dut.usbCd.onSamplings {
       if (dut.io.usb.tx.valid.toBoolean && dut.io.usb.tx.ready.toBoolean) fromDevice += dut.io.usb.tx.payload.toInt
       if (dut.io.usb.rx.valid.toBoolean && dut.io.usb.rx.ready.toBoolean) toDevice.dequeue()
-      dut.io.usb.tx.ready #= rand.nextInt(4) != 0
+      usbQuiet = if (dut.io.usb.tx.valid.toBoolean) 0 else usbQuiet + 1
+      if (usbAway) awayBytes = fromDevice.length
+      dut.io.usb.tx.ready #= !usbAway && rand.nextInt(4) != 0
       dut.io.usb.rx.valid #= toDevice.nonEmpty
       if (toDevice.nonEmpty) dut.io.usb.rx.payload #= toDevice.head
     }
@@ -125,7 +132,11 @@ object InlineSnifferTest extends App {
     toDevice ++= write("CTRL", 0x10501) ++ write("LASERS", 3) ++ write("DELIMITER", usDelimiter.toLong)
     toDevice ++= DsLine.allocIds.flatMap(id => write("ALLOC_MAP", 0x1000 | id)) ++ DsLine.portIds.flatMap(id => write("PORT_MAP", 0x1000 | id))
     toDevice ++= write("I2C", 1) ++ write("I2C", 3) ++ write("I2C", 2) ++ read("I2C") ++ write("I2C", 3)
-    dut.clockDomain.waitSampling(dsBits.length / 20 - 6000) // the link is empty by then
+    dut.clockDomain.waitSampling(dsBits.length / 40)
+    waited = dut.toHost.io.pushOccupancy.toInt
+    usbAway = false
+    dut.clockDomain.waitSampling(dsBits.length / 40 - 6000)
+    waitUntil(usbQuiet > 2000) // the link is empty
     toDevice ++= Seq("STATUS", "ERRORS", "DS_LOST", "US_LOST", "US_OVERFLOWS", "US_LEVEL").flatMap(read) ++ write("US_LEVEL", 0) ++ read("US_LEVEL")
     dut.clockDomain.waitSampling(7000)
   }
@@ -141,6 +152,7 @@ object InlineSnifferTest extends App {
     at += padded
   }
   check(at == fromDevice.length && records.nonEmpty && !padError, s"link: ${fromDevice.length} bytes, all of them whole records padded with zeros to 4 bytes (${records.length})")
+  check(awayBytes == 0, s"link: nothing sent while the USB host was away, $waited bytes of records waited ($awayBytes sent)")
   val replies = records.filter(_.kind == RecordKind.reply).map(r => (r.payload.head, bytesToBig(r.payload.drop(1).reverse).toLong))
   check(replies.map(_._1) == Seq("ID", "I2C", "STATUS", "ERRORS", "DS_LOST", "US_LOST", "US_OVERFLOWS", "US_LEVEL", "US_LEVEL").map(number), s"registers: one reply per read, in order (${replies.map(_._1)})")
   check(replies(0)._2 == 0x47530001L, f"registers: identity (${replies(0)._2}%x)")

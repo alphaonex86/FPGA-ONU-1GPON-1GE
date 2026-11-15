@@ -157,21 +157,56 @@ static void keep(struct sniffer *s, unsigned map, unsigned id, int kept)
     reg_write(s, map, (id & SNIFFER_ALLOC_MAP_ID_MASK) | (kept ? SNIFFER_ALLOC_MAP_KEEP_MASK : 0));
 }
 
-static void keep_data_port(struct sniffer *s, unsigned port)
+static void keep_data_port(struct sniffer *s, unsigned port, int kept)
 {
-    keep(s, SNIFFER_PORT_MAP, port, 1);
-    say(s, "# Port-ID %u: its downstream frames kept\n", port);
+    keep(s, SNIFFER_PORT_MAP, port, kept);
+    say(s, "# Port-ID %u: its downstream frames %s\n", port, kept ? "kept" : "no longer kept");
 }
 
-// The OLT creates a GEM port network CTP (G.988 9.2.3, its first attribute the Port-ID): a data port of the ONU.
+static int fixed_port(const struct sniffer *s, unsigned port)
+{
+    for (unsigned i = 0; i < s->opt.data_port_count; i++)
+        if (s->opt.data_ports[i] == port)
+            return 1;
+    return omci_index(s, port) >= 0;
+}
+
+// Port-IDs learned for GEM port network CTP `instance` (every instance: -1) are let go, unless -g or OMCI keeps them.
+static void forget_data_ports(struct sniffer *s, int instance)
+{
+    for (unsigned port = 0; port < 4096; port++) {
+        if (!s->data_port_me[port] || (instance >= 0 && s->data_port_me[port] != (uint32_t)instance + 1))
+            continue;
+        s->data_port_me[port] = 0;
+        if (!fixed_port(s, port))
+            keep_data_port(s, port, 0);
+    }
+}
+
+// The ONU's data ports follow the OLT's requests: Create of a GEM port network CTP (G.988 9.2.3, its first attribute
+// the Port-ID), its Delete, a MIB reset (every ME the OLT created is gone).
 static void learn_data_port(struct sniffer *s, const uint8_t *m)
 {
+    enum { CREATE = 4, DELETE = 6, MIB_RESET = 15, GEM_PORT_CTP = 268 };
+    unsigned action = m[2] & 0x1F, me = be16(m + 4), instance = be16(m + 6);
     int extended = m[3] == 0x0B;
-    if (!s->opt.rules || (m[2] & 0x1F) != 4 || be16(m + 4) != 268 || (extended && be16(m + 8) < 2))
+    if (!s->opt.rules)
+        return;
+    if (action == MIB_RESET) {
+        forget_data_ports(s, -1);
+        return;
+    }
+    if (me != GEM_PORT_CTP || (action != CREATE && action != DELETE))
+        return;
+    forget_data_ports(s, (int)instance);
+    if (action == DELETE || (extended && be16(m + 8) < 2))
         return;
     unsigned port = be16(m + (extended ? 10 : 8));
-    if (port < 4096 && omci_index(s, port) < 0)
-        keep_data_port(s, port);
+    if (port >= 4096)
+        return;
+    s->data_port_me[port] = instance + 1;
+    if (!fixed_port(s, port))
+        keep_data_port(s, port, 1);
 }
 
 // A whole OMCI message: the OLT's requests wait for the answer with their TCI and type.
@@ -289,7 +324,7 @@ int sniffer_start(struct sniffer *s, const struct sniffer_regs *regs, const stru
         add_omci_port(s, opt->ports[i]);
     }
     for (unsigned i = 0; i < opt->data_port_count; i++)
-        keep_data_port(s, opt->data_ports[i]);
+        keep_data_port(s, opt->data_ports[i], 1);
     reg_write(s, SNIFFER_DELIMITER, opt->delimiter & SNIFFER_DELIMITER_DELIMITER_MASK);
     reg_write(s, SNIFFER_RESET_TIMING, 0); // no pulse until the offset is learned
     s->ctrl = SNIFFER_CTRL_ENABLE_MASK | (opt->all_ploams ? SNIFFER_CTRL_ALLPLOAMS_MASK : 0) |

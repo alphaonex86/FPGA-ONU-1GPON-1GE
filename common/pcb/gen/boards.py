@@ -165,7 +165,8 @@ class Bridge(Board):
         return balls
 
     def artix7(self, misc):
-        """XC7A35T-2FGG484I, its supplies and configuration: master SPI from its flash (M = 001), JTAG pads (header not
+        """XC7A100T-2FGG484I on the XC7A35T's symbol (the 100T's 35 more balls, bank 13, stay unconnected), its supplies
+        and configuration: master SPI from its flash (M = 001), JTAG pads (header not
         fitted); GTP quad 216
         lanes 0 (DS_) and 1 (US_) on MGTREFCLK0, lanes 2-3 unused (UG482 Table 5-6: RX to GND, TX open); XADC, thermal
         diode and key battery unused (UG480, UG470). misc: {net: ball}, every ball LVCMOS33."""
@@ -192,8 +193,8 @@ class Bridge(Board):
                 'TCK_0': 'TCK', 'TDI_0': 'TDI', 'TDO_0': 'TDO', 'TMS_0': 'TMS',
                 'T19': 'FLASH_CS', 'P22': 'MOSI', 'R22': 'MISO', **gt, **{ball: net for net, ball in misc.items()},   # FCS_B, D00_MOSI, D01_DIN
                 'U22': '+3V3'}   # PUDC_B high (UG470: never floating): no pull-ups while configuring, the board's own resistors rule
-        self.add('U', 'FPGA_Xilinx_Artix7', 'XC7A35T-FGG484', 'XC7A35T-2FGG484I', 'Package_BGA:Xilinx_FGG484', conn,
-                 MPN='XC7A35T-2FGG484I')
+        self.add('U', 'FPGA_Xilinx_Artix7', 'XC7A35T-FGG484', 'XC7A100T-2FGG484I', 'Package_BGA:Xilinx_FGG484', conn,
+                 MPN='XC7A100T-2FGG484I')
         self.block = 'fpga_support'
         self.r('100', 'GT_RREF', '+1V2_GT', MPN='100 ohm 1 %')
         self.flag_nets = ('GT_RREF',)   # MGTRREF is typed a power input

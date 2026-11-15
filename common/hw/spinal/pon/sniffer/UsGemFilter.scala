@@ -97,8 +97,8 @@ case class UsGemFilter(ruleCount: Int = 16, depth: Int = 32) extends Component {
   when(find.payload)(held := held(15 downto 0) ## io.data.payload)
 
   case class Verdict() extends Bundle {
-    val action = Bits(2 bits)
-    val pli = UInt(12 bits)
+    val kept = UInt(12 bits) // payload bytes that stay
+    val touched = Bool() // fewer than its PLI
   }
   // per Port-ID: bit 0 a frame is open (its last fragment was not the end), bit 1 that frame is kept
   val frames = Mem(Bits(2 bits), 4096) init (Seq.fill(4096)(B(0, 2 bits)))
@@ -119,9 +119,13 @@ case class UsGemFilter(ruleCount: Int = 16, depth: Int = 32) extends Component {
     frames.write(port, (action === RuleAction.keep) ## (!pti(0) && (continued || judged)), decided)
   }
   val verdicts = StreamFifo(Verdict(), 8)
-  verdicts.io.push.valid := fragment.decided
-  verdicts.io.push.action := fragment.action
-  verdicts.io.push.pli := fragment.pli
+  val keptIn = fragment.action.mux(
+    RuleAction.keep -> fragment.pli,
+    RuleAction.drop -> U(0, 12 bits),
+    default -> ((fragment.pli < io.snap) ? fragment.pli | io.snap))
+  verdicts.io.push.valid := RegNext(fragment.decided) init (False) // a clock later: the bytes' path keeps no compare
+  verdicts.io.push.kept := RegNext(keptIn)
+  verdicts.io.push.touched := RegNext(keptIn < fragment.pli)
   val filtered = Reg(UInt(32 bits)) init (0)
   when(fragment.decided && fragment.action === RuleAction.drop)(filtered := filtered + 1)
   io.filtered := filtered
@@ -176,11 +180,8 @@ case class UsGemFilter(ruleCount: Int = 16, depth: Int = 32) extends Component {
     val opens = leaves && stage.tag === 1
     val verdict = verdicts.io.pop
     verdict.ready := opens
-    val keptNow = verdict.action.mux(
-      RuleAction.keep -> verdict.pli,
-      RuleAction.drop -> U(0, 12 bits),
-      default -> ((verdict.pli < io.snap) ? verdict.pli | io.snap))
-    val touchedNow = verdict.valid && keptNow < verdict.pli // no verdict cannot be (the delay's depth): all kept
+    val keptNow = verdict.kept
+    val touchedNow = verdict.valid && verdict.touched // no verdict cannot be (the delay's depth): all kept
     assert(!(opens && !verdict.valid), "UsGemFilter: a header left before its verdict", FAILURE)
     when(opens) {
       kept := verdict.valid ? keptNow | U(4095, 12 bits)
