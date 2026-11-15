@@ -141,10 +141,13 @@ case class InlineDump(benDelay: Int = 0) extends Component {
       .field(Bits(32 bits), AccessType.WO, 0, "key")(SymbolName("key"))
   }
   ds.io.nextKey := KEY.reduce(_ ## _)
-  val KEY_SWITCH = busif.newReg("Write: the superframe from which the next key deciphers (Key_Switching_Time)")
+  val KEY_SWITCH = busif.newReg("Write: the superframe from which the next key deciphers (Key_Switching_Time)")(SymbolName("KEY_SWITCH"))
   KEY_SWITCH.field(UInt(30 bits), AccessType.WO, 0, "superframe")(SymbolName("superframe"))
-  ds.io.keySwitch.valid := KEY_SWITCH.hitDoWrite
+  KEY_SWITCH.reserved(1 bits)
+  KEY_SWITCH.field(Bool(), AccessType.WO, 0, "forget: no key any more instead (a new run of the host)")(SymbolName("forget"))
+  ds.io.keySwitch.valid := KEY_SWITCH.hitDoWrite && !busif.writeData(31)
   ds.io.keySwitch.payload := busif.writeData(29 downto 0).asUInt
+  ds.io.keyForget := KEY_SWITCH.hitDoWrite && busif.writeData(31)
   val UNREAD = busif.newReg("Ciphered frames kept without the rules (no key yet, or too many at once), count")
   UNREAD.field(UInt(16 bits), AccessType.RO, 0, "frames")(SymbolName("frames")) := ds.io.unread.resized
   val FILTERED = busif.newReg("Fragments of the kept Port-IDs a dump rule dropped, counts")

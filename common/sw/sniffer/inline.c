@@ -37,7 +37,7 @@ struct link {
     int failed;             // a command was not sent (logged)
     uint8_t bytes[1 << 17]; // received, parsed up to `at`
     size_t at, have, skipped;
-    uint32_t state, counters[5]; // as last reported
+    uint32_t state, counters[6]; // as last reported
 };
 
 static int open_port(const char *path)
@@ -87,6 +87,24 @@ static void link_write(void *ctx, unsigned offset, uint32_t value)
 {
     if (offset <= INLINE_PORT_MAP) // the others are the passive tap's burst reset
         command(ctx, WRITE | offset / 4, value);
+}
+
+static void link_cipher(void *ctx, unsigned port, int ciphered)
+{
+    command(ctx, WRITE | INLINE_CIPHER_MAP / 4, port | (ciphered ? INLINE_CIPHER_MAP_KEEP_MASK : 0));
+}
+
+// The key the dump rules read ciphered frames with: a failed write is logged by command(), the run ends at the next pump.
+static void link_key(void *ctx, const uint8_t *key, uint32_t superframe)
+{
+    static const unsigned words[4] = {INLINE_KEY0, INLINE_KEY1, INLINE_KEY2, INLINE_KEY3};
+    if (!key) {
+        command(ctx, WRITE | INLINE_KEY_SWITCH / 4, INLINE_KEY_SWITCH_FORGET_MASK);
+        return;
+    }
+    for (int i = 0; i < 4; i++)
+        command(ctx, WRITE | words[i] / 4, (uint32_t)key[4 * i] << 24 | (uint32_t)key[4 * i + 1] << 16 | (uint32_t)key[4 * i + 2] << 8 | key[4 * i + 3]);
+    command(ctx, WRITE | INLINE_KEY_SWITCH / 4, superframe & INLINE_KEY_SWITCH_SUPERFRAME_MASK);
 }
 
 static int now_ms(int64_t *ms)
@@ -218,7 +236,7 @@ static int start(struct link *l, const struct sniffer_options *opt)
     }
     // all of them, each run: a former run's rules do not stay
     static const struct rules keep_all = RULES_DEFAULT;
-    const struct sniffer_regs regs = {l, NULL, link_write};
+    const struct sniffer_regs regs = {l, NULL, link_write, link_cipher, link_key};
     l->rules = opt->rules ? opt->rules : &keep_all;
     if (rules_write(l->rules, l, reg_write) < 0 || sniffer_start(l->s, &regs, opt) < 0)
         return -1;
@@ -229,12 +247,13 @@ static int start(struct link *l, const struct sniffer_options *opt)
 // Prints the line's state and the error and lost counters when they change.
 static int report(struct link *l)
 {
-    static const struct { unsigned offset; const char *name; } counters[5] = {
+    static const struct { unsigned offset; const char *name; } counters[6] = {
         {INLINE_ERRORS, "downstream errors (hec | plend << 16 | sync losses << 24)"},
         {INLINE_DS_LOST, "DS lost (drops | truncations << 16)"},
         {INLINE_US_LOST, "US lost (drops | truncations << 16)"},
         {INLINE_US_OVERFLOWS, "US bursts left out or cut"},
         {INLINE_FILTERED, "fragments dropped by the dump rules (downstream | upstream << 16)"},
+        {INLINE_UNREAD, "ciphered frames kept without the dump rules (no key yet)"},
     };
     uint32_t value;
     if (link_read(l, INLINE_STATUS, &value) < 0)
@@ -249,7 +268,7 @@ static int report(struct link *l)
                 value & INLINE_STATUS_FEC_MASK ? " with FEC" : "", value & INLINE_STATUS_DSON_MASK ? "sent" : "not sent",
                 duty * 100 / 65536, railed ? " (at its limit)" : "");
     }
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         if (link_read(l, counters[i].offset, &value) < 0)
             return -1;
         if (value != l->counters[i]) {

@@ -65,6 +65,7 @@ case class WideDsBench() extends Component {
   sniffer.io.cipherMap << io.cipherMap
   sniffer.io.nextKey := io.nextKey
   sniffer.io.keySwitch << io.keySwitch
+  sniffer.io.keyForget := False
   io.unread := sniffer.io.unread
   val store = RuleStore(readers = 1)
   store.io.write << io.ruleWrite

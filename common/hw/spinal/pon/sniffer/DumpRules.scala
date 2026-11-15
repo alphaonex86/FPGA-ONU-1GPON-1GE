@@ -185,12 +185,14 @@ case class CommitFifo[T <: Data](dataType: HardType[T], depth: Int) extends Comp
 /** The keystream of the first 32 bytes of ciphered GEM fragments, for the rules to read them (G.984.3 12.2: AES-128
   * counter mode, the block is the crypto-counter three times, +1 per block). A fragment's counter is taken while
   * `start.ready` (a key is in use or due, room in the queue), its two blocks leave on `output` in order within
-  * `GemKeystream.latency` clocks. `switch`: the superframe from which `nextKey` is the key (Key_Switching_Time). */
+  * `GemKeystream.latency` clocks. `switch`: the superframe from which `nextKey` is the key (Key_Switching_Time);
+  * `forget`: no key any more. */
 case class GemKeystream(depth: Int = 2) extends Component {
   val io = new Bundle {
     val start = slave Stream (UInt(46 bits))
     val nextKey = in Bits (128 bits)
     val switch = slave Flow (UInt(30 bits))
+    val forget = in Bool ()
     val output = master Stream (Bits(256 bits))
   }
   val key = Reg(Bits(128 bits))
@@ -223,6 +225,10 @@ case class GemKeystream(depth: Int = 2) extends Component {
       keyed := True
       armed := False
     }
+  }
+  when(io.forget) {
+    keyed := False
+    armed := False
   }
   val half = Reg(Bool()) init (False)
   val first = RegNextWhen(aes.io.output.payload, aes.io.output.valid)

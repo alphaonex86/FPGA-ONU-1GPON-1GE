@@ -5,8 +5,8 @@ CFLAGS ?= -O2
 CFLAGS += -std=gnu11 -Wall -Wextra -Werror -I$(RTL) -I../omci
 LDLIBS = -lm
 REGS = $(RTL)/sniffer_regs.h $(RTL)/inline_regs.h
-CODE = sniffer.c inline.c levels.c rules.c ../omci/omci.c
-DEPS = $(CODE) sniffer.h inline.h levels.h rules.h $(REGS)
+CODE = sniffer.c inline.c levels.c rules.c aes128.c ../omci/omci.c
+DEPS = $(CODE) sniffer.h inline.h levels.h rules.h aes128.h $(REGS)
 
 all: sniffer
 

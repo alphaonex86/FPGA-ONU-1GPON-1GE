@@ -18,6 +18,8 @@ struct device {
     uint32_t regs[64];
     uint8_t alloc_keep[4096], port_keep[4096];
     uint32_t rule_value[RULES_MAX][8], rule_mask[RULES_MAX][8], rule_config[RULES_MAX]; // RuleStore
+    uint8_t cipher[4096];
+    unsigned key_forgets;
     unsigned reads, strays; // strays: writes to a register the decoder must leave alone
     int enabled, failed;
 };
@@ -66,6 +68,10 @@ static void execute(struct device *d, unsigned number, uint32_t value)
     else if (reg == INLINE_CTRL / 4 || reg == INLINE_DELIMITER / 4 || reg == INLINE_RULE_SELECT / 4 ||
              reg == INLINE_RULE_VALUE / 4 || reg == INLINE_FILTER / 4)
         d->regs[reg] = value;
+    else if (reg == INLINE_CIPHER_MAP / 4)
+        d->cipher[value & 0xFFF] = value >> 12 & 1;
+    else if (reg == INLINE_KEY_SWITCH / 4 && value == INLINE_KEY_SWITCH_FORGET_MASK)
+        d->key_forgets++;
     else if (reg == INLINE_RULE_MASK / 4 || reg == INLINE_RULE / 4) {
         uint32_t select = d->regs[INLINE_RULE_SELECT / 4];
         unsigned rule = (select & INLINE_RULE_SELECT_RULE_MASK) >> INLINE_RULE_SELECT_RULE_SHIFT, word = select & INLINE_RULE_SELECT_WORD_MASK;
@@ -148,12 +154,14 @@ int main(void)
     d.alloc_keep[77] = d.port_keep[77] = 1; // a previous run's
     d.regs[INLINE_CTRL / 4] = INLINE_CTRL_ENABLE_MASK;
     d.rule_config[9] = INLINE_RULE_DS_MASK; // a previous run's rule
+    d.cipher[78] = 1;
 
     CHECK(inline_run(&s, port, NULL, &opt, &stopping) == 0);
     CHECK(pthread_join(thread, NULL) == 0);
     CHECK(fclose(opt.text) == 0 && fclose(opt.dump) == 0);
     CHECK(!d.failed && d.strays == 0);
-    CHECK(d.reads >= 1 + 2 * 6); // the identity, two reports
+    CHECK(d.reads >= 1 + 2 * 7); // the identity, two reports
+    CHECK(!d.cipher[78] && d.key_forgets == 1); // a previous run's ciphered Port-ID and key
     CHECK(!d.alloc_keep[77] && !d.port_keep[77] && d.alloc_keep[6] && d.alloc_keep[10]);
     CHECK(d.regs[INLINE_DELIMITER / 4] == 0x123456); // from the Upstream_Overhead
     CHECK(s.onu_id == 5 && d.alloc_keep[5]);         // from the burst

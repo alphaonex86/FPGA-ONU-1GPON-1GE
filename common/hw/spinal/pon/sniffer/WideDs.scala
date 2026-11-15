@@ -349,6 +349,7 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount
     val cipherMap = slave Flow (KeepWrite())
     val nextKey = in Bits (128 bits)
     val keySwitch = slave Flow (UInt(30 bits))
+    val keyForget = in Bool ()
     val rules = master(RuleRead(ruleCount))
     val defaultAction = in Bits (2 bits)
     val snap = in UInt (12 bits)
@@ -379,6 +380,7 @@ case class WideSnifferDs(gemDepth: Int = 8192, chunkDepth: Int = 2048, ruleCount
     val keys = GemKeystream()
     keys.io.nextKey := io.nextKey
     keys.io.switch << io.keySwitch
+    keys.io.forget := io.keyForget
     keys.io.start.valid := header.valid && hit && ciphered
     keys.io.start.payload := header.counter
   }

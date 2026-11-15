@@ -14,7 +14,10 @@ struct queue { uint32_t words[QUEUE]; unsigned head, tail; };
 
 struct model {
     uint32_t regs[64];
-    uint8_t alloc_keep[4096], port_keep[4096];
+    uint8_t alloc_keep[4096], port_keep[4096], cipher[4096];
+    uint8_t key[16];
+    uint32_t key_switch;
+    unsigned key_writes, key_forgets;
     struct queue ds, us;
 };
 
@@ -51,6 +54,23 @@ static void model_write(void *ctx, unsigned offset, uint32_t value)
         m->port_keep[value & 0xFFF] = value >> 12 & 1;
     else
         m->regs[offset / 4] = value;
+}
+
+static void model_cipher(void *ctx, unsigned port, int ciphered)
+{
+    ((struct model *)ctx)->cipher[port] = (uint8_t)ciphered;
+}
+
+static void model_key(void *ctx, const uint8_t *key, uint32_t superframe)
+{
+    struct model *m = ctx;
+    if (!key) {
+        m->key_forgets++;
+        return;
+    }
+    memcpy(m->key, key, 16);
+    m->key_switch = superframe;
+    m->key_writes++;
 }
 
 static void push(struct queue *q, unsigned kind, unsigned flags, uint64_t time, const uint8_t *payload, unsigned length)
@@ -102,8 +122,9 @@ static void idle(uint8_t *burst, unsigned at, unsigned end)
 
 // grant 0 (PLOAMu, DBRu mode 0): an Acknowledge, a report, an OMCI answer, a frame of 8 bytes; grant 1: a frame of 20
 // bytes; idle after both. `filtered`: as the in-line sniffer's rules leave it (3 bytes of the first frame, none of the
-// second, the line length at its end). Returns the record's bytes.
-static unsigned answer(uint8_t *b, unsigned start, unsigned middle, unsigned stop, int filtered)
+// second, the line length at its end). `key_half` 0 or 1: the PLOAMu is that half of key 00 01 .. 0f (index 1), else
+// an Acknowledge. Returns the record's bytes.
+static unsigned answer(uint8_t *b, unsigned start, unsigned middle, unsigned stop, int filtered, int key_half)
 {
     static const uint8_t omci[48] = {0x80, 0x01, 0x2D, 0x0A, 0x00, 0x02, 0x00, 0x00, 0x00, 0x05}; // 5 uploads
     unsigned at = 3;
@@ -111,6 +132,11 @@ static unsigned answer(uint8_t *b, unsigned start, unsigned middle, unsigned sto
     b[1] = 5;
     b[2] = 0;
     uint8_t ploam[13] = {5, 0x09, 0x0A, 0x05};
+    if (key_half >= 0) {
+        memcpy(ploam, (const uint8_t[12]){5, 0x05, 1, (uint8_t)key_half}, 12);
+        for (int i = 0; i < 8; i++)
+            ploam[4 + i] = (uint8_t)(8 * key_half + i);
+    }
     ploam[12] = sniffer_crc8(ploam, 12);
     memcpy(b + at, ploam, 13);
     at += 13;
@@ -164,7 +190,7 @@ int main(void)
     opt.profile = open_memstream(&profile, &profile_size);
     CHECK(opt.text && opt.dump && opt.profile);
     m.alloc_keep[77] = m.port_keep[77] = 1; // a previous run's
-    struct sniffer_regs regs = {&m, model_read, model_write};
+    struct sniffer_regs regs = {&m, model_read, model_write, model_cipher, model_key};
     CHECK(sniffer_start(&s, &regs, &opt) == 0);
     uint32_t ctrl = m.regs[SNIFFER_CTRL / 4];
     CHECK(ctrl & SNIFFER_CTRL_ENABLE_MASK);
@@ -202,7 +228,7 @@ int main(void)
         alloc(&m, frame + 200, 5, 0x400 | 0x080, start, middle);
         alloc(&m, frame + 208, 6, 0, middle + 1, stop);
         planned[planned_count].time = (uint64_t)((int64_t)(frame + 200) + offset + 2 * start - 6);
-        planned[planned_count].bytes = answer(bursts[planned_count], start, middle, stop, planned_count & 1);
+        planned[planned_count].bytes = answer(bursts[planned_count], start, middle, stop, planned_count & 1, k == 30 ? 0 : k == 31 ? 1 : -1);
         planned_count++;
         while (sent < planned_count && planned[sent].time < frame + SNIFFER_FRAME_CLOCKS) {
             push(&m.us, SNIFFER_BURST, sent & 1 ? 2 : 0, planned[sent].time, bursts[sent], planned[sent].bytes);
@@ -213,6 +239,33 @@ int main(void)
     CHECK(s.offset == offset);
     CHECK(m.regs[SNIFFER_RESET_OFFSET / 4] == (uint32_t)offset);
     CHECK(m.regs[SNIFFER_RESET_TIMING / 4] == (128u | 16u << 16));
+
+    // ciphering: Port-IDs 0x123 (OMCI) and 0x124; the key's halves went up in bursts 30 and 31; the keystream of key
+    // 00 01 .. 0f from crypto-counter 0x123456789AB on is OpenSSL's (AES-128-ECB of the counter three times, + 1 per block)
+    static const uint8_t stream[48] = {
+        0xAD, 0xD3, 0xCC, 0x95, 0xFA, 0x5A, 0xFB, 0xB1, 0x2A, 0xC5, 0xCD, 0xCE, 0xB8, 0x97, 0xC8, 0x93,
+        0x7F, 0x90, 0x43, 0xBD, 0xD1, 0x15, 0xCC, 0x09, 0xAD, 0x2B, 0x8A, 0xA6, 0x1F, 0x78, 0x60, 0x5B,
+        0xE7, 0x0B, 0x4D, 0x91, 0x9E, 0x01, 0xCA, 0x8A, 0xC5, 0x2B, 0x21, 0x67, 0x09, 0x17, 0x1B, 0xA8};
+    uint8_t get[10 + 48] = {0x01, 0x23, 0, 48, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0x80, 0x02, 0x49, 0x0A, 0x01, 0x00};
+    uint8_t zeros[10 + 16] = {0x01, 0x24, 0, 16, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB};
+    for (int i = 0; i < 48; i++)
+        get[10 + i] ^= stream[i];
+    memcpy(zeros + 10, stream, 16);
+    CHECK(m.key_forgets == 1 && m.key_writes == 0);
+    ploam(&m, 9000000, 5, 0x08, (const uint8_t[10]){0x01, 0x123 >> 4, (0x123 & 0xF) << 4});
+    ploam(&m, 9000001, 5, 0x08, (const uint8_t[10]){0x01, 0x124 >> 4, (0x124 & 0xF) << 4});
+    ploam(&m, 9000002, 4, 0x08, (const uint8_t[10]){0x01, 0x125 >> 4, (0x125 & 0xF) << 4}); // another ONU's
+    push(&m.ds, SNIFFER_GEM, 1, 9000010, get, sizeof(get)); // no key in use yet
+    drain(&s, &m);
+    CHECK(m.cipher[0x123] && m.cipher[0x124] && !m.cipher[0x125] && s.key_parts == 3 && !s.key_valid);
+    ploam(&m, 9000020, 5, 0x13, (const uint8_t[10]){0x01, 0x23, 0x45, 0x00});
+    ploam(&m, 9000021, 5, 0x13, (const uint8_t[10]){0x01, 0x23, 0x45, 0x00}); // sent again: one write
+    drain(&s, &m);
+    CHECK(m.key_writes == 1 && m.key_switch == 0x01234500 && m.key[0] == 0 && m.key[9] == 9 && m.key[15] == 15);
+    push(&m.ds, SNIFFER_GEM, 1, 9000030, get, sizeof(get)); // superframe 0x1234567: the key is in use
+    push(&m.ds, SNIFFER_GEM, 1, 9000031, zeros, sizeof(zeros));
+    drain(&s, &m);
+    CHECK(s.key_valid && !s.key_due);
 
     sniffer_stop(&s);
     CHECK(m.regs[SNIFFER_CTRL / 4] == 0);
@@ -241,7 +294,15 @@ int main(void)
         acks++;
     for (const char *at = text; (at = strstr(at, "  dbru 10\n")); at++)
         reports++;
-    CHECK(answers == sent && acks == sent && reports == sent);
+    CHECK(answers == sent && acks == sent - 2 && reports == sent);
+    unsigned unread = 0, read = 0;
+    for (const char *at = text; (at = strstr(at, "pti=1 counter=123456789ab ciphered ")); at++)
+        unread++;
+    for (const char *at = text; (at = strstr(at, "pti=1 counter=123456789ab omci tci=8002 Get ar me=256/0")); at++)
+        read++;
+    CHECK(unread == 1 && read == 1);
+    CHECK(strstr(text, "port=292 pli=16 pti=1 counter=123456789ab 00000000000000000000000000000000\n") != NULL);
+    CHECK(strstr(text, "Encryption_Key") && strstr(text, "Key_Switching_Time") && strstr(text, "port-id=291 ciphered"));
 
     // the dump replays record by record
     unsigned records = 0;
@@ -254,7 +315,7 @@ int main(void)
         at += (size_t)used;
         records++;
     }
-    CHECK(records == 8 + 80 + sent);
+    CHECK(records == 8 + 80 + sent + 8);
     free(text);
     free(dump);
     free(profile);

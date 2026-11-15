@@ -32,6 +32,9 @@ struct sniffer_regs {
     void *ctx;
     uint32_t (*read)(void *ctx, unsigned offset);
     void (*write)(void *ctx, unsigned offset, uint32_t value);
+    // in-line sniffer, else NULL: its dump rules read the ciphered frames with the ONU's key
+    void (*cipher)(void *ctx, unsigned port, int ciphered);
+    void (*key)(void *ctx, const uint8_t *key, uint32_t superframe); // 16 bytes, in use from that superframe; NULL: none
 };
 
 struct sniffer_options {
@@ -66,6 +69,12 @@ struct sniffer {
     uint32_t ctrl;
     int synced;
     int us_fec; // the ONU's last grant asks for FEC
+    // downstream ciphering (G.984.3 12): the key the ONU sent, in use from a superframe on
+    uint8_t ciphered[4096]; // per Port-ID (Encrypted_Port-ID)
+    uint8_t key[16], key_next[16];
+    unsigned key_index, key_parts; // key_next: its index, the halves received (bits 0 and 1)
+    int key_valid, key_due;
+    uint32_t key_switch; // superframe of key_next's first frame
     uint32_t lost[3]; // DS_LOST, US_LOST, RESET_LOST as last read
     uint16_t omci_ports[SNIFFER_MAX_IDS];
     unsigned omci_port_count;

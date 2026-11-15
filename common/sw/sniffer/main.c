@@ -172,7 +172,7 @@ static int live(struct sniffer *s, uint32_t bridge, const char *uio, const struc
     int skip = open_window(bridge, uio, &w);
     if (skip < 0)
         return -1;
-    struct sniffer_regs regs = {w.map, mem_read, mem_write};
+    struct sniffer_regs regs = {.ctx = w.map, .read = mem_read, .write = mem_write};
     struct sigaction bus = {.sa_handler = on_bus_error};
     int result = 0;
     if (sigaction(SIGBUS, &bus, NULL) < 0) {

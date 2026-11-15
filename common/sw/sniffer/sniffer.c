@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CERN-OHL-S-2.0
 #include "sniffer.h"
 #include "omci.h"
+#include "aes128.h"
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -253,6 +254,10 @@ int sniffer_start(struct sniffer *s, const struct sniffer_regs *regs, const stru
         keep(s, SNIFFER_ALLOC_MAP, id, 0);
         keep(s, SNIFFER_PORT_MAP, id, 0);
     }
+    for (unsigned id = 0; id < 4096 && s->regs.cipher; id++)
+        s->regs.cipher(s->regs.ctx, id, 0);
+    if (s->regs.key)
+        s->regs.key(s->regs.ctx, NULL, 0);
     for (unsigned i = 0; i < opt->alloc_count; i++)
         keep(s, SNIFFER_ALLOC_MAP, opt->allocs[i], 1);
     for (unsigned i = 0; i < opt->port_count; i++) {
@@ -391,7 +396,15 @@ static unsigned decode_ploamu(struct sniffer *s, const uint8_t *data, unsigned a
     say_hex(s, m + 2, 10);
     if (m[1] == 0x01)
         say(s, " sn=%.4s%08x", (const char *)m + 2, be32(m + 6));
-    say(s, "%s\n", sniffer_crc8(m, 12) == m[12] ? "" : " bad-crc");
+    int good = sniffer_crc8(m, 12) == m[12];
+    say(s, "%s\n", good ? "" : " bad-crc");
+    if (good && m[1] == 0x05 && (int)m[0] == s->onu_id) { // Encryption_Key: key index, half, 8 bytes
+        if (m[2] != s->key_index)
+            s->key_parts = 0;
+        s->key_index = m[2];
+        memcpy(s->key_next + 8 * (m[3] & 1), m + 4, 8);
+        s->key_parts |= 1u << (m[3] & 1);
+    }
     return at + 13;
 }
 
@@ -511,6 +524,31 @@ static void handle_ploam(struct sniffer *s, const struct sniffer_record *r)
         if (own) // the bursts move: learn again
             s->vote_count = 0;
         break;
+    case 0x08: {
+        unsigned port = p[3] << 4 | p[4] >> 4;
+        say(s, " port-id=%u %s", port, p[2] & 1 ? "ciphered" : "clear");
+        if (own) {
+            s->ciphered[port] = p[2] & 1;
+            if (s->regs.cipher)
+                s->regs.cipher(s->regs.ctx, port, p[2] & 1);
+        }
+        break;
+    }
+    case 0x13: {
+        uint32_t frame = (uint32_t)(p[2] & 0x3F) << 24 | (uint32_t)p[3] << 16 | (uint32_t)p[4] << 8 | p[5];
+        say(s, " superframe=%u", frame);
+        if (!own && onu != 0xFF)
+            break;
+        if (s->key_parts != 3) {
+            fprintf(stderr, "sniffer: Key_Switching_Time without the ONU's Encryption_Key seen: ciphered frames stay unread until its next key\n");
+        } else if (!s->key_due || frame != s->key_switch) { // sent three times
+            s->key_due = 1;
+            s->key_switch = frame;
+            if (s->regs.key)
+                s->regs.key(s->regs.ctx, s->key_next, frame);
+        }
+        break;
+    }
     case 0x0A: {
         unsigned id = p[2] << 4 | p[3] >> 4;
         say(s, " alloc-id=%u type=%u", id, p[4]);
@@ -532,8 +570,26 @@ static void handle_ploam(struct sniffer *s, const struct sniffer_record *r)
     say(s, "\n");
 }
 
+// G.984.3 12.2: AES-128 counter mode; a block's input is the 46-bit crypto-counter three times (the low 128 bits),
+// the counter + 1 per block.
+static void decipher(const uint8_t key[16], uint64_t counter, const uint8_t *in, unsigned size, uint8_t *out)
+{
+    uint8_t block[16], stream[16];
+    for (unsigned at = 0; at < size; at++) {
+        if (at % 16 == 0) {
+            uint64_t c = counter + at / 16;
+            memset(block, 0, sizeof(block));
+            for (unsigned bit = 0; bit < 128; bit++)
+                block[15 - bit / 8] |= (uint8_t)((c >> (bit % 46) & 1) << (bit % 8));
+            aes128_encrypt(key, block, stream);
+        }
+        out[at] = in[at] ^ stream[at % 16];
+    }
+}
+
 static void handle_gem(struct sniffer *s, const struct sniffer_record *r)
 {
+    static uint8_t clear[4096];
     const uint8_t *p = r->payload;
     unsigned port = be16(p) & 0xFFF, pli = be16(p + 2) & 0xFFF;
     uint64_t counter = 0;
@@ -544,8 +600,24 @@ static void handle_gem(struct sniffer *s, const struct sniffer_record *r)
         say(s, " head"); // a dump rule kept the frame's first bytes only
     const uint8_t *data = p + 10;
     unsigned bytes = r->length - 10;
+    int unread = 0;
+    if (s->ciphered[port]) {
+        uint32_t superframe = (uint32_t)(counter >> 16) & 0x3FFFFFFF;
+        if (s->key_due && ((superframe - s->key_switch) & 0x3FFFFFFF) < 0x20000000) {
+            memcpy(s->key, s->key_next, sizeof(s->key));
+            s->key_valid = 1;
+            s->key_due = 0;
+        }
+        unread = !s->key_valid || bytes > sizeof(clear);
+        if (unread) {
+            say(s, " ciphered");
+        } else {
+            decipher(s->key, counter, data, bytes, clear);
+            data = clear;
+        }
+    }
     say_fragment(s, 0, port, data, bytes);
-    omci_fragment(s, 0, port, data, bytes, r->flags & 1, r->flags & 0x98);
+    omci_fragment(s, 0, port, data, bytes, r->flags & 1, (r->flags & 0x98) || unread);
 }
 
 int sniffer_handle(struct sniffer *s, const struct sniffer_record *r)
